@@ -36,7 +36,10 @@ body{
 
 
 #nav-list a:hover{
+	background: #e7e7e7 !important;
 	font-size: 2em;
+	color: black !important;
+	text-shadow: 5px 5px 5px black;
 }
 
 
