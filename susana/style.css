@@ -242,6 +242,7 @@ body{
    }
     .container-footer {
     margin-left: 20px;
+    margin-right: 20px;
 }
 /**Estilo de la imagen del jumbotron**/
 .img-responsive{
