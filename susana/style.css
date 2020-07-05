@@ -235,6 +235,11 @@ body{
         float: left;
 
     }
+
+.container-footer {
+    margin-left:0px;
+}
+
    
    
 /**Estilo de la imagen del jumbotron**/
