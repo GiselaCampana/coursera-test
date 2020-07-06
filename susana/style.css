@@ -237,9 +237,13 @@ body{
     }
 
 .container-footer {
+<<<<<<< HEAD
     padding-left: 1px;
     padding-bottom: 5px;
     padding-top: 5px;
+=======
+    margin-left:0px;
+>>>>>>> b32687f06e99d4b5279845d3b7f1df5193f258cd
 }
 
    
