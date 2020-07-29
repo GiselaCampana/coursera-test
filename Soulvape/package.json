@@ -29,11 +29,12 @@
         "url": "https://github.com/StartBootstrap/startbootstrap-business-casual.git"
     },
     "dependencies": {
+        "bcrypt": "^5.0.0",
         "bootstrap": "4.5.0",
         "jquery": "3.5.1"
     },
     "devDependencies": {
-        "browser-sync": "2.26.7",
+        "browser-sync": "^2.26.12",
         "del": "5.1.0",
         "gulp": "4.0.2",
         "gulp-autoprefixer": "7.0.1",
