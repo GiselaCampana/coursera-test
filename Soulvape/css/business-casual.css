@@ -72,6 +72,16 @@ p {
   font-weight: 100;
 }
 
+@media (max-width: 992px) {
+ .section-heading .section-heading-lower {
+  font-size: 2.2rem;
+  }
+ .section-heading-lower{
+  font-size: 2.2rem;
+
+ }
+}
+
 .bg-faded {
   background-color: rgba(255, 255, 255, 0.85);
 }
@@ -107,6 +117,11 @@ p {
 
 #mainNav .navbar-nav .nav-item.active .nav-link {
   color: #e6a756;
+}
+
+#mercadopago{
+  padding-right: 2rem;
+  margin-bottom: 1rem;
 }
 
 @media (min-width: 992px) {
@@ -248,6 +263,12 @@ p {
   font-weight: bold;
   text-align: justify;
 }
+
+
+.d-block{
+  padding-left: 1rem;
+}
+
 /*.list-hours .list-hours-item.today {
   font-weight: bold;
   color: #e6a756;
