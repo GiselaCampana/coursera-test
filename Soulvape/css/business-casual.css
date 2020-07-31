@@ -268,13 +268,10 @@ p {
   padding-left: 1rem;
 }
 
-.list-hours .list-representantes {
-width: 90%;
-text-align: center;
-font-weight: bold;
-font-size: 1.5rem;
-padding-top: 5rem;
+.list-hours .list-hours-text-trf {
+font-weight: 800px;
 }
+
 
 /*.list-hours .list-hours-item.today {
   font-weight: bold;
