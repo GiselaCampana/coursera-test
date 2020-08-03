@@ -73,14 +73,6 @@ body {
   outline: 0 !important;
 }
 
-.whatsapp {
-    /*display: none;*/
-    position: fixed;
-    bottom: 18px;
-    right: 15px;
-  
-}
-
 hr {
   box-sizing: content-box;
   height: 0;
@@ -4007,9 +3999,8 @@ input[type=button].btn-block {
   display: inline-block;
   padding-top: 0.3125rem;
   padding-bottom: 0.3125rem;
-  margin-right: 0.5rem;
-  font-family: 'Poppins', sans-serif !important;
-  font-size: 2rem !important;
+  margin-right: 1rem;
+  font-size: 1.25rem;
   line-height: inherit;
   white-space: nowrap;
 }
@@ -10075,20 +10066,6 @@ img::-moz-selection {
   border-radius: 100%;
 }
 
-.btn-social:hover {
-  animation: spinAround 2s linear infinite;
-}
-
-@keyframes spinAround {
-  from {
-    transform: rotate(0deg)
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-
 #mainNav {
   padding-top: 1rem;
   padding-bottom: 1rem;
@@ -10163,7 +10140,7 @@ header.masthead {
   padding-bottom: 6rem;
   text-align: center;
   color: #fff;
-  background-image: url("../assets/img/PicsArt_07-18-02.36.36.jpg");
+  background-image: url("../assets/img/header-bg.jpg");
   background-repeat: no-repeat;
   background-attachment: scroll;
   background-position: center center;
@@ -10184,23 +10161,6 @@ header.masthead .masthead-heading {
   font-family: "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
-header.masthead .header-copyright {
-	display: block;
-	text-align: left;
-	position: absolute;
-	padding-top: 4rem;
-    padding-bottom: 2rem;
-	color: #fff;
-}
-
-@media (max-width: 768px) {
-  header.masthead .header-copyright {
-    padding-top: 5rem;
-    padding-bottom: 1rem;
-    font-size: .65rem;
-  }
-
-
 @media (min-width: 768px) {
   header.masthead {
     padding-top: 17rem;
@@ -10218,9 +10178,8 @@ header.masthead .header-copyright {
     line-height: 4.5rem;
     margin-bottom: 4rem;
   }
-  
-
 }
+
 #portfolio .portfolio-item {
   max-width: 25rem;
   margin-left: auto;
@@ -10247,7 +10206,7 @@ header.masthead .header-copyright {
   color: white;
 }
 #portfolio .portfolio-item .portfolio-link:hover .portfolio-hover {
-  opacity: .7;
+  opacity: 1;
 }
 #portfolio .portfolio-item .portfolio-caption {
   padding: 1.5rem;
@@ -10304,6 +10263,7 @@ header.masthead .header-copyright {
 .portfolio-modal .close-modal:hover {
   opacity: 0.3;
 }
+
 
 .timeline {
   position: relative;
@@ -10546,3 +10506,27 @@ section#contact form#contactForm :-ms-input-placeholder {
   font-family: "Montserrat", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
 
+.whatsapp {
+    /*display: none;*/
+    position: fixed;
+    bottom: 18px;
+    right: 15px;
+  
+}
+
+header.masthead .header-copyright {
+  display: block;
+  text-align: left;
+  position: absolute;
+  padding-top: 10rem;
+  padding-bottom: 2rem;
+  color: #fff;
+  font-size: .75rem;
+}
+
+@media (max-width: 768px) {
+  header.masthead .header-copyright {
+    padding-top: 5rem;
+    padding-bottom: 1rem;
+    font-size: .65rem;
+  }
