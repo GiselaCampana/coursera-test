@@ -264,20 +264,35 @@ body,html{
 #wrapper-header{
 
 	float:left;
-
 	width:105%;
-
-	height:110px;
-
-	background:transparent;
-
+	height:150px;
+	background:black;
 	opacity:0;
-
-/**	border-bottom: 4px solid #a81bd0;**/
+	border-bottom: white 1px;;
 
 }
 
+.bienvenidos{
+	color: #DFBC39;
+	text-align: center;
+	padding-top: 5%;
+	font-size: 1.5rem;
+	text-transform: uppercase;
+	font-family: Helvetica, sans-serif; 
 
+}
+
+@media (max-width: 992px){
+.bienvenidos{
+	
+	padding-top: 20%;
+	font-size: 1rem;
+	padding-left: 55%;
+	width: 80%;
+	
+
+}
+}
 
 #main-header{
 
@@ -300,6 +315,21 @@ body,html{
 
 }
 
+@media (max-width: 992px){
+.logo{
+	padding-left: 0;
+	margin-left: 0;
+}
+
+#main-header{
+
+	left:35%;
+	
+
+
+}
+
+}
 
 
 #stripes{
@@ -317,7 +347,7 @@ body,html{
 
 /**logo - imagen**/
 
-.logo img{height:100%;width:100%;}
+.logo img{height:40%;width:40%;}
 
 
 /*----------------------------*/
@@ -334,7 +364,7 @@ body,html{
 	width:100%;
 	height:0px;
 	background-color:#FFF;
-	border-bottom:solid #EDEDED 1px;
+	border-bottom:solid ##F1F1F1 1px;
 	opacity:0;
 	display:none;
 
@@ -444,9 +474,9 @@ body,html{
 .container,.container-footer {
 
     position:relative;
-    width: 700px;
+    width: 900px;
     margin-left: -320px;
-    left:50%;
+    left:30%;
     object-position: center !important;
 
 }
@@ -560,11 +590,13 @@ body,html{
 #main-container-image {
 
     float:left;
-    width:100%;
-    height:auto;
+    width:120%;
+    height:80%;
 	background: transparent;
-	margin-top:200px;
-	margin-bottom: 50px;
+	margin-top:150px;
+	margin-bottom: 80px;
+	margin-left: 10%;
+
 	opacity:0;
 
 }
@@ -579,7 +611,8 @@ body,html{
     line-height:auto;
     position: relative;
     padding: 0 !important;
-    margin: 15px;
+    margin-left: 15px;
+    margin-right: 5px;
     transition: all 0.3s ease-in-out;
     -webkit-transition: all 0.3s ease-in-out;
     -moz-transition: all 0.3s ease-in-out;
@@ -595,7 +628,7 @@ body,html{
 
 
 .work figure.white dl{
-    background-color: : transparent !important;
+    background-color: transparent !important;
 
 }
 
@@ -603,11 +636,51 @@ body,html{
 
 .work figure a img {
 
-    height: 100%;
-    width: 100%;
-	margin-left:5%;
+    height: 70%;
+    width: 70%;
+	margin-left:10%;
 	margin-top:5%;
 	background-color: transparent;
+
+}
+
+
+#imagen-caba{
+	margin-left: 0px !important;
+}
+
+#imagen-interior{
+	margin-left: 150px !important;
+}
+
+
+
+
+@media (max-width: 992px){
+
+#imagen-caba{
+	margin-left: 40px !important;
+}
+
+#imagen-interior{
+	margin-left: 40px !important;
+}
+
+.work figure a img {
+
+    height: 100%;
+    width: 100%;
+	
+
+}
+
+#main-container-image {
+
+
+	margin-top:50px;
+
+
+}
 
 }
 
@@ -621,7 +694,7 @@ body,html{
     right: 0;
     bottom: 0;
     top: 0;
-    padding: 10px;
+    padding: 50px;
     margin: 0;
     line-height: 2.5; 
     color: transparent;
@@ -1623,13 +1696,12 @@ body,html{
 
 
 
+
 <div id="wrapper-header" style="width: 100%; opacity: 1;">
 	<div id="main-header" class="object">
-		<div class="logo"><img src="img/logo.png" alt="logo burstfly" height="38" width="90"></div>
-        <div id="main_tip_search"> 
-			<form>
-				<input type="text" name="search" id="tip_search_input" list="search" autocomplete="off" required="">
-			</form>
+		<div class="logo"><img src="img/logo.png" alt="logo burstfly" height="38" width="90"></div>       
+
+			<div class="bienvenidos">Bienvenidos a Panoramix tienda de sabores</div>
 		</div>
     
 
@@ -1798,7 +1870,7 @@ body,html{
 
 							<a href="https://docs.tiendanube.com/help/layouts">
 
-								<img src="img/boton-caba.png" alt="">
+								<img id="imagen-caba" src="img/boton-caba.png" alt="">
 
 								<dl>
 
@@ -1811,7 +1883,7 @@ body,html{
 					  </figure>	
 						<figure class="white">
 							<a href="interior">
-								<img src="img/boton-int.png" alt="">
+								<img id="imagen-interior" src="img/boton-int.png" alt="">
 								<dl>
 									<dt>Tienda Interior del País</dt>
 									<dd>Ingresa en este botón si vivis en el interior del país y recibirás tus compras por la empresa elegida.</dd>	
