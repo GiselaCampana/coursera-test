@@ -160,6 +160,11 @@ async function sembrarCon(prisma: PrismaClient) {
           quantity: opciones.kilos,
           unit: 'KG',
           unitNetPrice: opciones.precio,
+          // El importe del renglón va impreso en el comprobante, como en
+          // cualquier factura: es contra ese número que el control verifica la
+          // cantidad. Sin él, el renglón no queda controlado y el semáforo no
+          // puede ponerse en verde.
+          grossSubtotal: bruto.toFixed(2),
           discountPct: '0.14',
           ivaRate: '0.21',
         },
