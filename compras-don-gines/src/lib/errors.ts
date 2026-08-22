@@ -100,15 +100,6 @@ const TRANSLATIONS: { match: RegExp; message: string }[] = [
       'La imagen pesa demasiado incluso después de optimizarla. Probá sacar la foto de nuevo con menos resolución.',
   },
   {
-    match: /rate.?limit|429|overloaded/i,
-    message: 'El servicio de lectura está saturado. Esperá unos segundos y volvé a intentar.',
-  },
-  {
-    match: /401|invalid.?api.?key|authentication.?error/i,
-    message:
-      'El servicio de lectura rechazó las credenciales. Hay que revisar la configuración del sistema.',
-  },
-  {
     match: /heic|heif/i,
     message: 'No pudimos convertir la foto HEIC del iPhone. Probá sacarla de nuevo.',
   },
@@ -128,12 +119,22 @@ export function toUserMessage(error: unknown): string {
     if (match.test(raw)) return message;
   }
 
-  // Si el mensaje parece técnico (inglés, stack, códigos), no lo mostramos.
-  if (/[A-Za-z]/.test(raw) && !/[áéíóúñ¿¡]/i.test(raw) && /\b(error|failed|invalid|cannot|unexpected|undefined|null)\b/i.test(raw)) {
-    return 'Ocurrió un error inesperado. Volvé a intentar; si sigue pasando, avisale al administrador.';
-  }
-
-  return raw;
+  /*
+   * Todo lo demás se reemplaza por un mensaje genérico, sin mirar cómo está
+   * escrito.
+   *
+   * Antes se intentaba detectar si el texto "parecía técnico" —inglés, sin
+   * acentos, con palabras como error o invalid—. La heurística falló de la peor
+   * manera: un error de Prisma llegó a la pantalla porque en el volcado de la
+   * consulta venían embebidos nuestros propios mensajes de control, con sus
+   * acentos, y eso alcanzó para que pasara por castellano.
+   *
+   * La regla ahora es al revés y no depende de adivinar: se muestra lo que la
+   * aplicación escribió a propósito (AppError y sus derivados) y las
+   * traducciones de arriba. Cualquier otra cosa es un problema nuestro, va al
+   * log y al usuario le llega algo que pueda entender.
+   */
+  return 'Ocurrió un error inesperado. Volvé a intentar; si sigue pasando, avisale al administrador.';
 }
 
 export function errorStatus(error: unknown): number {

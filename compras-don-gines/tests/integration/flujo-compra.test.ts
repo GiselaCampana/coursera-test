@@ -344,6 +344,38 @@ describe('relectura automática', () => {
   });
 });
 
+describe('los números escritos como en el papel', () => {
+  it('guarda un comprobante cuyo resumen viene en formato argentino', async () => {
+    // Es lo que manda la pantalla de revisión: los campos se muestran y se
+    // escriben como en el comprobante, con punto de miles y coma decimal.
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
+
+    await confirmDocument(escenario.admin, {
+      ...datosConfirmacion({
+        printed: {
+          grossSubtotal: '2.084.594,70',
+          discountTotal: '291.843,26',
+          netTotal: '1.792.751,44',
+          ivaTotal: '376.477,81',
+          perceptionsTotal: '26.891,27',
+          total: '2.196.120,52',
+          lineCount: 9,
+          netWeightKg: '153,70',
+        },
+      }),
+      documentId: documento.id,
+    });
+
+    const guardado = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    expect(guardado.status).toBe('VALIDADO');
+    expect(guardado.total?.toString()).toBe('2196120.52');
+    expect(guardado.netTotal?.toString()).toBe('1792751.44');
+    expect(guardado.printedNetWeightKg?.toString()).toBe('153.7');
+  });
+});
+
 describe('el backend revalida antes de guardar', () => {
   it('no guarda un comprobante cuyo detalle no cierra, aunque el pedido diga que sí', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);

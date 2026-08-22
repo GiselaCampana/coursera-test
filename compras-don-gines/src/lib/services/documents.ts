@@ -3,7 +3,7 @@ import { prisma, type Prisma } from '@/lib/db';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
-import { Decimal, money, toDecimal } from '@/lib/money';
+import { Decimal, money, parseArNumber, toDecimal } from '@/lib/money';
 import { arToday, dateOnlyFromISO, parseArDate, toDateOnly } from '@/lib/datetime';
 import { costItems, type CostedItem, type RawItem } from '@/lib/domain/costing';
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
@@ -244,8 +244,23 @@ export async function matchItemsToProducts(items: CostedItem[], supplierId: stri
   );
 }
 
+/**
+ * Pasa el resumen impreso a columnas de la base.
+ *
+ * Los valores pueden venir escritos a mano en la pantalla de revisión, y ahí se
+ * escriben como en el papel: "2.084.594,70". La base espera un decimal
+ * canónico, así que hay que normalizar acá. Guardar el string tal cual hacía
+ * fallar el guardado con un error de Prisma en inglés.
+ *
+ * Lo que no se puede interpretar queda en null, nunca en cero: un total que no
+ * se pudo leer no es un total de cero.
+ */
 export function printedToColumns(printed: PrintedSummary) {
-  const opt = (v: unknown) => (v === null || v === undefined ? null : String(v));
+  const opt = (v: unknown) => {
+    if (v === null || v === undefined || (typeof v === 'string' && v.trim() === '')) return null;
+    const numero = parseArNumber(v);
+    return numero === null ? null : numero.toString();
+  };
   return {
     grossSubtotal: opt(printed.grossSubtotal),
     discountTotal: opt(printed.discountTotal),
@@ -289,26 +304,29 @@ export async function createTaxLines(
   summary: { ivaLines?: { label: string; rate?: string | null; base?: string | null; amount: string }[] | null; perceptionLines?: { label: string; rate?: string | null; base?: string | null; amount: string }[] | null } | null,
 ) {
   if (!summary) return;
+
+  // Igual que en el resumen: los importes pueden venir escritos como en el
+  // papel y la base espera decimales canónicos.
+  const decimal = (v: unknown, siFalta: string | null): string | null => {
+    const numero = parseArNumber(v);
+    return numero === null ? siFalta : numero.toString();
+  };
+
   const rows: Prisma.DocumentTaxLineCreateManyInput[] = [];
-  for (const line of summary.ivaLines ?? []) {
-    rows.push({
-      documentId,
-      kind: 'IVA',
-      label: line.label,
-      rate: line.rate ?? '0',
-      base: line.base ?? null,
-      amount: line.amount,
-    });
-  }
-  for (const line of summary.perceptionLines ?? []) {
-    rows.push({
-      documentId,
-      kind: 'PERCEPCION',
-      label: line.label,
-      rate: line.rate ?? '0',
-      base: line.base ?? null,
-      amount: line.amount,
-    });
+  for (const [kind, lineas] of [
+    ['IVA', summary.ivaLines],
+    ['PERCEPCION', summary.perceptionLines],
+  ] as const) {
+    for (const line of lineas ?? []) {
+      rows.push({
+        documentId,
+        kind,
+        label: line.label,
+        rate: decimal(line.rate, '0') ?? '0',
+        base: decimal(line.base, null),
+        amount: decimal(line.amount, '0') ?? '0',
+      });
+    }
   }
   if (rows.length > 0) await tx.documentTaxLine.createMany({ data: rows });
 }

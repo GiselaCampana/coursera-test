@@ -46,11 +46,14 @@ test.describe('lectura automática sin servicios pagos', () => {
     soloEnIphone(test, testInfo.project.name);
 
     // Todo lo que pide el navegador queda anotado: al final se comprueba que
-    // no salió a ningún servicio de afuera.
+    // no salió a ningún servicio de afuera. Los blob: y data: no son pedidos de
+    // red: son datos que la propia página armó en memoria.
     const externos: string[] = [];
     page.on('request', (peticion) => {
       const url = new URL(peticion.url());
-      if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') externos.push(peticion.url());
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+      if (url.hostname === '127.0.0.1' || url.hostname === 'localhost') return;
+      externos.push(peticion.url());
     });
 
     await leer(page, await facturaLosCalvosJpeg());
