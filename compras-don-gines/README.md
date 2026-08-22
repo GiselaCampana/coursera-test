@@ -419,9 +419,15 @@ tanto**: una copia que nunca se restauró no es una copia.
   segundos y poco más de un minuto en un iPhone reciente, y la aplicación lo muestra
   etapa por etapa. A cambio no hay clave, no hay costo por comprobante y la foto no sale
   del teléfono.
-- **Los archivos del lector pesan ~38 MB** (WebAssembly de Tesseract y el idioma
-  español). El navegador los descarga la primera vez y los deja en caché. En una conexión
-  móvil lenta conviene abrir la aplicación una vez con wifi.
+- **Los archivos del lector pesan ~52 MB** en `public/ocr/` (todas las variantes del
+  WebAssembly de Tesseract más el idioma español). El navegador baja sólo la variante que
+  soporta —unos 15 MB— y la deja en caché. En una conexión móvil lenta conviene abrir la
+  aplicación una vez con wifi.
+- **Una lectura que no cierra a la primera es lo normal, no una falla.** Sobre la factura
+  de Los Calvos la primera vuelta se equivoca en un dígito y la relectura lo corrige; el
+  comprobante queda controlado en amarillo, que es el estado previsto para eso. Con una
+  foto peor pueden hacer falta las tres vueltas, y si aun así no cierra queda en rojo con
+  el guardado bloqueado, que también es lo correcto.
 - **La conversión de HEIC no está ejercitada con un archivo real.** El entorno no tiene
   encoder HEVC para generar uno. Está probada la detección del formato y el mensaje de
   error en castellano cuando la conversión falla.
@@ -429,8 +435,6 @@ tanto**: una copia que nunca se restauró no es una copia.
   tiene instalado. Verifican el diseño móvil, no el motor de Safari. Para correrlas en
   WebKit: `npx playwright install webkit` y descomentar el proyecto `safari-iphone` de
   `playwright.config.ts`.
-- **En los PDF la relectura focalizada no recorta**: se reenvía el documento completo con
-  instrucciones focalizadas. Recortar páginas de PDF exigiría rasterizarlas primero.
 - **La imagen de Docker no está construida ni probada.** El `Dockerfile` y el
   `docker-compose.yml` de `docs/docker/` están escritos y revisados, pero este entorno no
   tiene un daemon de Docker corriendo. Los despliegues verificados son el de servidor

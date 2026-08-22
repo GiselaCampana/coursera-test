@@ -108,6 +108,25 @@ function skipped(code: string, label: string, message: string): CheckResult {
  * controlar, nunca para tapar una base incompleta. Que el IVA sea exactamente
  * el 21 % del neto leído no alcanza si ese neto no coincide con el impreso.
  */
+/**
+ * Cuánto puede apartarse `cantidad × precio` del importe impreso.
+ *
+ * Acá **no** va la tolerancia contable de max($1, 0,5 %). Esa existe para los
+ * totales, donde el redondeo renglón por renglón se acumula de verdad. Un
+ * renglón es otra cosa: es una multiplicación impresa, y el único margen
+ * legítimo es el redondeo. Si el precio unitario viene redondeado a dos
+ * decimales, su error es de medio centavo y se multiplica por la cantidad; el
+ * importe impreso agrega su propio medio centavo.
+ *
+ * La diferencia importa: con el 0,5 % un "10,90" leído como "10,909" —que es
+ * el error típico del OCR, un dígito de más al final de la columna— pasa el
+ * control sin que nadie se entere, y el comprobante cierra en verde con la
+ * cantidad equivocada. Con el margen del redondeo, no pasa.
+ */
+function lineProductTolerance(item: { quantity: Decimal }): Decimal {
+  return item.quantity.abs().times('0.005').plus('0.02');
+}
+
 export function validateDocument(input: ValidationInput): ValidationReport {
   const { items, printed, supplierRules } = input;
   const attempts = input.attempts ?? 1;
@@ -118,8 +137,7 @@ export function validateDocument(input: ValidationInput): ValidationReport {
   const badArithmetic: string[] = [];
   for (const item of items) {
     const expectedGross = money(item.quantity.times(item.unitNetPrice));
-    const grossTol = roundingTolerance(expectedGross);
-    if (item.grossSubtotal.minus(expectedGross).abs().gt(grossTol)) {
+    if (item.grossSubtotal.minus(expectedGross).abs().gt(lineProductTolerance(item))) {
       badArithmetic.push(
         `renglón ${item.lineNumber} (${item.description}): ${formatQty(item.quantity, 2)} × ` +
           `${formatARS(item.unitNetPrice)} = ${formatARS(expectedGross)}, ` +

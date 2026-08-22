@@ -66,7 +66,7 @@ test.describe('lectura automática sin servicios pagos', () => {
     await expect(page.locator('.card', { hasText: 'Qué no cierra' })).toHaveCount(0);
 
     // Los nueve renglones de la factura.
-    await expect(page.getByText('9 renglones')).toBeVisible();
+    await expect(page.getByText('9 renglones', { exact: true })).toBeVisible();
     await expect(page.locator('.lista > li')).toHaveCount(9);
 
     // Y los números del caso de aceptación, tal como los muestra la pantalla.
@@ -103,12 +103,14 @@ test.describe('lectura automática sin servicios pagos', () => {
     await expect(guardar).toBeEnabled();
     await guardar.click();
 
-    // Queda guardada y visible en el listado de compras.
-    await expect(page.getByText(/Compra guardada|guardada/i).first()).toBeVisible({
+    // Queda guardada, con el pago agendado, y se puede consultar después.
+    await expect(page.getByText('El comprobante se guardó y el pago quedó agendado.')).toBeVisible({
       timeout: 60_000,
     });
-    await page.goto('/compras');
-    await expect(page.getByText('0010-00212399')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('0010-00212399');
+
+    await page.goto('/comprobantes');
+    await expect(page.getByText('0010-00212399').first()).toBeVisible();
   });
 
   test('una foto movida no cierra en la primera lectura y se relee sola', async ({
@@ -150,13 +152,16 @@ test.describe('lectura automática sin servicios pagos', () => {
     soloEnIphone(test, testInfo.project.name);
 
     // Orientación 6 en los EXIF: la imagen está girada 90° en el archivo y el
-    // teléfono espera que quien la muestre la enderece.
+    // teléfono espera que quien la muestre la enderece. Si no se respetara, el
+    // comprobante llegaría acostado a Tesseract y no se leería absolutamente
+    // nada: ni el número, ni la fecha, ni un solo renglón. Que salgan es la
+    // prueba de que la orientación se aplicó.
     await leer(page, await facturaLosCalvosJpeg({ rotacionExif: 6 }), 'IMG_5523.JPG');
 
-    await expect(page.locator('.semaforo-ok, .semaforo-aviso')).toBeVisible();
-    await expect(page.locator('.card', { hasText: 'Lo que da el detalle' })).toContainText(
-      '153,70 kg',
-    );
+    await expect(page.locator('#pv')).toHaveValue('0010');
+    await expect(page.locator('#numero')).toHaveValue('00212356');
+    await expect(page.locator('#fecha')).toHaveValue('2026-08-14');
+    await expect(page.locator('.lista > li')).toHaveCount(9);
   });
 
   test('no menciona claves de API ni servicios pagos en ninguna pantalla', async ({ page }) => {

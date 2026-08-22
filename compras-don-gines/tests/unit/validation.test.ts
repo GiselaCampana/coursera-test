@@ -167,6 +167,37 @@ describe('detección de un precio mal leído', () => {
   });
 });
 
+describe('el renglón se controla con el margen del redondeo, no con el de los totales', () => {
+  it('detecta el dígito de más que el OCR agrega al final de la cantidad', () => {
+    // Es el error típico de Tesseract sobre la columna de kilos: "10,90" vuelve
+    // como "10,909". La diferencia contra el importe impreso es del 0,08 %, así
+    // que la tolerancia contable del 0,5 % la dejaría pasar y el comprobante
+    // cerraría en verde con la cantidad equivocada.
+    // El importe impreso es el de la factura; lo que se leyó mal es la cantidad.
+    const items = LOS_CALVOS_ITEMS.map((i) =>
+      i.lineNumber === 3 ? { ...i, quantity: '10.909', grossSubtotal: '155390.40' } : i,
+    );
+    const report = run(items, LOS_CALVOS_PRINTED);
+    const aritmetica = check(report, 'ART_ARITMETICA');
+    expect(aritmetica.severity).toBe('ERROR');
+    expect(aritmetica.message).toContain('renglón 3');
+    expect(report.canSave).toBe(false);
+  });
+
+  it('no se queja cuando el precio unitario viene redondeado a dos decimales', () => {
+    // Caso legítimo: el proveedor calcula con más decimales de los que imprime.
+    // El importe impreso queda a unos centavos de cantidad × precio impreso, y
+    // eso no es un error de lectura.
+    const items = LOS_CALVOS_ITEMS.map((i) =>
+      i.lineNumber === 7
+        ? { ...i, unitNetPrice: '14828.00', grossSubtotal: '559015.73' }
+        : i,
+    );
+    const report = run(items, LOS_CALVOS_PRINTED);
+    expect(check(report, 'ART_ARITMETICA').severity).toBe('OK');
+  });
+});
+
 describe('detección de un total general incorrecto', () => {
   it('marca el total cuando no es neto más impuestos', () => {
     const report = run(LOS_CALVOS_ITEMS, { ...LOS_CALVOS_PRINTED, total: '2096120.52' });
