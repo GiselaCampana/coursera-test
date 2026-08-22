@@ -284,7 +284,7 @@ Dos casos que el sistema detecta explícitamente:
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (130)
+npm test              # unitarias e integración (144)
 npm run test:unit     # sólo unitarias
 npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (70)
 npm run test:all      # todo
@@ -412,19 +412,25 @@ tanto**: una copia que nunca se restauró no es una copia.
 - **El caso de Los Calvos se verifica sobre una factura generada, no sobre la foto
   original.** No conté con el papel. La prueba end to end dibuja la factura completa como
   imagen, la sube y la lee con Tesseract dentro del navegador: 9 artículos, 153,70 kg y
-  $2.196.120,52. Lo que falta medir es cuánto degrada una foto de verdad —papel arrugado,
-  sombra del hombro, impresora con poca tinta—. Es la primera prueba a hacer con
-  comprobantes reales, y de ahí saldrá el ajuste fino del preprocesado.
-- **Tesseract es más lento que un lector en la nube.** Una página tarda entre veinte
-  segundos y poco más de un minuto en un iPhone reciente, y la aplicación lo muestra
-  etapa por etapa. A cambio no hay clave, no hay costo por comprobante y la foto no sale
-  del teléfono.
+  $2.196.120,52, y después la guarda con el pago agendado. Lo que falta medir es cuánto
+  degrada una foto de verdad —papel arrugado, sombra del hombro, impresora con poca
+  tinta—. Es la primera prueba a hacer con comprobantes reales, y de ahí saldrá el ajuste
+  fino del preprocesado.
+- **El tamaño de la letra manda.** Sobre el comprobante generado, la lectura es exacta y
+  estable cuando los dígitos quedan en unos 26 px de alto, que es lo que da una A4 impresa
+  fotografiada a 2200 px. Con letra más chica el OCR empieza a confundir el 6 con el 0.
+  Si un proveedor imprime muy apretado, conviene acercar más la cámara.
+- **Tesseract es más lento que un lector en la nube.** En el contenedor donde corren las
+  pruebas, leer una página con sus recortes lleva unos diez segundos. **En un iPhone va a
+  ser bastante más**, y no lo pude medir: no tuve un teléfono para probar. La aplicación
+  muestra el avance etapa por etapa justamente por eso. A cambio no hay clave, no hay
+  costo por comprobante y la foto no sale del teléfono.
 - **Los archivos del lector pesan ~52 MB** en `public/ocr/` (todas las variantes del
   WebAssembly de Tesseract más el idioma español). El navegador baja sólo la variante que
   soporta —unos 15 MB— y la deja en caché. En una conexión móvil lenta conviene abrir la
   aplicación una vez con wifi.
-- **Una lectura que no cierra a la primera es lo normal, no una falla.** Sobre la factura
-  de Los Calvos la primera vuelta se equivoca en un dígito y la relectura lo corrige; el
+- **Una lectura que no cierra a la primera no es una falla.** Sobre el comprobante bien
+  fotografiado cierra en la primera vuelta; sobre uno peor, la relectura corrige y el
   comprobante queda controlado en amarillo, que es el estado previsto para eso. Con una
   foto peor pueden hacer falta las tres vueltas, y si aun así no cierra queda en rojo con
   el guardado bloqueado, que también es lo correcto.
@@ -449,3 +455,9 @@ tanto**: una copia que nunca se restauró no es una copia.
   lo verifica); falta la pantalla que los ofrezca explícitamente.
 - **Otras percepciones además de IIBB.** El campo `otherPerceptions` existe en las reglas
   del proveedor; hoy la interfaz configura IVA e IIBB.
+- **Un lector asistido por IA como ayuda opcional.** La interfaz
+  `LectorAsistidoOpcional` (`src/lib/ocr/types.ts`) está declarada y **no se usa**: ningún
+  camino del código la invoca y la aplicación no la necesita. Está sólo para que, si algún
+  día se quisiera sumar un lector de pago como complemento, exista dónde enchufarlo sin
+  tocar la contabilidad ni los analizadores. Mientras tanto, la lectura gratuita con
+  Tesseract es el único camino que corre.
