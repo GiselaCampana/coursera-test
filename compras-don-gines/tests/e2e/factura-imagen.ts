@@ -12,8 +12,20 @@
  */
 import sharp from 'sharp';
 
-export const ANCHO = 1700;
+/**
+ * Tamaño del comprobante, en unidades del SVG.
+ *
+ * Una factura A4 impresa y fotografiada a 2200 px de alto deja los dígitos en
+ * unos 26 px de alto, que es lo que Tesseract necesita para no confundir un
+ * "6" con un "0". El dibujo respeta esa proporción: apretarlo más no probaría
+ * el circuito, probaría el límite del OCR con letra chica.
+ */
+export const ANCHO = 2200;
 export const ALTO = 2340;
+
+/** Margen derecho: contra él se alinean las columnas numéricas. */
+const DERECHA = ANCHO - 40;
+const IZQUIERDA = 80;
 
 /** Tipografía monoespaciada instalada en el sistema, con alternativas. */
 const MONO = 'Liberation Mono, DejaVu Sans Mono, monospace';
@@ -41,13 +53,24 @@ export const RENGLONES: Renglon[] = [
 ];
 
 /** Columnas de la tabla, en píxeles. Las numéricas se alinean a la derecha. */
+/**
+ * A cuerpo 40 en tipografía de ancho fijo cada carácter mide unos 24 px, así
+ * que "258.195,70" ocupa 240 y la descripción más larga —"FIAMBRE COCIDO DE
+ * PATA ZUR-LINDE", 32 caracteres— llega hasta los 968.
+ *
+ * Las posiciones dejan entre 80 y 160 px de aire entre columnas, que son de
+ * tres a seis caracteres. Con menos, Tesseract pega la última letra de la
+ * descripción al primer dígito de los kilos y "36,40" pasa a ser "136,40": el
+ * renglón se lee entero y con la cantidad equivocada, que es peor que no
+ * leerlo.
+ */
 const COLUMNAS = {
-  codigo: 90,
-  descripcion: 230,
-  kg: 1030,
-  precio: 1250,
-  bonificacion: 1400,
-  importe: 1620,
+  codigo: IZQUIERDA,
+  descripcion: 200,
+  kg: 1250,
+  precio: 1580,
+  bonificacion: 1780,
+  importe: DERECHA,
 };
 
 const escapar = (texto: string): string =>
@@ -95,31 +118,31 @@ export function svgFactura(deterioro: 'nitido' | 'borroso' = 'nitido'): string {
   partes.push(texto('CUIT: 30-61234567-9', { x: 90, y: 200, tamano: 30 }));
   partes.push(texto('Ingresos Brutos: 901-234567-8', { x: 90, y: 240, tamano: 28 }));
 
-  partes.push(texto('FACTURA', { x: 1610, y: 110, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
-  partes.push(texto('A', { x: 1610, y: 165, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
-  partes.push(texto('Punto de Venta: 0010', { x: 1610, y: 215, tamano: 30, anclaje: 'end' }));
-  partes.push(texto('Comp. Nro: 00212356', { x: 1610, y: 255, tamano: 30, anclaje: 'end' }));
-  partes.push(texto('Fecha de Emision: 14/08/2026', { x: 1610, y: 295, tamano: 30, anclaje: 'end' }));
+  partes.push(texto('FACTURA', { x: DERECHA, y: 110, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
+  partes.push(texto('A', { x: DERECHA, y: 165, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
+  partes.push(texto('Punto de Venta: 0010', { x: DERECHA, y: 215, tamano: 30, anclaje: 'end' }));
+  partes.push(texto('Comp. Nro: 00212356', { x: DERECHA, y: 255, tamano: 30, anclaje: 'end' }));
+  partes.push(texto('Fecha de Emision: 14/08/2026', { x: DERECHA, y: 295, tamano: 30, anclaje: 'end' }));
 
-  partes.push(`<line x1="80" y1="330" x2="1620" y2="330" stroke="#111111" stroke-width="3"/>`);
+  partes.push(`<line x1="${IZQUIERDA}" y1="330" x2="${DERECHA}" y2="330" stroke="#111111" stroke-width="3"/>`);
 
   partes.push(texto('Sr. DON GINES S.R.L.', { x: 90, y: 380, tamano: 30 }));
   partes.push(texto('CUIT: 30-71234567-4    Condicion: Responsable Inscripto', { x: 90, y: 420, tamano: 28 }));
   partes.push(texto('Condicion de venta: Contado', { x: 90, y: 460, tamano: 28 }));
 
   // --- Tabla de artículos -------------------------------------------------
-  const tamanoTabla = chico ? 26 : 32;
-  const alturaRenglon = chico ? 46 : 58;
+  const tamanoTabla = chico ? 30 : 40;
+  const alturaRenglon = chico ? 54 : 68;
   let y = 560;
 
-  partes.push(`<line x1="80" y1="${y - 42}" x2="1620" y2="${y - 42}" stroke="#111111" stroke-width="2"/>`);
+  partes.push(`<line x1="${IZQUIERDA}" y1="${y - 42}" x2="${DERECHA}" y2="${y - 42}" stroke="#111111" stroke-width="2"/>`);
   partes.push(texto('Cod', { x: COLUMNAS.codigo, y, tamano: tamanoTabla, peso: 'bold' }));
   partes.push(texto('Descripcion', { x: COLUMNAS.descripcion, y, tamano: tamanoTabla, peso: 'bold' }));
   partes.push(texto('Kg', { x: COLUMNAS.kg, y, tamano: tamanoTabla, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('Precio', { x: COLUMNAS.precio, y, tamano: tamanoTabla, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('Bonif %', { x: COLUMNAS.bonificacion, y, tamano: tamanoTabla, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('Importe', { x: COLUMNAS.importe, y, tamano: tamanoTabla, peso: 'bold', anclaje: 'end' }));
-  partes.push(`<line x1="80" y1="${y + 16}" x2="1620" y2="${y + 16}" stroke="#111111" stroke-width="2"/>`);
+  partes.push(`<line x1="${IZQUIERDA}" y1="${y + 16}" x2="${DERECHA}" y2="${y + 16}" stroke="#111111" stroke-width="2"/>`);
 
   y += alturaRenglon + 12;
   for (const renglon of RENGLONES) {
@@ -134,9 +157,9 @@ export function svgFactura(deterioro: 'nitido' | 'borroso' = 'nitido'): string {
 
   // --- Resumen del pie ----------------------------------------------------
   y += 40;
-  partes.push(`<line x1="80" y1="${y - 40}" x2="1620" y2="${y - 40}" stroke="#111111" stroke-width="3"/>`);
-  partes.push(texto('Cantidad de renglones: 9', { x: 90, y, tamano: 32 }));
-  partes.push(texto('Peso neto: 153,70 kg', { x: 700, y, tamano: 32 }));
+  partes.push(`<line x1="${IZQUIERDA}" y1="${y - 40}" x2="${DERECHA}" y2="${y - 40}" stroke="#111111" stroke-width="3"/>`);
+  partes.push(texto('Cantidad de renglones: 9', { x: 90, y, tamano: 34 }));
+  partes.push(texto('Peso neto: 153,70 kg', { x: 800, y, tamano: 34 }));
 
   const pie: [string, string][] = [
     ['Subtotal:', '2.084.594,70'],
@@ -147,14 +170,14 @@ export function svgFactura(deterioro: 'nitido' | 'borroso' = 'nitido'): string {
   ];
   y += 70;
   for (const [etiqueta, importe] of pie) {
-    partes.push(texto(etiqueta, { x: 1000, y, tamano: 32, anclaje: 'end' }));
-    partes.push(texto(importe, { x: 1620, y, tamano: 32, anclaje: 'end' }));
+    partes.push(texto(etiqueta, { x: 1300, y, tamano: 34, anclaje: 'end' }));
+    partes.push(texto(importe, { x: DERECHA, y, tamano: 34, anclaje: 'end' }));
     y += 54;
   }
 
   y += 14;
-  partes.push(texto('TOTAL:', { x: 1000, y, tamano: 40, peso: 'bold', anclaje: 'end' }));
-  partes.push(texto('2.196.120,52', { x: 1620, y, tamano: 40, peso: 'bold', anclaje: 'end' }));
+  partes.push(texto('TOTAL:', { x: 1300, y, tamano: 44, peso: 'bold', anclaje: 'end' }));
+  partes.push(texto('2.196.120,52', { x: DERECHA, y, tamano: 44, peso: 'bold', anclaje: 'end' }));
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${ANCHO}" height="${ALTO}">${partes.join('')}</svg>`;
 }
