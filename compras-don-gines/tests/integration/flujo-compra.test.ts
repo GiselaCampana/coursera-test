@@ -700,6 +700,8 @@ describe('historial de precios y precios de venta', () => {
         {
           ...datos.items[0],
           unitNetPrice: '19244.40',
+          // 16,10 × 19.244,40: el importe impreso acompaña al precio nuevo.
+          grossSubtotal: '309834.84',
         },
       ],
       printed: {

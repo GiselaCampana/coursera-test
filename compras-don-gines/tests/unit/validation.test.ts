@@ -59,8 +59,13 @@ describe('caso negativo obligatorio: neto de artículos incompleto', () => {
   // $14.828), así que los renglones suman ~$1.670.389 de neto en lugar de
   // $1.792.751,44. Cada renglón cierra por sí solo y los impuestos calculados
   // sobre esa base darían bien en porcentaje: la factura sigue mal leída.
+  // El importe impreso se lee acorde al precio equivocado —37,70 × 11.053,94—,
+  // así que el renglón cierra consigo mismo y nada delata el error salvo el
+  // neto del pie. Es el caso difícil: el que no se detecta renglón por renglón.
   const shortItems: RawItem[] = LOS_CALVOS_ITEMS.map((item) =>
-    item.lineNumber === 7 ? { ...item, unitNetPrice: '11053.94' } : item,
+    item.lineNumber === 7
+      ? { ...item, unitNetPrice: '11053.94', grossSubtotal: '416733.54' }
+      : item,
   );
 
   const report = run(shortItems, LOS_CALVOS_PRINTED);
@@ -195,6 +200,38 @@ describe('el renglón se controla con el margen del redondeo, no con el de los t
     );
     const report = run(items, LOS_CALVOS_PRINTED);
     expect(check(report, 'ART_ARITMETICA').severity).toBe('OK');
+  });
+});
+
+describe('un renglón sin su importe impreso no cuenta como controlado', () => {
+  // Cuando el importe no se pudo leer, se calcula como cantidad × precio. Ese
+  // renglón cierra por construcción: no verifica nada. Dar por controlada una
+  // cantidad que nadie contrastó contra el papel sería justamente lo que el
+  // semáforo verde promete que no pasa.
+  const sinImporte = LOS_CALVOS_ITEMS.map(({ grossSubtotal: _, ...resto }) =>
+    resto.lineNumber === 3 ? resto : { ...resto, grossSubtotal: _ },
+  );
+
+  it('avisa cuáles no se pudieron contrastar', () => {
+    const report = run(sinImporte, LOS_CALVOS_PRINTED);
+    const aviso = check(report, 'ART_IMPORTE_IMPRESO');
+    expect(aviso.severity).toBe('WARN');
+    expect(aviso.message).toContain('renglón 3');
+  });
+
+  it('no queda en verde, aunque las cuentas cierren', () => {
+    const report = run(sinImporte, LOS_CALVOS_PRINTED);
+    // Las cuentas cierran: el importe calculado es el correcto.
+    expect(report.errorCount).toBe(0);
+    expect(report.canSave).toBe(true);
+    // Pero el semáforo no puede decir que está todo controlado.
+    expect(report.state).toBe('RECONCILIADO');
+  });
+
+  it('con todos los importes impresos sí queda en verde', () => {
+    const report = run(LOS_CALVOS_ITEMS, LOS_CALVOS_PRINTED);
+    expect(check(report, 'ART_IMPORTE_IMPRESO').severity).toBe('OK');
+    expect(report.state).toBe('OK');
   });
 });
 

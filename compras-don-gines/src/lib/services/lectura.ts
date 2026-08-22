@@ -355,8 +355,17 @@ function elegirMejor(
       ? diferencia.div(toDecimal(printed.netTotal).abs().plus(1)).toNumber()
       : 1;
 
+    // Un renglón sin su importe impreso no se puede contrastar contra el
+    // papel: cantidad × precio le cierra por construcción. Sin este castigo la
+    // elección se vuelve perversa, porque la lectura que *perdió* la columna
+    // Importe queda libre de errores por no tener con qué contradecirse, y le
+    // gana a la que sí la leyó y detectó el problema. Vale más una lectura que
+    // se puede verificar que una que no.
+    const sinVerificar = costeados.filter((i) => !i.grossFromPrint).length;
+
     const puntaje =
       informe.errorCount * 1_000_000 +
+      sinVerificar * 5_000 +
       informe.warningCount * 1_000 +
       Math.min(relativa, 1) * 900 -
       Math.min(candidato.items.length, 200);

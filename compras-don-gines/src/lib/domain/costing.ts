@@ -33,6 +33,16 @@ export interface CostedItem {
   avgPieceWeightKg: Decimal | null;
   unitNetPrice: Decimal;
   grossSubtotal: Decimal;
+  /**
+   * true cuando el importe del renglón salió impreso del comprobante, false
+   * cuando hubo que calcularlo como cantidad × precio.
+   *
+   * Importa para el control: un importe calculado coincide con cantidad ×
+   * precio por construcción, así que no sirve para verificar nada. Saber de
+   * dónde vino evita dar por controlado un renglón que en realidad no se pudo
+   * contrastar contra el papel.
+   */
+  grossFromPrint: boolean;
   discountPct: Decimal;
   discountAmount: Decimal;
   netAmount: Decimal;
@@ -91,6 +101,7 @@ export function resolveItemAmounts(raw: RawItem): {
   quantity: Decimal;
   unitNetPrice: Decimal;
   grossSubtotal: Decimal;
+  grossFromPrint: boolean;
   discountPct: Decimal;
   discountAmount: Decimal;
   netAmount: Decimal;
@@ -99,10 +110,8 @@ export function resolveItemAmounts(raw: RawItem): {
   const unitNetPrice = toDecimal(raw.unitNetPrice);
 
   const computedGross = money(quantity.times(unitNetPrice));
-  const grossSubtotal =
-    raw.grossSubtotal === undefined || raw.grossSubtotal === null
-      ? computedGross
-      : money(raw.grossSubtotal);
+  const grossFromPrint = raw.grossSubtotal !== undefined && raw.grossSubtotal !== null;
+  const grossSubtotal = grossFromPrint ? money(raw.grossSubtotal) : computedGross;
 
   let discountPct = toDecimal(raw.discountPct);
   let discountAmount: Decimal;
@@ -121,7 +130,7 @@ export function resolveItemAmounts(raw: RawItem): {
       ? money(grossSubtotal.minus(discountAmount))
       : money(raw.netAmount);
 
-  return { quantity, unitNetPrice, grossSubtotal, discountPct, discountAmount, netAmount };
+  return { quantity, unitNetPrice, grossSubtotal, grossFromPrint, discountPct, discountAmount, netAmount };
 }
 
 /**
@@ -189,6 +198,7 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
       avgPieceWeightKg,
       unitNetPrice: r.unitNetPrice,
       grossSubtotal: r.grossSubtotal,
+      grossFromPrint: r.grossFromPrint,
       discountPct: r.discountPct,
       discountAmount: r.discountAmount,
       netAmount: r.netAmount,

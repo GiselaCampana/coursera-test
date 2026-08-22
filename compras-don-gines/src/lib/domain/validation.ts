@@ -153,6 +153,22 @@ export function validateDocument(input: ValidationInput): ValidationReport {
       );
     }
   }
+  // Un renglón cuyo importe hubo que calcular no verifica nada: cantidad ×
+  // precio le da igual por construcción. Decir que está controlado sería
+  // mentir, así que se avisa y el semáforo no puede quedar en verde.
+  const sinImporteImpreso = items.filter((i) => !i.grossFromPrint);
+  checks.push({
+    code: 'ART_IMPORTE_IMPRESO',
+    label: 'Importe impreso de cada renglón',
+    severity: sinImporteImpreso.length === 0 ? 'OK' : 'WARN',
+    message:
+      sinImporteImpreso.length === 0
+        ? 'Todos los renglones se controlaron contra el importe impreso.'
+        : `No se pudo leer el importe impreso de ${sinImporteImpreso.length} renglón/es ` +
+          `(${sinImporteImpreso.map((i) => `renglón ${i.lineNumber}`).join(', ')}): ` +
+          'se calculó como cantidad × precio, así que la cantidad no quedó verificada contra el comprobante.',
+  });
+
   checks.push({
     code: 'ART_ARITMETICA',
     label: 'Aritmética de los renglones',

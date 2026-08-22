@@ -29,16 +29,22 @@ export const LOS_CALVOS_PRINTED: PrintedSummary = {
 
 const DISCOUNT = '0.14';
 
+/**
+ * Los nueve renglones tal como los imprime la factura, con su columna
+ * "Importe": es el bruto del renglón, cantidad × precio antes de la
+ * bonificación. Va en el fixture porque va en el papel, y porque es contra ese
+ * importe que el control verifica la cantidad leída.
+ */
 export const LOS_CALVOS_ITEMS: RawItem[] = [
-  { lineNumber: 1, description: 'Longaniza corta', quantity: '16.10', unitNetPrice: '16037', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 2, description: 'Salame Crespón', quantity: '3.40', unitNetPrice: '14256', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 3, description: 'Salame Milán', quantity: '10.90', unitNetPrice: '14256', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 4, description: 'Bondiola al papel', quantity: '4.50', unitNetPrice: '20621', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 5, description: 'Jamón crudo Parma', quantity: '5.00', unitNetPrice: '30327', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 6, description: 'Jamón cocido', quantity: '37.60', unitNetPrice: '12803', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 7, description: 'Jamón cocido Mont-Blanc', quantity: '37.70', unitNetPrice: '14828', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 8, description: 'Fiambre de pechuga de pollo ahumado y horneado', quantity: '2.10', unitNetPrice: '11223', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
-  { lineNumber: 9, description: 'Fiambre cocido de pata Zur-Linde', quantity: '36.40', unitNetPrice: '8630', unit: 'KG', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 1, description: 'Longaniza corta', quantity: '16.10', unitNetPrice: '16037', unit: 'KG', grossSubtotal: '258195.70', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 2, description: 'Salame Crespón', quantity: '3.40', unitNetPrice: '14256', unit: 'KG', grossSubtotal: '48470.40', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 3, description: 'Salame Milán', quantity: '10.90', unitNetPrice: '14256', unit: 'KG', grossSubtotal: '155390.40', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 4, description: 'Bondiola al papel', quantity: '4.50', unitNetPrice: '20621', unit: 'KG', grossSubtotal: '92794.50', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 5, description: 'Jamón crudo Parma', quantity: '5.00', unitNetPrice: '30327', unit: 'KG', grossSubtotal: '151635.00', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 6, description: 'Jamón cocido', quantity: '37.60', unitNetPrice: '12803', unit: 'KG', grossSubtotal: '481392.80', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 7, description: 'Jamón cocido Mont-Blanc', quantity: '37.70', unitNetPrice: '14828', unit: 'KG', grossSubtotal: '559015.60', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 8, description: 'Fiambre de pechuga de pollo ahumado y horneado', quantity: '2.10', unitNetPrice: '11223', unit: 'KG', grossSubtotal: '23568.30', discountPct: DISCOUNT, ivaRate: '0.21' },
+  { lineNumber: 9, description: 'Fiambre cocido de pata Zur-Linde', quantity: '36.40', unitNetPrice: '8630', unit: 'KG', grossSubtotal: '314132.00', discountPct: DISCOUNT, ivaRate: '0.21' },
 ];
 
 export const LOS_CALVOS_TAX_RULES = { ivaRate: '0.21', iibbRate: '0.015' };
