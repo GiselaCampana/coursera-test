@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatARS,
+  formatQty,
   formatRate,
   parseArNumber,
   parseCanonicalNumber,
@@ -109,6 +110,15 @@ describe('tasas contra importes', () => {
 });
 
 describe('formato es-AR', () => {
+  it('no confunde los decimales de un valor interno con miles al mostrarlo', () => {
+    // Los kilos se serializan con tres decimales, así que 153,79 kg viaja como
+    // "153.790". Ese punto es decimal, no agrupa miles: la pantalla tiene que
+    // decir 153,79 kg y no 153.790 kg de fiambre.
+    expect(formatQty('153.790', 2)).toBe('153,79');
+    expect(formatQty('153.700', 2)).toBe('153,70');
+    expect(formatQty('16.100', 2)).toBe('16,10');
+  });
+
   it('escribe los importes en pesos argentinos', () => {
     expect(formatARS('2196120.52').replace(/ /g, ' ')).toBe('$ 2.196.120,52');
   });

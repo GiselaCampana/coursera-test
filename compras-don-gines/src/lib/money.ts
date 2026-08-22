@@ -224,6 +224,23 @@ export function roundingTolerance(reference: MoneyInput, minimum = 1, pct = 0.00
 // Formato es-AR
 // ---------------------------------------------------------------------------
 
+/**
+ * Valor a mostrar en pantalla.
+ *
+ * Los formateadores reciben siempre valores *internos*: un Decimal, o el string
+ * canónico que produce `toFixed`, con punto decimal. Por eso acá se interpreta
+ * en canónico y no con las reglas argentinas, que son para lo que escribe una
+ * persona.
+ *
+ * La diferencia no es teórica: los kilos se serializan con tres decimales, así
+ * que un comprobante de 153,79 kg viaja como "153.790". Leído con las reglas
+ * argentinas, ese punto agrupa miles y la pantalla anuncia 153.790 kg de
+ * fiambre en lugar de 153,79.
+ */
+function paraMostrar(value: MoneyInput): Decimal {
+  return parseCanonicalNumber(value) ?? ZERO;
+}
+
 const arNumber = new Intl.NumberFormat('es-AR', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
@@ -248,12 +265,12 @@ export function formatQty(value: MoneyInput, decimals = 2): string {
   return new Intl.NumberFormat('es-AR', {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  }).format(toDecimal(value).toNumber());
+  }).format(paraMostrar(value).toNumber());
 }
 
 /** 0,015 => "1,5 %" */
 export function formatRate(value: MoneyInput): string {
-  const pct = toDecimal(value).times(100);
+  const pct = paraMostrar(value).times(100);
   const decimals = pct.decimalPlaces() > 0 ? Math.min(pct.decimalPlaces(), 2) : 0;
   return `${new Intl.NumberFormat('es-AR', {
     minimumFractionDigits: decimals,
