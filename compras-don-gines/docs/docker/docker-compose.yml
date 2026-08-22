@@ -1,0 +1,70 @@
+# Compras Don Ginés — aplicación y base de datos.
+#
+#   cd compras-don-gines/docs/docker
+#   cp ../../.env.example .env      # completar
+#   docker compose up -d --build
+#   docker compose exec app npx prisma migrate deploy
+#   docker compose exec app npm run db:seed
+#
+# Detrás hay que poner un proxy con TLS: la cookie de sesión sólo viaja por
+# HTTPS en producción, y Safari no da acceso a la cámara sin contexto seguro.
+
+name: compras-don-gines
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dongines}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definí POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:-compras_don_gines}
+    volumes:
+      - datos:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-dongines}']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # Sin puertos publicados: sólo la aplicación llega a la base.
+
+  app:
+    build:
+      context: ../..
+      dockerfile: docs/docker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: >-
+        postgresql://${POSTGRES_USER:-dongines}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-compras_don_gines}?schema=public
+      APP_URL: ${APP_URL:-http://localhost:3000}
+      STORAGE_SIGNING_SECRET: ${STORAGE_SIGNING_SECRET:?generalo con openssl rand -base64 48}
+      STORAGE_DRIVER: ${STORAGE_DRIVER:-local}
+      STORAGE_LOCAL_DIR: /app/.storage
+      SIGNED_URL_TTL_SECONDS: ${SIGNED_URL_TTL_SECONDS:-900}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      OCR_PROVIDER: ${OCR_PROVIDER:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-5}
+      ANTHROPIC_EFFORT: ${ANTHROPIC_EFFORT:-high}
+      OCR_MAX_ATTEMPTS: ${OCR_MAX_ATTEMPTS:-3}
+      MAX_FILES_PER_DOCUMENT: ${MAX_FILES_PER_DOCUMENT:-10}
+      MAX_UPLOAD_BYTES: ${MAX_UPLOAD_BYTES:-26214400}
+    ports:
+      - '${APP_PORT:-3000}:3000'
+    volumes:
+      # Los comprobantes tienen que sobrevivir a los reinicios y a las
+      # actualizaciones de la imagen.
+      - comprobantes:/app/.storage
+
+volumes:
+  datos:
+  comprobantes:
