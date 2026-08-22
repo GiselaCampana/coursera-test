@@ -159,6 +159,9 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
     expect(guardado.ocrAttempts.length).toBeGreaterThan(0);
     expect(guardado.ocrAttempts[0].provider).toBe('tesseract-local');
     expect(guardado.ocrAttempts[0].recognizedText).toContain('LONGANIZA');
+    // Y quedó registrado que cada importe salió impreso del comprobante, que es
+    // lo que permite verificar la cantidad contra el papel.
+    expect(guardado.items.every((i) => i.grossFromPrint)).toBe(true);
   });
 
   it('al confirmar guarda artículos, movimientos, costos y agenda de pago', async () => {

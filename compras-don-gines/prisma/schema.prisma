@@ -476,6 +476,9 @@ model DocumentItem {
 
   unitNetPrice  Decimal @db.Decimal(18, 4)
   grossSubtotal Decimal @db.Decimal(18, 4)
+  /// true si el importe del renglón salió impreso del comprobante; false si se
+  /// calculó como cantidad × precio. Un importe calculado no verifica nada.
+  grossFromPrint Boolean @default(true)
   discountPct   Decimal @default(0) @db.Decimal(9, 6)
   discountAmount Decimal @default(0) @db.Decimal(18, 4)
   netAmount     Decimal @db.Decimal(18, 4)

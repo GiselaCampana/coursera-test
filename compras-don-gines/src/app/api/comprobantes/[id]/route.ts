@@ -69,6 +69,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         pesoPorPieza: item.avgPieceWeightKg?.toString() ?? null,
         precioUnitario: item.unitNetPrice.toString(),
         bruto: item.grossSubtotal.toString(),
+        brutoImpreso: item.grossFromPrint,
         descuentoPct: item.discountPct.toString(),
         descuento: item.discountAmount.toString(),
         neto: item.netAmount.toString(),

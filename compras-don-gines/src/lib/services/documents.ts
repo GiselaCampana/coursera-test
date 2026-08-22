@@ -271,6 +271,7 @@ export function itemToColumns(item: CostedItem) {
     avgPieceWeightKg: item.avgPieceWeightKg?.toString() ?? null,
     unitNetPrice: item.unitNetPrice.toString(),
     grossSubtotal: item.grossSubtotal.toString(),
+    grossFromPrint: item.grossFromPrint,
     discountPct: item.discountPct.toString(),
     discountAmount: item.discountAmount.toString(),
     netAmount: item.netAmount.toString(),

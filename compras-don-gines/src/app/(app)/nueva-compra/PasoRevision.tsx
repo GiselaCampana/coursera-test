@@ -31,6 +31,13 @@ interface ArticuloEditable {
   unidad: 'KG' | 'UNIT';
   piezas: string;
   precioUnitario: string;
+  /**
+   * Importe impreso del renglón, tal como salió del comprobante, y si de
+   * verdad salió de ahí. Se conserva aunque se corrija la cantidad: es contra
+   * este número que el control verifica que cantidad × precio dé bien.
+   */
+  bruto: string;
+  brutoImpreso: boolean;
   descuentoPct: string;
   ivaTasa: string;
   productoId: string;
@@ -38,6 +45,21 @@ interface ArticuloEditable {
 }
 
 const vacio = (v: string | null | undefined) => (v === null || v === undefined ? '' : v);
+
+/**
+ * Prepara un número para un campo editable.
+ *
+ * Los valores llegan del servidor en formato canónico, con punto decimal:
+ * "2196120.52". Esta es la pantalla donde alguien compara contra el papel, así
+ * que tienen que verse como en el papel: "2.196.120,52". Lo que se escribe en
+ * el campo se vuelve a interpretar con las reglas argentinas, así que el
+ * formato de ida y el de vuelta son el mismo.
+ *
+ * Las tasas quedan afuera: la bonificación viaja como fracción (0,14) y el
+ * recálculo en vivo la lee como tal, no como porcentaje.
+ */
+const editable = (v: string | null | undefined, decimales = 2) =>
+  v === null || v === undefined || v.trim() === '' ? '' : formatQty(v, decimales);
 
 export function PasoRevision({
   comprobante,
@@ -58,15 +80,15 @@ export function PasoRevision({
   const [fecha, setFecha] = useState(comprobante.fecha ?? hoy);
 
   const [resumen, setResumen] = useState({
-    grossSubtotal: vacio(comprobante.resumen.grossSubtotal),
-    discountTotal: vacio(comprobante.resumen.discountTotal),
-    netTotal: vacio(comprobante.resumen.netTotal),
-    ivaTotal: vacio(comprobante.resumen.ivaTotal),
-    perceptionsTotal: vacio(comprobante.resumen.perceptionsTotal),
-    total: vacio(comprobante.resumen.total),
+    grossSubtotal: editable(comprobante.resumen.grossSubtotal),
+    discountTotal: editable(comprobante.resumen.discountTotal),
+    netTotal: editable(comprobante.resumen.netTotal),
+    ivaTotal: editable(comprobante.resumen.ivaTotal),
+    perceptionsTotal: editable(comprobante.resumen.perceptionsTotal),
+    total: editable(comprobante.resumen.total),
     lineCount: comprobante.resumen.lineCount?.toString() ?? '',
-    netWeightKg: vacio(comprobante.resumen.netWeightKg),
-    totalUnits: vacio(comprobante.resumen.totalUnits),
+    netWeightKg: editable(comprobante.resumen.netWeightKg),
+    totalUnits: editable(comprobante.resumen.totalUnits),
   });
 
   const [articulos, setArticulos] = useState<ArticuloEditable[]>(() =>
@@ -75,10 +97,12 @@ export function PasoRevision({
       renglon: a.renglon,
       codigo: a.codigo,
       descripcion: a.descripcion,
-      cantidad: a.cantidad,
+      cantidad: editable(a.cantidad),
       unidad: a.unidad,
       piezas: a.piezas?.toString() ?? '',
-      precioUnitario: a.precioUnitario,
+      precioUnitario: editable(a.precioUnitario),
+      bruto: a.bruto,
+      brutoImpreso: a.brutoImpreso,
       descuentoPct: a.descuentoPct,
       ivaTasa: a.ivaTasa,
       productoId: a.productoId ?? '',
@@ -112,6 +136,10 @@ export function PasoRevision({
       unit: a.unidad,
       pieceCount: a.piezas ? Number(a.piezas) : null,
       unitNetPrice: a.precioUnitario || '0',
+      // Sólo se pasa cuando salió impreso: si se calculó, no hay nada que
+      // verificar y el informe de la pantalla tiene que decir lo mismo que el
+      // del servidor.
+      grossSubtotal: a.brutoImpreso ? a.bruto : undefined,
       discountPct: a.descuentoPct || '0',
       ivaRate: a.ivaTasa || '0',
     }));
@@ -193,6 +221,8 @@ export function PasoRevision({
         codigo: null,
         descripcion: '',
         cantidad: '',
+        bruto: '',
+        brutoImpreso: false,
         unidad: 'KG',
         piezas: '',
         precioUnitario: '',
@@ -250,6 +280,7 @@ export function PasoRevision({
           unit: a.unidad,
           pieceCount: a.piezas ? Number(a.piezas) : null,
           unitNetPrice: a.precioUnitario || '0',
+          grossSubtotal: a.brutoImpreso ? a.bruto : undefined,
           discountPct: a.descuentoPct || '0',
           ivaRate: a.ivaTasa || '0',
           productId: a.productoId || null,

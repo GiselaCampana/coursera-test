@@ -21,6 +21,8 @@ export interface ArticuloRevision {
   pesoPorPieza: string | null;
   precioUnitario: string;
   bruto: string;
+  /** false cuando el importe no se pudo leer y se calculó. */
+  brutoImpreso: boolean;
   descuentoPct: string;
   descuento: string;
   neto: string;
