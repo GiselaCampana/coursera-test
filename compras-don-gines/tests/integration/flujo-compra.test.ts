@@ -137,8 +137,8 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
     expect(guardado.purchaseMovements).toHaveLength(9);
 
     // Los importes cierran exactamente con la factura.
-    const sumar = (valores: { toString(): string }[]) =>
-      valores.reduce((acc, v) => acc + Number(v.toString()), 0);
+    const sumar = (valores: { toString(): string }[]): number =>
+      valores.reduce<number>((acc, v) => acc + Number(v.toString()), 0);
     expect(sumar(guardado.items.map((i) => i.netAmount)).toFixed(2)).toBe('1792751.44');
     expect(sumar(guardado.items.map((i) => i.ivaAmount)).toFixed(2)).toBe('376477.81');
     expect(sumar(guardado.items.map((i) => i.perceptionAmount)).toFixed(2)).toBe('26891.27');

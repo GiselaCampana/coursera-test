@@ -18,8 +18,10 @@
     "test:watch": "vitest",
     "test:unit": "vitest run tests/unit",
     "test:integration": "vitest run tests/integration",
-    "test:e2e": "playwright test",
-    "test:all": "vitest run && playwright test"
+    "test:e2e": "node scripts/preparar-e2e.mjs && playwright test",
+    "test:all": "vitest run && node scripts/preparar-e2e.mjs && playwright test",
+    "e2e:seed": "tsx tests/e2e/sembrar.ts",
+    "e2e:server": "node scripts/servidor-e2e.mjs"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

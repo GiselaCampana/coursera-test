@@ -35,14 +35,8 @@ export function FichaPago({
   const [abierto, setAbierto] = useState(false);
   const [estado, accion] = useActionState<ResultadoPago, FormData>(confirmarPago, {});
 
-  if (estado.ok && estado.scheduleId === scheduleId) {
-    return (
-      <p className="mensaje mensaje-ok mt mb0" role="status">
-        El pago quedó confirmado.
-      </p>
-    );
-  }
-
+  // Al confirmar, la acción lleva a la pestaña de pagados; acá sólo se muestran
+  // los errores, que sí vuelven como estado.
   if (!abierto) {
     return (
       <div className="acciones">

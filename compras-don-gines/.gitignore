@@ -13,3 +13,5 @@ test-results/
 playwright-report/
 blob-report/
 .DS_Store
+.storage-test/
+.storage-e2e/

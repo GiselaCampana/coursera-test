@@ -22,12 +22,12 @@ const GRUPOS = [
 export default async function PaginaPagos({
   searchParams,
 }: {
-  searchParams: Promise<{ grupo?: string }>;
+  searchParams: Promise<{ grupo?: string; confirmado?: string }>;
 }) {
   const user = await requireUser();
   if (!hasPermission(user, PERMISSIONS.PAGOS_VER)) redirect('/');
 
-  const { grupo } = await searchParams;
+  const { grupo, confirmado } = await searchParams;
   const agenda = await listPayments(user);
   const puedeConfirmar = hasPermission(user, PERMISSIONS.PAGOS_CONFIRMAR);
   const hoy = arTodayISO();
@@ -48,6 +48,12 @@ export default async function PaginaPagos({
   return (
     <>
       <h1>Pagos</h1>
+
+      {confirmado ? (
+        <p className="mensaje mensaje-ok" role="status">
+          El pago quedó confirmado.
+        </p>
+      ) : null}
 
       <div className="pestanas">
         {GRUPOS.map((g) => (
