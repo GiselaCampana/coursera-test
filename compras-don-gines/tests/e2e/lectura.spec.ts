@@ -55,11 +55,15 @@ test.describe('lectura automática sin servicios pagos', () => {
 
     await leer(page, await facturaLosCalvosJpeg());
 
-    // Semáforo en verde: el detalle cierra con lo impreso.
-    const semaforo = page.locator('.semaforo-ok');
+    // El comprobante queda controlado. Puede ser verde, o amarillo si hizo
+    // falta releer: las dos cosas significan que artículos, neto, impuestos y
+    // total cierran con lo impreso, y las dos habilitan el guardado. Lo que no
+    // puede haber es rojo.
+    const semaforo = page.locator('.semaforo-ok, .semaforo-aviso');
     await expect(semaforo).toBeVisible();
     await expect(semaforo).toContainText('Comprobante controlado');
     await expect(page.locator('.semaforo-error')).toHaveCount(0);
+    await expect(page.locator('.card', { hasText: 'Qué no cierra' })).toHaveCount(0);
 
     // Los nueve renglones de la factura.
     await expect(page.getByText('9 renglones')).toBeVisible();
@@ -87,7 +91,7 @@ test.describe('lectura automática sin servicios pagos', () => {
     soloEnIphone(test, testInfo.project.name);
 
     await leer(page, await facturaLosCalvosJpeg());
-    await expect(page.locator('.semaforo-ok')).toBeVisible();
+    await expect(page.locator('.semaforo-ok, .semaforo-aviso')).toBeVisible();
 
     // El número se cambia para no chocar con la factura que ya sembró la base.
     await page.locator('#numero').fill('00212399');
@@ -122,8 +126,8 @@ test.describe('lectura automática sin servicios pagos', () => {
 
     // Pase lo que pase, el resultado es honesto: o cierra de verdad, o queda
     // en rojo con el guardado bloqueado. Lo que nunca hace es inventar.
-    const verde = await page.locator('.semaforo-ok').count();
-    if (verde > 0) {
+    const controlado = await page.locator('.semaforo-ok, .semaforo-aviso').count();
+    if (controlado > 0) {
       await expect(page.locator('.card', { hasText: 'Lo que da el detalle' })).toContainText(
         '$ 2.196.120,52',
       );
@@ -149,7 +153,7 @@ test.describe('lectura automática sin servicios pagos', () => {
     // teléfono espera que quien la muestre la enderece.
     await leer(page, await facturaLosCalvosJpeg({ rotacionExif: 6 }), 'IMG_5523.JPG');
 
-    await expect(page.locator('.semaforo-ok')).toBeVisible();
+    await expect(page.locator('.semaforo-ok, .semaforo-aviso')).toBeVisible();
     await expect(page.locator('.card', { hasText: 'Lo que da el detalle' })).toContainText(
       '153,70 kg',
     );

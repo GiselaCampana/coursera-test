@@ -10,7 +10,7 @@
  */
 import { recortar, type Mapa } from '@/lib/cliente/ocr/imagen';
 import { mapaDesdeBlob } from '@/lib/cliente/ocr/lienzo';
-import { prepararPagina, prepararRecorte } from '@/lib/cliente/ocr/preproceso';
+import { limpiarFuerte, prepararPagina, prepararRecorte } from '@/lib/cliente/ocr/preproceso';
 import { esPdf, paginasDePdf } from '@/lib/cliente/ocr/pdf';
 import { detectarRegiones, ensanchar, type Region, type RegionesDetectadas } from '@/lib/cliente/ocr/regiones';
 import { PSM, leerMapa, lectorPreparado, type ProgresoLector } from '@/lib/cliente/ocr/tesseract';
@@ -149,7 +149,10 @@ export class SesionLectura {
     }
 
     for (let i = 0; i < this.paginas.length; i++) {
-      const mapa = this.paginas[i];
+      // En la relectura se limpia fuerte: filtro de mediana y realce. En la
+      // primera vuelta no, porque sobre un comprobante nítido esa limpieza
+      // deforma los dígitos en vez de rescatarlos.
+      const mapa = focalizada ? limpiarFuerte(this.paginas[i]) : this.paginas[i];
       const numero = i + 1;
       const total = this.paginas.length;
 

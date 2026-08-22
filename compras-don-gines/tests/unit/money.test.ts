@@ -38,6 +38,25 @@ describe('separadores argentinos', () => {
     expect(n('1,234,567.89')).toBe('1234567.89');
   });
 
+  it('resuelve el separador decimal que el OCR leyó como el de miles', () => {
+    // Tesseract confunde la coma con el punto: "1.792.751,44" vuelve como
+    // "1,792,751,44". Un número no puede tener dos separadores decimales, así
+    // que el último grupo desempata: tres dígitos son miles, uno o dos son
+    // decimales. Es transcripción, no un ajuste para hacer cerrar la cuenta.
+    expect(n('1,792,751,44')).toBe('1792751.44');
+    expect(n('481,392,80')).toBe('481392.8');
+    expect(n('291,843,26')).toBe('291843.26');
+    // Y del otro lado: la coma decimal leída como punto.
+    expect(n('2.196.120.52')).toBe('2196120.52');
+    expect(n('26.891.27')).toBe('26891.27');
+  });
+
+  it('no rompe los miles legítimos al resolver esa confusión', () => {
+    // Último grupo de tres dígitos: son miles en las dos convenciones.
+    expect(n('1,234,567')).toBe('1234567');
+    expect(n('2.196.120')).toBe('2196120');
+  });
+
   it('no confunde una fracción con un grupo de miles', () => {
     // "0.015" es una fracción: el grupo de miles nunca empieza en cero.
     expect(n('0.015')).toBe('0.015');

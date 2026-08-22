@@ -500,6 +500,23 @@ export function detectarEsquinas(mapa: Mapa): [Punto, Punto, Punto, Punto] | nul
   );
   if (minimo < Math.min(mapa.width, mapa.height) * 0.25) return null;
 
+  // Si el cuadrilátero ya es el rectángulo de la imagen, no hay perspectiva que
+  // corregir. Enderezar igual no arregla nada y cuesta caro: reescribe todos los
+  // píxeles interpolando, y esa interpolación redondea los trazos finos. Es la
+  // diferencia entre leer "37,60" y leer "37,00" en un comprobante escaneado
+  // derecho, que es justamente el caso fácil.
+  const tolerancia = Math.min(mapa.width, mapa.height) * 0.02;
+  const rectangulo: Punto[] = [
+    { x: 0, y: 0 },
+    { x: mapa.width - 1, y: 0 },
+    { x: mapa.width - 1, y: mapa.height - 1 },
+    { x: 0, y: mapa.height - 1 },
+  ];
+  const yaEsRectangular = esquinas.every(
+    (esquina, i) => Math.hypot(esquina.x - rectangulo[i].x, esquina.y - rectangulo[i].y) <= tolerancia,
+  );
+  if (yaEsRectangular) return null;
+
   return esquinas;
 }
 

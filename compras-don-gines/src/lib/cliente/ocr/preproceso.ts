@@ -11,6 +11,7 @@
 import {
   ampliar,
   aEscalaDeGrises,
+  clonarMapa,
   binarizarSauvola,
   corregirPerspectiva,
   detectarEsquinas,
@@ -22,8 +23,20 @@ import {
   type Mapa,
 } from '@/lib/cliente/ocr/imagen';
 
-/** Lado mayor con el que trabaja el OCR de la página completa. */
+/**
+ * Lado mayor con el que trabaja el OCR de la página completa.
+ *
+ * Una foto de iPhone viene con 4032 px y conviene bajarla: a esa resolución
+ * Tesseract tarda muchísimo y no lee mejor. Se reescala sólo cuando la
+ * diferencia justifica la pérdida de nitidez —de ahí el margen del 15 %—,
+ * porque un reescalado corto emborrona los dígitos chicos sin ganar nada.
+ *
+ * El valor está medido, no elegido a ojo: con la factura de Los Calvos, 2200 px
+ * lee mejor que 2600, porque de ahí sale un recorte de la tabla que se amplía
+ * más y termina con los dígitos más grandes.
+ */
 export const LADO_PAGINA = 2200;
+const MARGEN_REESCALADO = 1.15;
 /**
  * Ancho mínimo de un recorte antes de pasarlo al OCR.
  *
@@ -44,6 +57,12 @@ export interface ResultadoPreproceso {
  * Preparación de la página completa: se busca el papel, se lo endereza y se le
  * levanta el contraste, sin binarizar. Tesseract segmenta mejor una imagen en
  * grises que una ya binarizada por nosotros.
+ *
+ * Se limpia con mano liviana a propósito. El filtro de mediana y el realce
+ * fuerte salvan una foto movida, pero sobre un comprobante que ya salió nítido
+ * hacen daño: redondean el trazo y convierten un "0" en un "9" o una coma en un
+ * punto. La limpieza fuerte queda para la relectura, que es cuando ya sabemos
+ * que la lectura suave no alcanzó.
  */
 export function prepararPagina(original: Mapa): ResultadoPreproceso {
   let mapa = original;
@@ -55,26 +74,41 @@ export function prepararPagina(original: Mapa): ResultadoPreproceso {
     perspectivaCorregida = true;
   }
 
-  if (Math.max(mapa.width, mapa.height) > LADO_PAGINA) {
+  if (Math.max(mapa.width, mapa.height) > LADO_PAGINA * MARGEN_REESCALADO) {
     const factor = LADO_PAGINA / Math.max(mapa.width, mapa.height);
     mapa = escalar(mapa, Math.round(mapa.width * factor), Math.round(mapa.height * factor));
   }
 
   aEscalaDeGrises(mapa);
   normalizarContraste(mapa);
-  reducirRuido(mapa);
-  enfocar(mapa, 0.6);
 
   const { mapa: derecho, angulo } = enderezar(mapa);
   return { mapa: derecho, inclinacion: angulo, perspectivaCorregida };
 }
 
 /**
+ * Limpieza fuerte para la relectura.
+ *
+ * Se aplica sobre la página ya preparada, no sobre la original: así no hay que
+ * guardar el mapa original de cada página, que en un comprobante de diez
+ * páginas serían casi doscientos megabytes en el teléfono.
+ */
+export function limpiarFuerte(pagina: Mapa): Mapa {
+  const mapa = clonarMapa(pagina);
+  reducirRuido(mapa);
+  enfocar(mapa, 0.8);
+  return mapa;
+}
+
+/**
  * Preparación de un recorte para leer números.
  *
- * Acá sí se binariza: en la tabla de artículos y en el pie lo que interesa es
- * el trazo de los dígitos, y un blanco y negro limpio da bastante mejor lectura
- * que el gris, sobre todo con la trama de una impresora matricial.
+ * En la primera vuelta se amplía y se levanta el contraste, nada más. Binarizar
+ * de entrada parecía buena idea —un blanco y negro limpio se lee mejor que el
+ * gris— pero sobre un comprobante nítido pasa lo contrario: el umbral se come
+ * la cola de la coma y la deja como un punto, o cierra el "0" y lo vuelve un
+ * "9". Sobre una foto mala sí ayuda, y ahí es donde se usa: en la relectura,
+ * junto con el filtro de mediana y el realce fuerte.
  */
 export function prepararRecorte(recorte: Mapa, agresivo = false): Mapa {
   let mapa = recorte;
@@ -87,11 +121,14 @@ export function prepararRecorte(recorte: Mapa, agresivo = false): Mapa {
 
   aEscalaDeGrises(mapa);
   normalizarContraste(mapa, 0.005);
-  if (agresivo) reducirRuido(mapa);
-  enfocar(mapa, agresivo ? 1 : 0.8);
-  // Ventana amplia: los renglones de una factura son largos y la iluminación
-  // cambia de un lado al otro de la hoja.
-  binarizarSauvola(mapa, agresivo ? 31 : 25, 0.2);
+
+  if (agresivo) {
+    reducirRuido(mapa);
+    enfocar(mapa, 1);
+    // Ventana amplia: los renglones de una factura son largos y la iluminación
+    // cambia de un lado al otro de la hoja.
+    binarizarSauvola(mapa, 31, 0.2);
+  }
 
   return mapa;
 }

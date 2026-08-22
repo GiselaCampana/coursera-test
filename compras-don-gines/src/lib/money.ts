@@ -82,8 +82,17 @@ export function parseArNumber(raw: unknown): Decimal | null {
     decPart = s.slice(cut + 1);
   } else if (commas > 0) {
     if (commas > 1) {
-      // "1,234,567" => miles al estilo inglés.
-      intPart = s.split(',').join('');
+      // Varias comas y ningún punto: pasa cuando el OCR lee los puntos de miles
+      // como comas ("1,792,751,44" por "1.792.751,44"). El último grupo
+      // desempata, porque un número no puede tener dos separadores decimales:
+      // tres dígitos al final son miles ("1,234,567"), uno o dos son decimales.
+      const ultimo = s.slice(lastComma + 1);
+      if (/^\d{3}$/.test(ultimo)) {
+        intPart = s.split(',').join('');
+      } else {
+        intPart = s.slice(0, lastComma).split(',').join('');
+        decPart = ultimo;
+      }
     } else {
       const after = s.slice(lastComma + 1);
       // En Argentina la coma es decimal aun con 3 dígitos ("153,700" = 153,7).
@@ -92,8 +101,16 @@ export function parseArNumber(raw: unknown): Decimal | null {
     }
   } else if (dots > 0) {
     if (dots > 1) {
-      // "2.196.120" => miles.
-      intPart = s.split('.').join('');
+      // Igual que arriba, del otro lado: "2.196.120" son miles, pero
+      // "2.196.120.52" es el mismo importe con la coma decimal leída como
+      // punto. Manda el largo del último grupo.
+      const ultimo = s.slice(lastDot + 1);
+      if (/^\d{3}$/.test(ultimo)) {
+        intPart = s.split('.').join('');
+      } else {
+        intPart = s.slice(0, lastDot).split('.').join('');
+        decPart = ultimo;
+      }
     } else {
       const after = s.slice(lastDot + 1);
       const before = s.slice(0, lastDot);
