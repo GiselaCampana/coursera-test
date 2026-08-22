@@ -351,9 +351,12 @@ model Document {
   appliedIibbRate      Decimal? @db.Decimal(9, 6)
   appliedDueDate       DateTime?
 
-  /// Clave de deduplicación: "ACTIVE" mientras el comprobante esté vigente.
-  /// Al rechazarlo se reemplaza por su id, liberando el número para recarga.
-  dedupeKey String @default("ACTIVE")
+  /// Clave de deduplicación. Vale "ACTIVE" sólo mientras el comprobante está
+  /// confirmado: ése es el que se queda con el número. Mientras es borrador
+  /// lleva un valor propio (el default), así se puede leer una factura que ya
+  /// existe y recién al confirmarla avisar del duplicado con un mensaje claro.
+  /// Al anularla o rechazarla se reemplaza por su id, liberando el número.
+  dedupeKey String @default(cuid())
 
   createdById   String
   createdBy     User      @relation("DocumentCreatedBy", fields: [createdById], references: [id])

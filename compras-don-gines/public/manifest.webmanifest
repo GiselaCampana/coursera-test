@@ -1,0 +1,18 @@
+{
+  "name": "Compras Don Ginés",
+  "short_name": "Don Ginés",
+  "description": "Gestión de compras de la cadena de fiambrerías Don Ginés.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f8f3e8",
+  "theme_color": "#1f3d2b",
+  "lang": "es-AR",
+  "dir": "ltr",
+  "icons": [
+    { "src": "/icono-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icono-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icono-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -1,0 +1,365 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { requireUser, hasPermission } from '@/lib/auth/session';
+import { PERMISSIONS } from '@/lib/auth/permissions';
+import { getDocumentForReview } from '@/lib/services/documents';
+import { getStorage } from '@/lib/storage';
+import { NotFoundError } from '@/lib/errors';
+import { formatARS, formatQty, formatRate } from '@/lib/money';
+import { formatDateAr, formatDateTimeAr } from '@/lib/datetime';
+import { describeTerm, PAYMENT_METHOD_LABEL, type TermType } from '@/lib/domain/payments';
+import type { ValidationReport } from '@/lib/domain/validation';
+import {
+  EtiquetaComprobante,
+  EtiquetaControl,
+  EtiquetaPago,
+  ListaControles,
+  Semaforo,
+} from '@/components/Estado';
+import { AccionesComprobante } from './AccionesComprobante';
+
+export const metadata: Metadata = { title: 'Comprobante' };
+export const dynamic = 'force-dynamic';
+
+interface Props {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ guardado?: string }>;
+}
+
+export default async function PaginaComprobante({ params, searchParams }: Props) {
+  const user = await requireUser();
+  const { id } = await params;
+  const { guardado } = await searchParams;
+
+  let documento;
+  try {
+    documento = await getDocumentForReview(user, id);
+  } catch (error) {
+    if (error instanceof NotFoundError) notFound();
+    throw error;
+  }
+
+  const storage = await getStorage();
+  const paginas = await Promise.all(
+    documento.files.map(async (file) => ({
+      id: file.id,
+      orden: file.pageOrder,
+      url: await storage.signedUrl(file.storageKey),
+      esPdf: file.mimeType === 'application/pdf',
+    })),
+  );
+
+  const informe = documento.checkReport as unknown as ValidationReport | null;
+  const puedeAnular = hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR);
+
+  return (
+    <>
+      {guardado ? (
+        <p className="mensaje mensaje-ok" role="status">
+          El comprobante se guardó y el pago quedó agendado.
+        </p>
+      ) : null}
+
+      <h1>
+        {documento.docType === 'REMITO' ? 'Remito' : `Factura ${documento.letter ?? ''}`.trim()}{' '}
+        {documento.fullNumber || 'sin número'}
+      </h1>
+      <div className="fila-dato-meta" style={{ marginBottom: 14 }}>
+        <EtiquetaComprobante estado={documento.status} />
+        <EtiquetaControl estado={documento.checkState} />
+        {documento.paymentSchedule ? (
+          <EtiquetaPago estado={documento.paymentSchedule.status} />
+        ) : null}
+      </div>
+
+      {documento.status === 'ANULADO' && documento.voidReason ? (
+        <div className="mensaje mensaje-error">
+          <strong>Comprobante anulado.</strong> Motivo: {documento.voidReason}
+          {documento.voidedAt ? ` · ${formatDateTimeAr(documento.voidedAt)}` : ''}
+        </div>
+      ) : null}
+
+      <Semaforo report={informe} />
+
+      <div className="card">
+        <h2>Datos del comprobante</h2>
+        <dl style={{ margin: 0 }}>
+          <div className="dato">
+            <dt>Proveedor</dt>
+            <dd>{documento.supplier?.tradeName ?? 'Sin identificar'}</dd>
+          </div>
+          <div className="dato">
+            <dt>Sucursal</dt>
+            <dd>{documento.branch.name}</dd>
+          </div>
+          <div className="dato">
+            <dt>Fecha de emisión</dt>
+            <dd>{formatDateAr(documento.issueDate)}</dd>
+          </div>
+          <div className="dato">
+            <dt>Cargado por</dt>
+            <dd>{documento.createdBy.name}</dd>
+          </div>
+          {documento.validatedBy ? (
+            <div className="dato">
+              <dt>Confirmado por</dt>
+              <dd>
+                {documento.validatedBy.name}
+                {documento.validatedAt ? ` · ${formatDateTimeAr(documento.validatedAt)}` : ''}
+              </dd>
+            </div>
+          ) : null}
+        </dl>
+      </div>
+
+      <div className="card">
+        <h2>Totales</h2>
+        <dl style={{ margin: 0 }}>
+          <div className="dato">
+            <dt>Subtotal bruto</dt>
+            <dd>{documento.grossSubtotal ? formatARS(documento.grossSubtotal.toString()) : '—'}</dd>
+          </div>
+          <div className="dato">
+            <dt>Descuento</dt>
+            <dd>{documento.discountTotal ? formatARS(documento.discountTotal.toString()) : '—'}</dd>
+          </div>
+          <div className="dato">
+            <dt>Neto gravado</dt>
+            <dd>{documento.netTotal ? formatARS(documento.netTotal.toString()) : '—'}</dd>
+          </div>
+          {documento.taxLines.map((linea) => (
+            <div className="dato" key={linea.id}>
+              <dt>{linea.label}</dt>
+              <dd>{formatARS(linea.amount.toString())}</dd>
+            </div>
+          ))}
+          <div className="dato destacado">
+            <dt>Total</dt>
+            <dd>{documento.total ? formatARS(documento.total.toString()) : '—'}</dd>
+          </div>
+          {documento.printedNetWeightKg ? (
+            <div className="dato">
+              <dt>Peso neto impreso</dt>
+              <dd>{formatQty(documento.printedNetWeightKg.toString(), 2)} kg</dd>
+            </div>
+          ) : null}
+          {documento.printedLineCount ? (
+            <div className="dato">
+              <dt>Renglones impresos</dt>
+              <dd>{documento.printedLineCount}</dd>
+            </div>
+          ) : null}
+        </dl>
+      </div>
+
+      {documento.paymentSchedule ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Pago</h2>
+            <Link href="/pagos" className="chico">
+              Ir a Pagos
+            </Link>
+          </div>
+          <dl style={{ margin: 0 }}>
+            <div className="dato destacado">
+              <dt>Importe</dt>
+              <dd>{formatARS(documento.paymentSchedule.plannedAmount.toString())}</dd>
+            </div>
+            <div className="dato">
+              <dt>Fecha prevista</dt>
+              <dd>{formatDateAr(documento.paymentSchedule.dueDate)}</dd>
+            </div>
+            <div className="dato">
+              <dt>Plazo aplicado</dt>
+              <dd>
+                {documento.appliedTermType
+                  ? describeTerm({
+                      termType: documento.appliedTermType as TermType,
+                      days: documento.appliedTermDays,
+                    })
+                  : '—'}
+              </dd>
+            </div>
+            <div className="dato">
+              <dt>Forma de pago prevista</dt>
+              <dd>
+                {PAYMENT_METHOD_LABEL[documento.paymentSchedule.plannedPaymentMethod] ??
+                  documento.paymentSchedule.plannedPaymentMethod}
+              </dd>
+            </div>
+            <div className="dato">
+              <dt>Estado</dt>
+              <dd>
+                <EtiquetaPago estado={documento.paymentSchedule.status} />
+              </dd>
+            </div>
+          </dl>
+
+          {documento.paymentSchedule.events.length > 0 ? (
+            <>
+              <hr className="separador" />
+              <h3>Historial del pago</h3>
+              <ul className="lista">
+                {documento.paymentSchedule.events.map((evento) => (
+                  <li key={evento.id} className="fila-dato">
+                    <div className="fila-dato-cabecera">
+                      <span className="fila-dato-titulo">
+                        {evento.kind === 'CONFIRMACION'
+                          ? 'Pago confirmado'
+                          : evento.kind === 'REPROGRAMACION'
+                            ? 'Reprogramado'
+                            : 'Cancelado'}
+                      </span>
+                      {evento.amount ? (
+                        <span className="fila-dato-importe">
+                          {formatARS(evento.amount.toString())}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="fila-dato-meta">
+                      {evento.effectiveDate ? (
+                        <span>Fecha efectiva: {formatDateAr(evento.effectiveDate)}</span>
+                      ) : null}
+                      {evento.paymentMethod ? (
+                        <span>
+                          {PAYMENT_METHOD_LABEL[evento.paymentMethod] ?? evento.paymentMethod}
+                        </span>
+                      ) : null}
+                      {evento.reference ? <span>Ref.: {evento.reference}</span> : null}
+                      <span>{formatDateTimeAr(evento.createdAt)}</span>
+                    </div>
+                    {evento.notes ? <p className="chico medio mb0">{evento.notes}</p> : null}
+                  </li>
+                ))}
+              </ul>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="card">
+        <div className="card-titulo">
+          <h2>Artículos</h2>
+          <span className="chico medio">{documento.items.length}</span>
+        </div>
+
+        {documento.items.length === 0 ? (
+          <p className="medio mb0">No se leyó ningún artículo.</p>
+        ) : (
+          <div className="tabla-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Descripción</th>
+                  <th>Producto</th>
+                  <th className="num">Cantidad</th>
+                  <th className="num">Precio</th>
+                  <th className="num">Bonif.</th>
+                  <th className="num">Neto</th>
+                  <th className="num">IVA</th>
+                  <th className="num">Percep.</th>
+                  <th className="num">Costo unit.</th>
+                  <th className="num">Costo total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {documento.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.lineNumber}</td>
+                    <td style={{ whiteSpace: 'normal', minWidth: 200 }}>{item.description}</td>
+                    <td>
+                      {item.product ? (
+                        item.product.normalizedName
+                      ) : (
+                        <span className="suave">Sin asociar</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      {formatQty(item.quantity.toString(), 2)} {item.unit === 'KG' ? 'kg' : 'u.'}
+                    </td>
+                    <td className="num">{formatARS(item.unitNetPrice.toString())}</td>
+                    <td className="num">{formatRate(item.discountPct.toString())}</td>
+                    <td className="num">{formatARS(item.netAmount.toString())}</td>
+                    <td className="num">{formatARS(item.ivaAmount.toString())}</td>
+                    <td className="num">{formatARS(item.perceptionAmount.toString())}</td>
+                    <td className="num">{formatARS(item.unitCost.toString())}</td>
+                    <td className="num">{formatARS(item.totalCost.toString())}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {informe ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Controles</h2>
+          </div>
+          <ListaControles checks={informe.checks} />
+        </div>
+      ) : null}
+
+      {paginas.length > 0 ? (
+        <div className="card">
+          <h2>Imágenes</h2>
+          <ul className="miniaturas">
+            {paginas.map((pagina) => (
+              <li key={pagina.id} className="miniatura">
+                <span className="miniatura-orden">{pagina.orden}</span>
+                <a href={pagina.url} target="_blank" rel="noreferrer">
+                  {pagina.esPdf ? (
+                    <div className="miniatura-pdf">Ver el PDF</div>
+                  ) : (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={pagina.url} alt={`Página ${pagina.orden}`} />
+                  )}
+                </a>
+              </li>
+            ))}
+          </ul>
+          <p className="ayuda">Los enlaces vencen a los 15 minutos por seguridad.</p>
+        </div>
+      ) : null}
+
+      {documento.ocrAttempts.length > 0 ? (
+        <details className="card">
+          <summary style={{ cursor: 'pointer', fontWeight: 600 }}>
+            Lecturas realizadas ({documento.ocrAttempts.length})
+          </summary>
+          <ul className="lista mt">
+            {documento.ocrAttempts.map((intento) => (
+              <li key={intento.id} className="fila-dato">
+                <div className="fila-dato-cabecera">
+                  <span className="fila-dato-titulo">
+                    Intento {intento.attemptNumber} · {intento.stage}
+                  </span>
+                  <span className="chico">{intento.success ? 'OK' : 'Falló'}</span>
+                </div>
+                <div className="fila-dato-meta">
+                  <span>{intento.provider}</span>
+                  {intento.model ? <span>{intento.model}</span> : null}
+                  {intento.durationMs !== null ? <span>{intento.durationMs} ms</span> : null}
+                  {intento.overallConfidence ? (
+                    <span>Confianza {formatRate(intento.overallConfidence.toString())}</span>
+                  ) : null}
+                </div>
+                {intento.strategy ? <p className="chico medio mb0">{intento.strategy}</p> : null}
+                {intento.error ? <p className="chico negativo mb0">{intento.error}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+
+      <AccionesComprobante
+        documentId={documento.id}
+        estado={documento.status}
+        puedeAnular={puedeAnular}
+      />
+    </>
+  );
+}

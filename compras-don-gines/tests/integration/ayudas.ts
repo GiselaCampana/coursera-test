@@ -1,0 +1,225 @@
+import { prisma } from '@/lib/db';
+import { hashPassword } from '@/lib/auth/password';
+import {
+  ADMIN_PERMISSIONS,
+  OPERADOR_PERMISSIONS,
+  SUPERVISOR_PERMISSIONS,
+} from '@/lib/auth/permissions';
+import { normalizeText } from '@/lib/domain/matching';
+import type { AuthUser } from '@/lib/auth/session';
+
+const EPOCH = new Date(Date.UTC(2020, 0, 1));
+
+/** Vacía todas las tablas respetando las claves foráneas. */
+export async function limpiarBase() {
+  await prisma.$executeRawUnsafe(`
+    TRUNCATE TABLE
+      audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
+      sale_price_history, pricing_rules, sales_movements,
+      document_items, document_tax_lines, ocr_attempts, document_files, documents,
+      product_aliases, products,
+      supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
+      sessions, users, roles, branches
+    RESTART IDENTITY CASCADE;
+  `);
+}
+
+/**
+ * Construye el AuthUser que reciben los servicios.
+ * Es la misma forma que arma la sesión real a partir de la cookie.
+ */
+export function comoUsuario(datos: {
+  id: string;
+  email: string;
+  name: string;
+  branchId: string | null;
+  branchName?: string | null;
+  roleId: string;
+  roleCode: string;
+  roleName: string;
+  permissions: string[];
+  scopeAllBranches: boolean;
+}): AuthUser {
+  return {
+    ...datos,
+    branchName: datos.branchName ?? null,
+    mustChangePassword: false,
+  };
+}
+
+export interface Escenario {
+  admin: AuthUser;
+  operadorDevoto: AuthUser;
+  operadorPueyrredon: AuthUser;
+  supervisor: AuthUser;
+  sucursales: { devoto: string; pueyrredon: string; sanMartin: string };
+  proveedorId: string;
+  productos: Record<string, string>;
+}
+
+/**
+ * Escenario base: los tres locales de Don Ginés, un administrador, dos
+ * operadores, un supervisor y el proveedor Los Calvos con sus condiciones.
+ */
+export async function sembrarEscenario(): Promise<Escenario> {
+  const [rolAdmin, rolOperador, rolSupervisor] = await Promise.all([
+    prisma.role.create({
+      data: {
+        code: 'ADMIN',
+        name: 'Administrador',
+        permissions: ADMIN_PERMISSIONS,
+        scopeAllBranches: true,
+        isSystem: true,
+      },
+    }),
+    prisma.role.create({
+      data: {
+        code: 'OPERADOR',
+        name: 'Operador de sucursal',
+        permissions: OPERADOR_PERMISSIONS,
+        scopeAllBranches: false,
+        isSystem: true,
+      },
+    }),
+    prisma.role.create({
+      data: {
+        code: 'SUPERVISOR',
+        name: 'Supervisor',
+        permissions: SUPERVISOR_PERMISSIONS,
+        scopeAllBranches: true,
+      },
+    }),
+  ]);
+
+  const [devoto, pueyrredon, sanMartin] = await Promise.all([
+    prisma.branch.create({ data: { code: 'DEVOTO', name: 'Devoto' } }),
+    prisma.branch.create({ data: { code: 'PUEYRREDON', name: 'Pueyrredón' } }),
+    prisma.branch.create({ data: { code: 'SAN_MARTIN', name: 'San Martín' } }),
+  ]);
+
+  const hash = await hashPassword('PruebasDonGines1');
+
+  const [admin, opDevoto, opPueyrredon, supervisor] = await Promise.all([
+    prisma.user.create({
+      data: { email: 'admin@test.local', name: 'Admin', passwordHash: hash, roleId: rolAdmin.id },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'devoto@test.local',
+        name: 'Operador Devoto',
+        passwordHash: hash,
+        roleId: rolOperador.id,
+        branchId: devoto.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'pueyrredon@test.local',
+        name: 'Operador Pueyrredón',
+        passwordHash: hash,
+        roleId: rolOperador.id,
+        branchId: pueyrredon.id,
+      },
+    }),
+    prisma.user.create({
+      data: {
+        email: 'supervisor@test.local',
+        name: 'Supervisor',
+        passwordHash: hash,
+        roleId: rolSupervisor.id,
+      },
+    }),
+  ]);
+
+  const proveedor = await prisma.supplier.create({
+    data: {
+      tradeName: 'Los Calvos',
+      legalName: 'Los Calvos S.A.',
+      cuit: '30-61234567-9',
+      aliases: {
+        create: ['Los Calvos', 'LOS CALVOS S.A.'].map((alias) => ({
+          alias,
+          normalized: normalizeText(alias),
+        })),
+      },
+      paymentTerms: {
+        create: {
+          termType: 'SAME_DAY',
+          days: 0,
+          paymentMethod: 'TRANSFERENCIA',
+          validFrom: EPOCH,
+        },
+      },
+      taxRules: {
+        create: { ivaRate: '0.21', iibbRate: '0.015', otherPerceptions: [], validFrom: EPOCH },
+      },
+    },
+  });
+
+  const definiciones = [
+    ['1001', 'Longaniza corta', 'LONGANIZA CORTA'],
+    ['1002', 'Salame Crespón', 'SALAME CRESPON'],
+    ['1003', 'Salame Milán', 'SALAME MILAN'],
+    ['1004', 'Bondiola al papel', 'BONDIOLA AL PAPEL'],
+    ['1005', 'Jamón crudo Parma', 'JAMON CRUDO PARMA'],
+    ['1006', 'Jamón cocido', 'JAMON COCIDO'],
+    ['1007', 'Jamón cocido Mont-Blanc', 'JAMON COCIDO MONT-BLANC'],
+    ['1008', 'Fiambre de pechuga de pollo ahumado y horneado', 'FIAMBRE DE PECHUGA DE POLLO AHUMADO Y HORNEADO'],
+    ['1009', 'Fiambre cocido de pata Zur-Linde', 'FIAMBRE COCIDO DE PATA ZUR-LINDE'],
+  ];
+
+  const productos: Record<string, string> = {};
+  for (const [codigo, nombre, alias] of definiciones) {
+    const producto = await prisma.product.create({
+      data: {
+        internalCode: codigo,
+        normalizedName: nombre,
+        category: 'Fiambres',
+        purchaseUnit: 'KG',
+        saleMode: 'FETEABLE',
+        avgPieceWeightKg: '3.000',
+        defaultSupplierId: proveedor.id,
+        targetMarginPct: '0.45',
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0.10',
+        roundingRule: 'NEAREST_100',
+        aliases: {
+          create: {
+            supplierId: proveedor.id,
+            supplierCode: codigo,
+            alias,
+            normalized: normalizeText(alias),
+            origin: 'MANUAL',
+          },
+        },
+      },
+    });
+    productos[codigo] = producto.id;
+  }
+
+  const usuario = (
+    u: { id: string; email: string; name: string; branchId: string | null; roleId: string },
+    rol: { code: string; name: string; permissions: string[]; scopeAllBranches: boolean },
+  ) =>
+    comoUsuario({
+      id: u.id,
+      email: u.email,
+      name: u.name,
+      branchId: u.branchId,
+      roleId: u.roleId,
+      roleCode: rol.code,
+      roleName: rol.name,
+      permissions: rol.permissions,
+      scopeAllBranches: rol.scopeAllBranches,
+    });
+
+  return {
+    admin: usuario(admin, rolAdmin),
+    operadorDevoto: usuario(opDevoto, rolOperador),
+    operadorPueyrredon: usuario(opPueyrredon, rolOperador),
+    supervisor: usuario(supervisor, rolSupervisor),
+    sucursales: { devoto: devoto.id, pueyrredon: pueyrredon.id, sanMartin: sanMartin.id },
+    proveedorId: proveedor.id,
+    productos,
+  };
+}

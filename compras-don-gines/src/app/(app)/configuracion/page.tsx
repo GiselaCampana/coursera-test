@@ -1,0 +1,85 @@
+import type { Metadata } from 'next';
+import Link from 'next/link';
+import { redirect } from 'next/navigation';
+import { requireUser, hasAnyPermission, hasPermission } from '@/lib/auth/session';
+import { PERMISSIONS } from '@/lib/auth/permissions';
+import { prisma } from '@/lib/db';
+
+export const metadata: Metadata = { title: 'Configuración' };
+export const dynamic = 'force-dynamic';
+
+export default async function PaginaConfiguracion() {
+  const user = await requireUser();
+  const puedeEntrar = hasAnyPermission(user, [
+    PERMISSIONS.USUARIOS_GESTIONAR,
+    PERMISSIONS.SUCURSALES_GESTIONAR,
+    PERMISSIONS.PROVEEDORES_GESTIONAR,
+    PERMISSIONS.PRODUCTOS_GESTIONAR,
+    PERMISSIONS.ROLES_GESTIONAR,
+    PERMISSIONS.AUDITORIA_VER,
+  ]);
+  if (!puedeEntrar) redirect('/');
+
+  const [usuarios, sucursales, proveedores, productos, roles] = await Promise.all([
+    prisma.user.count(),
+    prisma.branch.count(),
+    prisma.supplier.count(),
+    prisma.product.count(),
+    prisma.role.count(),
+  ]);
+
+  const secciones = [
+    {
+      href: '/configuracion/usuarios',
+      titulo: 'Usuarios',
+      texto: `${usuarios} usuarios. Altas, bajas, rol y sucursal.`,
+      visible: hasPermission(user, PERMISSIONS.USUARIOS_GESTIONAR),
+    },
+    {
+      href: '/configuracion/roles',
+      titulo: 'Roles y permisos',
+      texto: `${roles} roles. Podés crear roles nuevos sin tocar el código.`,
+      visible: hasPermission(user, PERMISSIONS.ROLES_GESTIONAR),
+    },
+    {
+      href: '/configuracion/sucursales',
+      titulo: 'Sucursales',
+      texto: `${sucursales} sucursales.`,
+      visible: hasPermission(user, PERMISSIONS.SUCURSALES_GESTIONAR),
+    },
+    {
+      href: '/configuracion/proveedores',
+      titulo: 'Proveedores',
+      texto: `${proveedores} proveedores, con sus condiciones de pago y reglas impositivas.`,
+      visible: hasPermission(user, PERMISSIONS.PROVEEDORES_GESTIONAR),
+    },
+    {
+      href: '/configuracion/productos',
+      titulo: 'Productos y alias',
+      texto: `${productos} productos, con márgenes, descuentos y redondeos.`,
+      visible: hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR),
+    },
+    {
+      href: '/configuracion/auditoria',
+      titulo: 'Auditoría',
+      texto: 'Historial de las operaciones sensibles.',
+      visible: hasPermission(user, PERMISSIONS.AUDITORIA_VER),
+    },
+  ].filter((s) => s.visible);
+
+  return (
+    <>
+      <h1>Configuración</h1>
+      <ul className="lista">
+        {secciones.map((seccion) => (
+          <li key={seccion.href}>
+            <Link href={seccion.href} className="fila-dato">
+              <div className="fila-dato-titulo">{seccion.titulo}</div>
+              <div className="chico medio">{seccion.texto}</div>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}

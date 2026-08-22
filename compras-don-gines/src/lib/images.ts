@@ -2,6 +2,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 import { AppError } from '@/lib/errors';
+import { ACCEPTED_MIME } from '@/lib/formatos';
 
 /**
  * Preparación de las fotos antes de leerlas.
@@ -18,18 +19,7 @@ export const WORK_MAX_DIMENSION = 2600;
 export const WORK_TARGET_BYTES = 1_600_000;
 const JPEG_QUALITY_STEPS = [88, 82, 76, 70, 62];
 
-export const ACCEPTED_IMAGE_MIME = [
-  'image/jpeg',
-  'image/jpg',
-  'image/png',
-  'image/webp',
-  'image/heic',
-  'image/heif',
-];
-export const ACCEPTED_MIME = [...ACCEPTED_IMAGE_MIME, 'application/pdf'];
-
-export const ACCEPT_ATTRIBUTE =
-  'image/jpeg,image/png,image/webp,image/heic,image/heif,application/pdf,.jpg,.jpeg,.png,.webp,.heic,.heif,.pdf';
+export { ACCEPTED_IMAGE_MIME, ACCEPTED_MIME, ACCEPT_ATTRIBUTE } from '@/lib/formatos';
 
 export interface NormalizedUpload {
   /** Versión sobre la que se hace OCR y que se muestra en pantalla. */

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#f8f3e8"/>
+  <circle cx="32" cy="32" r="32" fill="#1f3d2b"/>
+  <circle cx="32" cy="32" r="27.52" fill="none" stroke="#b8912f" stroke-width="1.152"/>
+  <text x="50%" y="50%" dy="7.36" text-anchor="middle"
+        font-family="Georgia, 'Times New Roman', serif" font-weight="700"
+        font-size="29.44" fill="#f8f3e8">DG</text>
+</svg>

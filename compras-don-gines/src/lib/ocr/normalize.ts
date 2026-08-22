@@ -108,14 +108,14 @@ export function mergeSummaries(
   };
 }
 
-export function mergeHeaders<T extends Record<string, unknown>>(
+export function mergeHeaders<T extends object>(
   primary: T | null | undefined,
   fallback: T | null | undefined,
 ): T | null {
   if (!primary) return fallback ?? null;
   if (!fallback) return primary;
   const merged = { ...primary } as Record<string, unknown>;
-  for (const [key, value] of Object.entries(fallback)) {
+  for (const [key, value] of Object.entries(fallback as Record<string, unknown>)) {
     if (merged[key] === null || merged[key] === undefined) merged[key] = value;
   }
   return merged as T;
