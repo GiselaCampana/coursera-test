@@ -22,7 +22,6 @@ function optional(name: string, fallback: string): string {
 }
 
 export type StorageDriver = 'local' | 's3';
-export type OcrProviderName = 'anthropic' | 'mock';
 
 export const env = {
   get databaseUrl(): string {
@@ -91,28 +90,11 @@ export const env = {
     };
   },
 
-  // --- OCR ---
-  get ocrProvider(): OcrProviderName {
-    const configured = process.env.OCR_PROVIDER?.trim();
-    if (configured === 'mock') return 'mock';
-    if (configured === 'anthropic') return 'anthropic';
-    // Sin configuración explícita: se usa Anthropic si hay clave.
-    return process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'mock';
-  },
-
-  get anthropicApiKey(): string {
-    return required('ANTHROPIC_API_KEY');
-  },
-
-  get anthropicModel(): string {
-    return optional('ANTHROPIC_MODEL', 'claude-opus-5');
-  },
-
-  /** Profundidad de razonamiento del lector: low | medium | high | xhigh | max. */
-  get anthropicEffort(): string {
-    return optional('ANTHROPIC_EFFORT', 'high');
-  },
-
+  // --- Lectura automática ---
+  /**
+   * Reintentos de lectura enfocada antes de darse por vencido. La lectura corre
+   * en el teléfono con Tesseract; no hay clave ni costo por comprobante.
+   */
   get ocrMaxAttempts(): number {
     return Number(optional('OCR_MAX_ATTEMPTS', '3'));
   },
@@ -137,8 +119,5 @@ export function assertProductionEnv(): void {
     required('S3_BUCKET');
     required('S3_ACCESS_KEY_ID');
     required('S3_SECRET_ACCESS_KEY');
-  }
-  if (env.ocrProvider === 'anthropic') {
-    required('ANTHROPIC_API_KEY');
   }
 }

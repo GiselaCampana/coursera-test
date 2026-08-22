@@ -10,11 +10,8 @@ import { validateDocument, type PrintedSummary, type ValidationReport } from '@/
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
 import { buildDocumentKey, getStorage } from '@/lib/storage';
-import { normalizeUpload, cropAndEnhance } from '@/lib/images';
+import { normalizeUpload } from '@/lib/images';
 import { env } from '@/lib/env';
-import { getOcrProvider } from '@/lib/ocr';
-import { readDocument, type ProgressStage } from '@/lib/ocr/pipeline';
-import type { OcrPage, OcrRegion } from '@/lib/ocr/types';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
 
@@ -207,7 +204,7 @@ async function renumberPages(documentId: string) {
   );
 }
 
-async function loadEditableDocument(user: AuthUser, documentId: string) {
+export async function loadEditableDocument(user: AuthUser, documentId: string) {
   const document = await prisma.document.findUnique({ where: { id: documentId } });
   if (!document) throw new NotFoundError('No encontramos ese comprobante.');
   assertBranchAccess(user, document.branchId);
@@ -221,205 +218,7 @@ async function loadEditableDocument(user: AuthUser, documentId: string) {
 // Lectura automática
 // ---------------------------------------------------------------------------
 
-export interface ProcessResult {
-  documentId: string;
-  report: ValidationReport;
-  supplierId: string | null;
-  matchedItems: number;
-  unmatchedItems: number;
-  attempts: number;
-  notes: string[];
-}
-
-/**
- * Lee el comprobante, calcula los costos y deja todo listo para que una persona
- * lo revise. No crea movimientos de compra ni agenda pagos: eso pasa recién al
- * confirmar.
- */
-export async function processDocument(
-  user: AuthUser,
-  documentId: string,
-  onProgress?: (stage: ProgressStage, detail?: string) => void,
-): Promise<ProcessResult> {
-  const document = await loadEditableDocument(user, documentId);
-
-  const files = await prisma.documentFile.findMany({
-    where: { documentId },
-    orderBy: { pageOrder: 'asc' },
-  });
-  if (files.length === 0) {
-    throw new ValidationError('Agregá al menos una foto o un PDF del comprobante.');
-  }
-
-  await prisma.document.update({
-    where: { id: documentId },
-    data: { status: 'PROCESANDO', checkState: 'PENDIENTE' },
-  });
-
-  try {
-    const storage = await getStorage();
-    const pages: OcrPage[] = [];
-    for (const file of files) {
-      pages.push({
-        buffer: await storage.get(file.storageKey),
-        mimeType: file.mimeType,
-        pageNumber: file.pageOrder,
-      });
-    }
-
-    const supplierNames = (
-      await prisma.supplier.findMany({ where: { active: true }, select: { tradeName: true } })
-    ).map((s) => s.tradeName);
-
-    // Primera pasada sin reglas del proveedor: todavía no se sabe quién es.
-    const provider = await getOcrProvider();
-    const preliminary = await readDocument({
-      pages,
-      provider,
-      supplierNames,
-      maxAttempts: 1,
-      onProgress,
-      cropPage: makeCropper(),
-    });
-
-    // Con el proveedor reconocido se pueden aplicar sus tasas como control y,
-    // si hizo falta, repetir la lectura con esa referencia.
-    const supplierMatch = await findSupplierByReading(preliminary.header ?? {});
-    const issueDate = parseArDate(preliminary.header?.issueDate) ?? arToday();
-    const conditions = supplierMatch.supplierId
-      ? await getSupplierConditions(supplierMatch.supplierId, issueDate)
-      : { term: null, tax: null };
-
-    let result = preliminary;
-    if (!preliminary.report.canSave || conditions.tax) {
-      result = await readDocument({
-        pages,
-        provider: await getOcrProvider(),
-        supplierNames,
-        supplierRules: conditions.tax
-          ? { ivaRate: conditions.tax.ivaRate, iibbRate: conditions.tax.iibbRate }
-          : undefined,
-        maxAttempts: env.ocrMaxAttempts,
-        onProgress,
-        cropPage: makeCropper(),
-      });
-    }
-
-    const totalAttempts = preliminary.attempts.length + (result === preliminary ? 0 : result.attempts.length);
-
-    // Se guarda el rastro de todos los intentos, incluidos los que fallaron.
-    const allAttempts = result === preliminary ? result.attempts : [...preliminary.attempts, ...result.attempts];
-    await prisma.ocrAttempt.deleteMany({ where: { documentId } });
-    await prisma.ocrAttempt.createMany({
-      data: allAttempts.map((attempt, index) => ({
-        documentId,
-        attemptNumber: index + 1,
-        stage: attempt.stage,
-        strategy: attempt.strategy,
-        provider: attempt.provider,
-        model: attempt.model,
-        success: attempt.success,
-        startedAt: attempt.startedAt,
-        finishedAt: attempt.finishedAt,
-        durationMs: attempt.durationMs,
-        rawResponse: (attempt.raw ?? undefined) as Prisma.InputJsonValue | undefined,
-        recognizedText: attempt.text,
-        overallConfidence: attempt.overallConfidence?.toString() ?? null,
-        fieldConfidences: (attempt.fieldConfidences ?? undefined) as Prisma.InputJsonValue | undefined,
-        error: attempt.error,
-      })),
-    });
-
-    const matches = await matchItemsToProducts(result.items, supplierMatch.supplierId);
-    const dueDate = conditions.term ? computeDueDate(issueDate, conditions.term) : null;
-
-    await prisma.$transaction(async (tx) => {
-      await tx.documentItem.deleteMany({ where: { documentId } });
-      await tx.documentTaxLine.deleteMany({ where: { documentId } });
-
-      await tx.document.update({
-        where: { id: documentId },
-        data: {
-          supplierId: supplierMatch.supplierId,
-          docType: result.header?.docType === 'REMITO' ? 'REMITO' : 'FACTURA',
-          letter: result.header?.letter ?? null,
-          pointOfSale: result.header?.pointOfSale ?? '',
-          number: result.header?.number ?? '',
-          fullNumber: result.header?.fullNumber ?? '',
-          issueDate,
-          currency: result.header?.currency ?? 'ARS',
-          ...printedToColumns(result.printed),
-          status: 'REQUIERE_REVISION',
-          checkState: result.report.state,
-          checkReport: result.report as unknown as Prisma.InputJsonValue,
-          appliedTermType: conditions.term?.termType ?? null,
-          appliedTermDays: conditions.term?.days ?? null,
-          appliedPaymentMethod: conditions.term?.paymentMethod ?? null,
-          appliedIvaRate: conditions.tax?.ivaRate ?? null,
-          appliedIibbRate: conditions.tax?.iibbRate ?? null,
-          appliedDueDate: dueDate,
-        },
-      });
-
-      if (result.items.length > 0) {
-        await tx.documentItem.createMany({
-          data: result.items.map((item, index) => ({
-            documentId,
-            ...itemToColumns(item),
-            productId: matches[index]?.productId ?? null,
-            matchMethod: matches[index]?.method ?? 'NONE',
-            matchScore: matches[index]?.score?.toString() ?? null,
-          })),
-        });
-      }
-
-      await createTaxLines(tx, documentId, result.summary);
-    });
-
-    await recordAudit({
-      userId: user.id,
-      action: AUDIT_ACTIONS.DOCUMENT_READ,
-      entity: 'Document',
-      entityId: documentId,
-      after: {
-        estado: result.report.state,
-        renglones: result.items.length,
-        intentos: totalAttempts,
-        estrategia: result.chosenStrategy,
-      },
-    });
-
-    return {
-      documentId,
-      report: result.report,
-      supplierId: supplierMatch.supplierId,
-      matchedItems: matches.filter((m) => m.productId).length,
-      unmatchedItems: matches.filter((m) => !m.productId).length,
-      attempts: totalAttempts,
-      notes: result.notes,
-    };
-  } catch (error) {
-    await prisma.document
-      .update({
-        where: { id: documentId },
-        data: { status: 'REQUIERE_REVISION', checkState: 'PENDIENTE' },
-      })
-      .catch(() => {});
-    throw error;
-  } finally {
-    void document;
-  }
-}
-
-function makeCropper() {
-  return async (page: OcrPage, region: OcrRegion): Promise<OcrPage | null> => {
-    if (page.mimeType === 'application/pdf') return page;
-    const cropped = await cropAndEnhance(page.buffer, region, { upscale: 2 });
-    return { buffer: cropped, mimeType: 'image/jpeg', pageNumber: page.pageNumber };
-  };
-}
-
-async function matchItemsToProducts(items: CostedItem[], supplierId: string | null) {
+export async function matchItemsToProducts(items: CostedItem[], supplierId: string | null) {
   if (items.length === 0) return [];
   const products = await prisma.product.findMany({
     where: { active: true },
@@ -445,7 +244,7 @@ async function matchItemsToProducts(items: CostedItem[], supplierId: string | nu
   );
 }
 
-function printedToColumns(printed: PrintedSummary) {
+export function printedToColumns(printed: PrintedSummary) {
   const opt = (v: unknown) => (v === null || v === undefined ? null : String(v));
   return {
     grossSubtotal: opt(printed.grossSubtotal),
@@ -460,7 +259,7 @@ function printedToColumns(printed: PrintedSummary) {
   };
 }
 
-function itemToColumns(item: CostedItem) {
+export function itemToColumns(item: CostedItem) {
   return {
     lineNumber: item.lineNumber,
     supplierCode: item.supplierCode,
@@ -483,7 +282,7 @@ function itemToColumns(item: CostedItem) {
   };
 }
 
-async function createTaxLines(
+export async function createTaxLines(
   tx: Prisma.TransactionClient,
   documentId: string,
   summary: { ivaLines?: { label: string; rate?: string | null; base?: string | null; amount: string }[] | null; perceptionLines?: { label: string; rate?: string | null; base?: string | null; amount: string }[] | null } | null,

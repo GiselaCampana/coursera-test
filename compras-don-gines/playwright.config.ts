@@ -31,6 +31,10 @@ const launchOptions = comoRoot
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // El diagnóstico no comprueba nada: registra lo que hace el lector para poder
+  // ver dónde se traba. Se corre a mano cuando hace falta:
+  //   npx playwright test --project=iphone diagnostico.spec.ts
+  testIgnore: /diagnostico\.spec\.ts/,
   fullyParallel: false,
   workers: 1,
   retries: 0,

@@ -5,18 +5,25 @@ import { ForbiddenError } from '@/lib/errors';
 import {
   confirmDocument,
   createDocument,
-  processDocument,
   rejectDocument,
   voidDocument,
   type ConfirmDocumentInput,
 } from '@/lib/services/documents';
+import { registrarLectura } from '@/lib/services/lectura';
 import { confirmPayment } from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
 import { computePaymentStatus } from '@/lib/domain/payments';
 import { toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
-import { LOS_CALVOS_TEXT, LOS_CALVOS_ITEMS, LOS_CALVOS_PRINTED } from '../fixtures/los-calvos';
+import {
+  LOS_CALVOS_TEXT,
+  LOS_CALVOS_ITEMS,
+  LOS_CALVOS_PRINTED,
+  LOS_CALVOS_ENCABEZADO_OCR,
+  LOS_CALVOS_ARTICULOS_OCR,
+  LOS_CALVOS_RESUMEN_OCR,
+} from '../fixtures/los-calvos';
 
 let escenario: Escenario;
 
@@ -52,6 +59,50 @@ async function adjuntarPagina(documentId: string, texto: string, orden = 1) {
   });
 }
 
+/**
+ * Entrega al servidor una lectura como la que produce el navegador.
+ *
+ * Se usa el texto con el ruido típico de Tesseract, así el circuito completo
+ * —analizador del proveedor, cálculo, control y guardado— se ejercita sobre lo
+ * que de verdad sale del OCR, no sobre un texto ideal.
+ */
+async function leerComprobante(
+  usuario: Parameters<typeof registrarLectura>[0],
+  documentId: string,
+  opciones: {
+    intento?: number;
+    encabezado?: string;
+    articulos?: string;
+    resumen?: string;
+  } = {},
+) {
+  return registrarLectura(usuario, documentId, {
+    intento: opciones.intento ?? 1,
+    estrategia: 'Lectura completa de la página, más recortes de la tabla y del pie',
+    proveedor: 'tesseract-local',
+    modelo: 'tesseract 5 · spa',
+    duracionMs: 1234,
+    confianza: 0.88,
+    observaciones: [],
+    paginas: [
+      {
+        numero: 1,
+        textoCompleto: [
+          opciones.encabezado ?? LOS_CALVOS_ENCABEZADO_OCR,
+          opciones.articulos ?? LOS_CALVOS_ARTICULOS_OCR,
+          opciones.resumen ?? LOS_CALVOS_RESUMEN_OCR,
+        ].join('\n'),
+        textoEncabezado: opciones.encabezado ?? LOS_CALVOS_ENCABEZADO_OCR,
+        textoArticulos: opciones.articulos ?? LOS_CALVOS_ARTICULOS_OCR,
+        textoResumen: opciones.resumen ?? LOS_CALVOS_RESUMEN_OCR,
+        confianza: 0.88,
+        inclinacion: -0.5,
+        perspectivaCorregida: true,
+      },
+    ],
+  });
+}
+
 function datosConfirmacion(overrides: Partial<ConfirmDocumentInput> = {}): Omit<
   ConfirmDocumentInput,
   'documentId'
@@ -78,7 +129,7 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
 
-    const resultado = await processDocument(escenario.operadorDevoto, documento.id);
+    const resultado = await leerComprobante(escenario.operadorDevoto, documento.id);
 
     expect(resultado.report.canSave).toBe(true);
     expect(resultado.report.computed.itemCount).toBe(9);
@@ -86,8 +137,10 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
     expect(resultado.report.computed.totalQuantityKg).toBe('153.700');
     expect(resultado.supplierId).toBe(escenario.proveedorId);
     // Los nueve renglones quedaron asociados a productos del catálogo.
-    expect(resultado.matchedItems).toBe(9);
-    expect(resultado.unmatchedItems).toBe(0);
+    expect(resultado.renglonesAsociados).toBe(9);
+    expect(resultado.renglonesSinAsociar).toBe(0);
+    // Y usó el analizador específico del proveedor.
+    expect(resultado.analizador).toBe('los-calvos');
 
     const guardado = await prisma.document.findUniqueOrThrow({
       where: { id: documento.id },
@@ -104,14 +157,14 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
     expect(toISODate(guardado.appliedDueDate!)).toBe('2026-08-14');
     // Y dejó el rastro de las lecturas.
     expect(guardado.ocrAttempts.length).toBeGreaterThan(0);
-    expect(guardado.ocrAttempts[0].provider).toBe('mock');
+    expect(guardado.ocrAttempts[0].provider).toBe('tesseract-local');
     expect(guardado.ocrAttempts[0].recognizedText).toContain('LONGANIZA');
   });
 
   it('al confirmar guarda artículos, movimientos, costos y agenda de pago', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
 
     const resultado = await confirmDocument(escenario.admin, {
       ...datosConfirmacion(),
@@ -176,11 +229,123 @@ describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
   });
 });
 
+/**
+ * Renglones con un importe mal reconocido: al primero le falta un dígito. Es el
+ * caso típico de una foto movida, y es el que dispara la relectura enfocada.
+ */
+const ARTICULOS_MAL_LEIDOS = LOS_CALVOS_ARTICULOS_OCR.replace(
+  '258.195,7O',
+  '25.195,7O',
+);
+
+describe('relectura automática', () => {
+  it('no acepta una lectura que no cierra y pide releer, diciendo qué falló', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    const primera = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+
+    expect(primera.report.canSave).toBe(false);
+    expect(primera.report.state).toBe('DIFERENCIA');
+    expect(primera.releer).not.toBeNull();
+    expect(primera.releer!.motivo).not.toBe('');
+
+    const guardado = await prisma.document.findUniqueOrThrow({
+      where: { id: documento.id },
+    });
+    expect(guardado.checkState).toBe('DIFERENCIA');
+  });
+
+  it('la segunda lectura enfocada cierra la cuenta y el comprobante queda en verde', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+    const segunda = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      intento: 2,
+    });
+
+    expect(segunda.intentos).toBe(2);
+    expect(segunda.report.canSave).toBe(true);
+    expect(segunda.report.computed.netAmount).toBe('1792751.44');
+    expect(segunda.releer).toBeNull();
+  });
+
+  it('gana el conjunto más consistente aunque no sea el último leído', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    // Primero la lectura buena, después una peor: la buena tiene que sobrevivir.
+    await leerComprobante(escenario.operadorDevoto, documento.id);
+    const segunda = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      intento: 2,
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+
+    expect(segunda.report.canSave).toBe(true);
+    expect(segunda.report.computed.itemCount).toBe(9);
+    expect(segunda.report.computed.netAmount).toBe('1792751.44');
+  });
+
+  it('agotados los intentos queda en rojo, bloquea el guardado y no inventa nada', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    let ultima = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+    for (let intento = 2; ultima.releer; intento++) {
+      ultima = await leerComprobante(escenario.operadorDevoto, documento.id, {
+        intento,
+        articulos: ARTICULOS_MAL_LEIDOS,
+      });
+    }
+
+    expect(ultima.report.canSave).toBe(false);
+    expect(ultima.report.state).toBe('DIFERENCIA');
+    expect(ultima.report.errorCount).toBeGreaterThan(0);
+    // No se tocó ningún importe para hacer cerrar la cuenta: el renglón mal
+    // leído sigue mal leído, y por eso el control está en rojo.
+    const guardado = await prisma.document.findUniqueOrThrow({
+      where: { id: documento.id },
+      include: { items: { orderBy: { lineNumber: 'asc' } } },
+    });
+    expect(Number(guardado.items[0].grossSubtotal.toString())).toBeCloseTo(25195.7, 2);
+    expect(guardado.checkState).toBe('DIFERENCIA');
+  });
+
+  it('guarda el rastro de cada intento: estrategia, lector y texto reconocido', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+    await leerComprobante(escenario.operadorDevoto, documento.id, { intento: 2 });
+
+    const intentos = await prisma.ocrAttempt.findMany({
+      where: { documentId: documento.id },
+      orderBy: { attemptNumber: 'asc' },
+    });
+    expect(intentos).toHaveLength(2);
+    expect(intentos.map((i) => i.attemptNumber)).toEqual([1, 2]);
+    for (const intento of intentos) {
+      expect(intento.provider).toBe('tesseract-local');
+      expect(intento.durationMs).toBeGreaterThan(0);
+      expect(intento.recognizedText).toContain('LONGANIZA');
+    }
+  });
+});
+
 describe('el backend revalida antes de guardar', () => {
   it('no guarda un comprobante cuyo detalle no cierra, aunque el pedido diga que sí', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
 
     // Falta un renglón: el neto ya no llega al impreso.
     const datos = datosConfirmacion();
@@ -202,7 +367,7 @@ describe('el backend revalida antes de guardar', () => {
   it('un administrador puede forzarlo, pero sólo con un motivo y queda en auditoría', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
 
     const datos = datosConfirmacion();
     const incompleto = { ...datos, items: datos.items.slice(0, 8), documentId: documento.id };
@@ -245,7 +410,7 @@ describe('duplicados', () => {
   it('no deja cargar dos veces la misma factura del mismo proveedor', async () => {
     const primero = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(primero.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, primero.id);
+    await leerComprobante(escenario.operadorDevoto, primero.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: primero.id });
 
     // Otra sucursal intenta cargar la misma factura.
@@ -254,7 +419,7 @@ describe('duplicados', () => {
       escenario.sucursales.pueyrredon,
     );
     await adjuntarPagina(segundo.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorPueyrredon, segundo.id);
+    await leerComprobante(escenario.operadorPueyrredon, segundo.id);
 
     const error = await confirmDocument(escenario.admin, {
       ...datosConfirmacion(),
@@ -269,7 +434,7 @@ describe('duplicados', () => {
   it('rechazar la primera carga libera el número para volver a cargarla', async () => {
     const primero = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(primero.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, primero.id);
+    await leerComprobante(escenario.operadorDevoto, primero.id);
     await rejectDocument(escenario.operadorDevoto, primero.id, 'Se cargó en la sucursal equivocada');
 
     const segundo = await createDocument(
@@ -277,7 +442,7 @@ describe('duplicados', () => {
       escenario.sucursales.pueyrredon,
     );
     await adjuntarPagina(segundo.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorPueyrredon, segundo.id);
+    await leerComprobante(escenario.operadorPueyrredon, segundo.id);
 
     const resultado = await confirmDocument(escenario.admin, {
       ...datosConfirmacion(),
@@ -305,7 +470,7 @@ describe('restricciones por sucursal', () => {
   it('un operador no puede confirmar el comprobante de otra sucursal', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
 
     await expect(
       confirmDocument(escenario.operadorPueyrredon, {
@@ -318,7 +483,7 @@ describe('restricciones por sucursal', () => {
   it('el administrador ve y confirma las tres sucursales', async () => {
     const documento = await createDocument(escenario.admin, escenario.sucursales.sanMartin);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.admin, documento.id);
+    await leerComprobante(escenario.admin, documento.id);
     const resultado = await confirmDocument(escenario.admin, {
       ...datosConfirmacion(),
       documentId: documento.id,
@@ -329,7 +494,7 @@ describe('restricciones por sucursal', () => {
   it('un operador sólo ve las compras de su sucursal en los reportes', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: documento.id });
 
     const enDevoto = await getPurchaseReport(escenario.operadorDevoto, {});
@@ -353,7 +518,7 @@ describe('permisos administrativos', () => {
   it('un operador no puede anular un comprobante', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: documento.id });
 
     await expect(
@@ -370,7 +535,7 @@ describe('permisos administrativos', () => {
   it('anular exige motivo, cancela el pago y borra los movimientos de compra', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: documento.id });
 
     await expect(voidDocument(escenario.admin, documento.id, 'error')).rejects.toThrow(/motivo/i);
@@ -397,7 +562,7 @@ describe('transacciones', () => {
   it('si algo falla al guardar, no queda nada a medio escribir', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
 
     const datos = datosConfirmacion();
     // El último renglón apunta a un producto inexistente: la escritura del
@@ -425,7 +590,7 @@ describe('pagos', () => {
   async function comprobanteConfirmado() {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
     const resultado = await confirmDocument(escenario.admin, {
       ...datosConfirmacion(),
       documentId: documento.id,
@@ -513,7 +678,7 @@ describe('historial de precios y precios de venta', () => {
     // Primera compra.
     const primero = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(primero.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, primero.id);
+    await leerComprobante(escenario.operadorDevoto, primero.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: primero.id });
 
     const longanizaId = escenario.productos['1001'];
@@ -599,7 +764,7 @@ describe('reporte de compras', () => {
   it('responde cuántos kilos se compraron de cada artículo y lo exporta a CSV', async () => {
     const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
     await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
-    await processDocument(escenario.operadorDevoto, documento.id);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
     await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: documento.id });
 
     const reporte = await getPurchaseReport(escenario.admin, {});

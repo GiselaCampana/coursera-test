@@ -69,3 +69,41 @@ IVA 21%:                        376.477,81
 Percepción IIBB 1,5%:            26.891,27
 TOTAL:                        2.196.120,52
 `.trim();
+
+/**
+ * El mismo comprobante tal como sale de Tesseract, por zonas.
+ *
+ * Incluye las confusiones típicas del OCR sobre una foto: la O por el cero, la
+ * l por el uno, la S por el cinco. Sirve para verificar que el analizador de
+ * Los Calvos las corrige en las columnas numéricas sin tocar las descripciones,
+ * y que el comprobante igual cierra.
+ */
+export const LOS_CALVOS_ENCABEZADO_OCR = `
+LOS CALVOS S.A.
+FACTURA A                  Punto de Venta: OO1O   Comp. Nro: OO212356
+Fecha de Emisión: l4/O8/2O26
+CUIT: 3O-61234567-9
+`.trim();
+
+export const LOS_CALVOS_ARTICULOS_OCR = `
+Cod   Descripción                                          Kg      Precio       Bonif %      Importe
+1001  LONGANIZA CORTA                                    l6,1O   16.O37,OO        14,OO    258.195,7O
+1002  SALAME CRESPON                                      3,4O   14.256,OO        14,OO     48.47O,4O
+1003  SALAME MILAN                                       1O,9O   14.256,OO        14,OO    155.39O,4O
+1004  BONDIOLA AL PAPEL                                   4,5O   2O.621,OO        14,OO     92.794,5O
+1005  JAMON CRUDO PARMA                                   5,OO   3O.327,OO        14,OO    151.635,OO
+1006  JAMON COCIDO                                       37,6O   12.8O3,OO        14,OO    481.392,8O
+1007  JAMON COCIDO MONT-BLANC                            37,7O   14.828,OO        14,OO    559.O15,6O
+1008  FIAMBRE DE PECHUGA DE POLLO AHUMADO Y HORNEADO      2,1O   11.223,OO        14,OO     23.568,3O
+1009  FIAMBRE COCIDO DE PATA ZUR-LINDE                   36,4O    8.63O,OO        14,OO    314.132,OO
+`.trim();
+
+export const LOS_CALVOS_RESUMEN_OCR = `
+Cantidad de renglones: 9          Peso neto: 1S3,7O kg
+Subtotal:                     2.O84.594,7O
+Descuento 14%:                  291.843,26
+Neto Gravado:                 1.792.751,44
+IVA 21%:                        376.477,81
+Percepción IIBB 1,5%:            26.891,27
+TOTAL:                        2.196.12O,52
+`.trim();

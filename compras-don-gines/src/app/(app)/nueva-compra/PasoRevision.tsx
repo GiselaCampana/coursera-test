@@ -535,7 +535,7 @@ export function PasoRevision({
         <div className="card-titulo">
           <h2>Artículos</h2>
           <span className="chico medio">
-            {articulos.length} renglón{articulos.length === 1 ? '' : 'es'}
+            {articulos.length === 1 ? '1 renglón' : `${articulos.length} renglones`}
           </span>
         </div>
 

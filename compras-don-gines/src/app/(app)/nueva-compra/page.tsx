@@ -4,6 +4,7 @@ import { requireUser, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { arTodayISO } from '@/lib/datetime';
+import { env } from '@/lib/env';
 import { NuevaCompra } from './NuevaCompra';
 
 export const metadata: Metadata = { title: 'Nueva compra' };
@@ -46,6 +47,7 @@ export default async function PaginaNuevaCompra() {
       }))}
       hoy={arTodayISO()}
       puedeForzar={hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR)}
+      maximoIntentos={env.ocrMaxAttempts}
     />
   );
 }

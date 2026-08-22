@@ -1,50 +1,15 @@
 /**
- * Contrato del servicio de lectura.
+ * Vocabulario de la lectura de comprobantes.
+ *
+ * La lectura automática corre entera en el teléfono: Tesseract en un Web Worker
+ * produce texto, y el servidor lo interpreta con los analizadores de
+ * `@/lib/ocr/parsers`. No interviene ningún servicio pago ni ninguna clave de
+ * API: el costo por comprobante es cero.
  *
  * Todo lo numérico viaja como string en formato canónico (punto decimal, sin
- * separadores de miles) para no perder precisión en el camino ni depender de
- * cómo serializa números cada proveedor. La conversión a Decimal la hace el
- * dominio, con parseCanonicalNumber.
- *
- * Ningún módulo de negocio importa un proveedor concreto: hablan con
- * OcrProvider, así que cambiar de Claude a otro servicio de visión no toca la
- * lógica contable.
+ * separadores de miles) para no perder precisión en el camino. La conversión a
+ * Decimal la hace el dominio, con parseCanonicalNumber.
  */
-
-export type OcrStage =
-  /** Todo el comprobante de una: encabezado, artículos y resumen. */
-  | 'FULL'
-  /** Sólo el encabezado: tipo, proveedor, número, fecha. */
-  | 'HEADER'
-  /** Sólo la tabla de artículos. */
-  | 'ITEMS'
-  /** Sólo el resumen del pie. */
-  | 'SUMMARY'
-  /** Relectura de la tabla de artículos ya recortada y ampliada. */
-  | 'ITEMS_FOCUSED'
-  /** Relectura del pie ya recortado y ampliado. */
-  | 'SUMMARY_FOCUSED'
-  /** Lectura por columnas, para reconstruir renglones que no cerraron. */
-  | 'ITEMS_COLUMNS';
-
-export interface OcrPage {
-  buffer: Buffer;
-  mimeType: string;
-  /** Número de página dentro del comprobante, empezando en 1. */
-  pageNumber: number;
-}
-
-export interface OcrRequest {
-  stage: OcrStage;
-  pages: OcrPage[];
-  /** Contexto que ayuda a leer mejor sin condicionar el resultado. */
-  hints?: {
-    supplierNames?: string[];
-    expectedLineCount?: number | null;
-    knownTotals?: Partial<OcrSummary>;
-    previousProblem?: string;
-  };
-}
 
 export interface OcrHeader {
   docType?: 'FACTURA' | 'REMITO' | null;
@@ -109,31 +74,21 @@ export interface OcrRegion {
   height: number;
 }
 
-export interface OcrResponse {
-  provider: string;
-  model?: string | null;
-  stage: OcrStage;
-  header?: OcrHeader | null;
-  items?: OcrItem[] | null;
-  summary?: OcrSummary | null;
-  /** Dónde está la tabla de artículos, para poder recortarla y releerla. */
-  itemsRegion?: OcrRegion | null;
-  /** Dónde está el resumen del pie. */
-  summaryRegion?: OcrRegion | null;
-  /** Texto reconocido, se guarda siempre para poder diagnosticar. */
-  text?: string | null;
-  /** 0..1 */
-  overallConfidence?: number | null;
-  /** { campo: 0..1 } */
-  fieldConfidences?: Record<string, number> | null;
-  /** Respuesta cruda del proveedor, tal cual llegó. */
-  raw?: unknown;
-  /** Lo que el lector no pudo resolver. Nunca se completa inventando. */
-  notes?: string[] | null;
-}
-
-export interface OcrProvider {
-  readonly name: string;
-  readonly model?: string;
-  read(request: OcrRequest): Promise<OcrResponse>;
+/**
+ * Punto de extensión, hoy desactivado.
+ *
+ * La aplicación no lo usa ni lo necesita: la lectura gratuita con Tesseract es
+ * el único camino que corre. Queda declarado para que, si algún día se quisiera
+ * sumar un lector asistido por IA como *ayuda opcional*, exista un contrato al
+ * que enchufarlo sin tocar la contabilidad ni los analizadores. Mientras no se
+ * implemente, nada en el código lo invoca.
+ */
+export interface LectorAsistidoOpcional {
+  readonly nombre: string;
+  /** Recibe el texto ya reconocido en el teléfono y devuelve una lectura alternativa. */
+  interpretar(texto: string): Promise<{
+    header?: OcrHeader | null;
+    items?: OcrItem[] | null;
+    summary?: OcrSummary | null;
+  }>;
 }

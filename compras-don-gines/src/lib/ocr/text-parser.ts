@@ -1,6 +1,7 @@
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
+import { CLASE_DIGITOS_OCR } from '@/lib/ocr/parsers/tipos';
 
 /**
  * Lector de respaldo sobre texto plano.
@@ -19,14 +20,70 @@ import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types
  * renglón. Lo que no se puede leer queda en null y lo levanta el validador.
  */
 
+/** Un número completo: miles con punto o espacio y, si hay decimales, una sola coma al final. */
+const NUMERO_COMPLETO = new RegExp(
+  `^[$]?\\s*-?[${CLASE_DIGITOS_OCR}]{1,3}(?:[.\\s][${CLASE_DIGITOS_OCR}]{3})*(?:,[${CLASE_DIGITOS_OCR}]+)?\\s*%?$`,
+);
+/** Una tanda que sólo tiene dígitos, separadores y espacios: candidata a ser varios importes. */
+const SOLO_NUMEROS = new RegExp(`^[$%\\s.,-]*[${CLASE_DIGITOS_OCR}][${CLASE_DIGITOS_OCR}$%\\s.,-]*$`);
+/**
+ * Pieza que continúa el número anterior: un grupo de miles de tres dígitos,
+ * con o sin la parte decimal que cierra el número ("196", "120,52").
+ */
+const GRUPO_DE_MILES = new RegExp(`^[${CLASE_DIGITOS_OCR}]{3}(?:,[${CLASE_DIGITOS_OCR}]+)?$`);
+
+/**
+ * Separa importes que quedaron pegados por un solo espacio.
+ *
+ * Cuando la foto sale apretada, Tesseract devuelve "16,10 16.037,00 14,00" con
+ * un espacio simple entre columnas, igual que separa los miles en
+ * "2 196 120,52". La diferencia está en la forma: un grupo de miles son
+ * exactamente tres dígitos y viene antes de la coma decimal; todo lo demás
+ * empieza un número nuevo.
+ */
+function separarImportesPegados(texto: string): string[] {
+  const piezas = texto.trim().split(/\s+/).filter((p) => p !== '');
+  const salida: string[] = [];
+  let actual = '';
+
+  for (const pieza of piezas) {
+    if (actual === '') {
+      actual = pieza;
+      continue;
+    }
+    // La pieza sigue al número anterior sólo si es un grupo de miles y el
+    // número que viene arrastrando todavía no llegó a los decimales.
+    const continuaMiles = GRUPO_DE_MILES.test(pieza) && !actual.includes(',') && NUMERO_COMPLETO.test(actual);
+    if (continuaMiles) {
+      actual = `${actual} ${pieza}`;
+    } else {
+      salida.push(actual);
+      actual = pieza;
+    }
+  }
+  if (actual !== '') salida.push(actual);
+  return salida;
+}
+
 /**
  * Parte una línea en columnas. El separador natural es una tanda de dos o más
  * espacios; si así no aparecen columnas suficientes, se cae a un solo espacio.
+ *
+ * Después, cada columna que quedó siendo sólo números pero no *un* número se
+ * vuelve a partir: son importes contiguos que la foto dejó pegados.
  */
 export function splitColumns(line: string): string[] {
   const wide = line.trim().split(/\s{2,}/).filter((c) => c !== '');
-  if (wide.length >= 3) return wide;
-  return line.trim().split(/\s+/).filter((c) => c !== '');
+  if (wide.length >= 3) {
+    return wide.flatMap((columna) => {
+      if (!columna.includes(' ')) return [columna];
+      if (!SOLO_NUMEROS.test(columna) || NUMERO_COMPLETO.test(columna)) return [columna];
+      return separarImportesPegados(columna);
+    });
+  }
+  // Sin columnas anchas se cae al espacio simple, pero volviendo a unir los
+  // grupos de miles: "2 196 120,52" es un solo importe, no tres.
+  return separarImportesPegados(line);
 }
 
 /** Columnas que se interpretan como número, con su posición. */

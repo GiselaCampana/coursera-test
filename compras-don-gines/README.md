@@ -74,7 +74,9 @@ tocar el código**.
 | **PostgreSQL + Prisma** | Migraciones versionadas y tipos generados. `Decimal` nativo para los importes. |
 | **decimal.js para toda la aritmética de dinero** | Con `float`, `0.1 + 0.2` no da `0.3`. En una factura de dos millones de pesos con prorrateos por renglón, eso se convierte en diferencias de centavos que hacen fallar los controles. Ningún importe pasa por `number`. |
 | **Almacenamiento detrás de una interfaz (`ObjectStorage`)** | Driver local para desarrollo o una instalación chica con disco montado, y driver S3 para producción. Cambiar de uno a otro es una variable de entorno. |
-| **OCR detrás de una interfaz (`OcrProvider`)** | El negocio nunca importa un proveedor concreto. Hoy hay un lector multimodal de Claude y un lector de texto de respaldo; sumar Tesseract o un proveedor documental es agregar una clase. |
+| **La lectura corre en el teléfono, gratis** | Tesseract, su WebAssembly y el idioma español los sirve la propia aplicación: no hay clave de API, ni servicio externo, ni costo por comprobante. La foto no sale del teléfono. |
+| **El navegador reconoce, el servidor interpreta** | El teléfono sólo produce texto. Quién es el proveedor, qué dice cada columna, cuánto da cada renglón y si el comprobante cierra lo decide el servidor: la contabilidad nunca depende de lo que mande el cliente. |
+| **Un analizador por formato de comprobante** | Cada proveedor imprime distinto. `src/lib/ocr/parsers/` tiene un analizador por formato —el de Los Calvos ya escrito— y un genérico como red de contención. Sumar un proveedor es escribir su analizador y agregarlo al registro. |
 | **Sesiones propias con scrypt y cookie httpOnly** | Sin dependencias extra ni servicios de terceros. El token va en la cookie; en la base sólo su SHA-256. |
 | **Permisos en la base, no en el código** | Los roles guardan una lista de permisos. Se crean roles nuevos desde Configuración. |
 | **El mismo código de cálculo en el navegador y en el servidor** | La pantalla de revisión recalcula en vivo con `costItems` y `validateDocument`, exactamente las mismas funciones que corre el backend al guardar. Lo que ve el usuario no puede diferir de lo que se controla. |
@@ -92,11 +94,19 @@ src/
       payments.ts         Plazos, vencimientos y estados de pago
       pricing.ts          Precios de venta
       matching.ts         Reconocimiento de productos
+    cliente/ocr/          Lectura en el navegador (corre en el teléfono)
+      tesseract.ts        Worker de Tesseract, servido localmente
+      imagen.ts           Escala de grises, contraste, ruido, inclinación, perspectiva
+      preproceso.ts       Preparación de la página y de cada recorte
+      regiones.ts         Dónde están la tabla de artículos y el pie
+      pdf.ts              Rasterización de PDF con PDF.js
+      lector.ts           Sesión de lectura por etapas
     ocr/
-      types.ts            Contrato del lector (OcrProvider)
-      anthropic.ts        Lector multimodal
-      text-parser.ts      Lector de texto de respaldo
-      pipeline.ts         Lectura por etapas y recuperación automática
+      types.ts            Vocabulario de la lectura
+      text-parser.ts      Lectura del texto reconocido, por columnas
+      parsers/            Un analizador por formato de comprobante
+        los-calvos.ts     Analizador del proveedor Los Calvos
+        generico.ts       Red de contención para formatos desconocidos
     storage/              Interfaz + drivers local y S3
     auth/                 Contraseñas, sesiones y permisos
     services/             Casos de uso (comprobantes, pagos, precios, reportes)
@@ -145,11 +155,12 @@ Todas están documentadas en [`.env.example`](.env.example). Las que importan:
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | — | Clave del lector multimodal. **Sin esta clave la aplicación no lee fotos.** |
-| `OCR_PROVIDER` | `anthropic` si hay clave, `mock` si no | `anthropic` o `mock`. |
-| `ANTHROPIC_MODEL` | `claude-opus-5` | Modelo del lector. |
-| `ANTHROPIC_EFFORT` | `high` | Profundidad de razonamiento: `low` … `max`. |
 | `OCR_MAX_ATTEMPTS` | `3` | Vueltas de relectura focalizada cuando el detalle no cierra. |
+
+**No hay ninguna clave que configurar.** El lector corre dentro del navegador con
+Tesseract, y los archivos que necesita los sirve la propia aplicación desde `public/ocr/`
+(los copia `npm run ocr:preparar`, que ya corren `npm run dev` y `npm run build`). El
+costo por comprobante es cero y la foto no sale del teléfono.
 
 ### Almacenamiento
 
@@ -201,24 +212,38 @@ al rol Administrador los permisos de administrar usuarios y roles, ni dar de baj
 
 ## Cómo funciona la lectura
 
-1. **Preparación.** La foto se endereza según sus metadatos EXIF, se convierte si viene
-   en HEIC y se comprime hasta ~1,6 MB conservando 2600 px en el lado mayor, que alcanza
-   para leer los números chicos. Se guardan las dos versiones: el original de archivo y
-   la de trabajo.
-2. **Lectura completa.** Encabezado, tabla de artículos y resumen del pie, en una pasada.
-   El lector devuelve además las coordenadas de la tabla y del pie.
-3. **Cálculo y control.** Se calculan los importes de cada renglón y se corren los
-   autocontroles contra el resumen impreso.
-4. **Recuperación automática.** Si algo no cierra, se recorta y amplía el pie y se lo
-   relee; después se recorta y amplía la tabla de artículos y se la relee, en la segunda
-   vuelta leyendo columna por columna. Al lector se le dice **qué fue lo que no cerró**.
-5. **Elección.** Se arman todas las combinaciones de lecturas disponibles y gana la más
+La lectura **corre entera en el teléfono**, con Tesseract compilado a WebAssembly y el
+idioma español, servidos por la propia aplicación. No interviene ningún servicio externo,
+no hace falta ninguna clave y no hay costo por comprobante.
+
+1. **Preparación en el navegador.** La foto se endereza según sus metadatos EXIF (con
+   `createImageBitmap(…, { imageOrientation: 'from-image' })`, que es lo que entiende
+   Safari en iPhone). Si es un PDF, PDF.js rasteriza hasta 10 páginas. Después, sobre el
+   lienzo: detección de las cuatro esquinas del papel y corrección de perspectiva,
+   escala de grises perceptual, estiramiento de contraste, filtro de mediana contra el
+   ruido, realce de bordes y enderezado por perfil de proyección.
+2. **Lectura completa.** Tesseract lee la página entera y devuelve el texto con la
+   disposición conservada, más la caja de cada línea.
+3. **Recortes.** Con esas cajas se ubican la tabla de artículos y el resumen del pie. Se
+   recortan, se amplían hasta ×4 y se binarizan con Sauvola —umbral adaptativo, que es lo
+   que salva un papel con sombra— antes de volver a leerlos por separado.
+4. **Interpretación en el servidor.** El teléfono manda sólo texto. El servidor elige el
+   analizador del proveedor —el de Los Calvos conoce el orden de sus columnas, que el
+   importe es bruto y que la unidad es el kilo—, repara las confusiones típicas del OCR
+   (`O`→0, `l`→1, `S`→5) **sólo en las columnas numéricas**, calcula cada renglón y corre
+   los autocontroles contra el resumen impreso.
+5. **Recuperación automática.** Si algo no cierra, el servidor responde *qué* no cerró y
+   el navegador vuelve a leer: página completa en modo columna, recortes ensanchados y
+   preprocesado más agresivo. Hasta `OCR_MAX_ATTEMPTS` vueltas.
+6. **Elección.** Se arman todas las combinaciones de lecturas disponibles y gana la más
    consistente: primero la que tiene menos errores, después la que queda más cerca del
    neto impreso, después la que trae más renglones. **No gana la última, gana la mejor.**
-6. **Si sigue sin cerrar** queda en rojo, con la diferencia detectada, y no se puede
+7. **Si sigue sin cerrar** queda en rojo, con la diferencia detectada, y no se puede
    guardar. Los datos parciales se conservan para diagnóstico, junto con todos los
-   intentos: proveedor, modelo, duración, confianza global, confianza por campo, texto
-   reconocido, respuesta cruda y el error de cada intento fallido.
+   intentos: estrategia, duración, confianza, inclinación corregida y texto reconocido.
+
+En ningún momento se completa un número para hacer cerrar la cuenta. Lo que no se pudo
+leer queda vacío y el semáforo lo marca.
 
 ### Números argentinos
 
@@ -259,9 +284,9 @@ Dos casos que el sistema detecta explícitamente:
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (96)
+npm test              # unitarias e integración (130)
 npm run test:unit     # sólo unitarias
-npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (39)
+npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (70)
 npm run test:all      # todo
 ```
 
@@ -275,14 +300,20 @@ además que las migraciones corran desde cero.
 **Qué cubren.** Separadores argentinos y tasas contra importes; el cálculo completo de la
 factura de Los Calvos; el prorrateo de IVA e IIBB con el ajuste en el último artículo; la
 detección de renglones faltantes, precios mal leídos, totales incorrectos y totales que
-son de un renglón; el bloqueo del guardado; la lectura por etapas y la recuperación
-automática; la conversión y compresión de imágenes y la orientación EXIF; el flujo
+son de un renglón; el bloqueo del guardado; el preprocesado de imagen —grises, contraste,
+ruido, binarización de Sauvola, umbral de Otsu, inclinación, detección de esquinas y
+perspectiva—; los analizadores por proveedor y la reparación de las confusiones del OCR
+sólo en columnas numéricas; la relectura automática y la elección del conjunto más
+consistente; la conversión y compresión de imágenes y la orientación EXIF; el flujo
 completo contra PostgreSQL (leer, controlar, confirmar, agendar, pagar); duplicados;
 restricciones por sucursal; permisos; transacciones y rollback; historial de precios y
-cálculo de precios de venta; y, desde el navegador con perfil de iPhone 13, el ingreso, la
+cálculo de precios de venta; y, desde el navegador con perfil de iPhone 13, **la lectura
+real de la factura de Los Calvos con Tesseract corriendo en la página**, el ingreso, la
 carga desde cámara y galería, las fotos repetidas, la optimización automática, el semáforo
-rojo con el guardado bloqueado, la agenda y confirmación de pagos, y que ninguna pantalla
-tenga scroll horizontal.
+rojo con el guardado bloqueado, la agenda y confirmación de pagos, que no se pida ninguna
+clave de API, que los archivos del lector los sirva la propia aplicación y que el
+navegador no salga a ningún dominio externo, y que ninguna pantalla tenga scroll
+horizontal.
 
 ### El caso de aceptación
 
@@ -309,7 +340,10 @@ la tolerancia lo absorbe sin marcar error.
 
 ## Despliegue
 
-Ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) para el detalle. En resumen:
+Ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) para el detalle, y
+[`docs/ALOJAMIENTO-COSTO-CERO.md`](docs/ALOJAMIENTO-COSTO-CERO.md) para las opciones de
+alojamiento sin costo compatibles con uso comercial —con sus límites, qué pasa al
+alcanzarlos y cuáles piden tarjeta de crédito—. En resumen:
 
 ```bash
 npm ci
@@ -371,18 +405,23 @@ tanto**: una copia que nunca se restauró no es una copia.
 - Administración de sucursales, usuarios, roles, proveedores y productos.
 - Auditoría de las operaciones sensibles.
 - Interfaz mobile first, verificada con perfil de iPhone 13.
-- Build de producción y 135 pruebas en verde.
+- Lectura automática gratuita con Tesseract en el navegador, sin clave ni costo por comprobante, verificada sobre la imagen de la factura de Los Calvos.
 
 ### Limitaciones conocidas
 
-- **El lector real necesita `ANTHROPIC_API_KEY`.** Sin ella queda el lector de texto, que
-  no interpreta fotos: devuelve una lectura vacía y el validador la bloquea en rojo, que
-  es el comportamiento correcto pero no sirve para trabajar.
-- **El caso de Los Calvos se verifica sobre la transcripción de la factura, no sobre una
-  foto.** No conté con la imagen original. Toda la cadena de cálculo, control,
-  persistencia y agenda está verificada de punta a punta; lo que falta verificar contra
-  una foto real es la calidad del reconocimiento del modelo. Es la primera prueba a hacer
-  con comprobantes de verdad.
+- **El caso de Los Calvos se verifica sobre una factura generada, no sobre la foto
+  original.** No conté con el papel. La prueba end to end dibuja la factura completa como
+  imagen, la sube y la lee con Tesseract dentro del navegador: 9 artículos, 153,70 kg y
+  $2.196.120,52. Lo que falta medir es cuánto degrada una foto de verdad —papel arrugado,
+  sombra del hombro, impresora con poca tinta—. Es la primera prueba a hacer con
+  comprobantes reales, y de ahí saldrá el ajuste fino del preprocesado.
+- **Tesseract es más lento que un lector en la nube.** Una página tarda entre veinte
+  segundos y poco más de un minuto en un iPhone reciente, y la aplicación lo muestra
+  etapa por etapa. A cambio no hay clave, no hay costo por comprobante y la foto no sale
+  del teléfono.
+- **Los archivos del lector pesan ~38 MB** (WebAssembly de Tesseract y el idioma
+  español). El navegador los descarga la primera vez y los deja en caché. En una conexión
+  móvil lenta conviene abrir la aplicación una vez con wifi.
 - **La conversión de HEIC no está ejercitada con un archivo real.** El entorno no tiene
   encoder HEVC para generar uno. Está probada la detección del formato y el mensaje de
   error en castellano cuando la conversión falla.

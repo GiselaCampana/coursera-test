@@ -3,11 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ACCEPT_ATTRIBUTE } from '@/lib/formatos';
-import {
-  formatearPeso,
-  prepararArchivo,
-  type ArchivoPreparado,
-} from '@/lib/cliente/imagenes';
+import { formatearPeso, prepararArchivo, type ArchivoPreparado } from '@/lib/cliente/imagenes';
 import { PasoRevision } from './PasoRevision';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
 
@@ -15,30 +11,35 @@ const MAX_PAGINAS = 10;
 
 type Paso = 1 | 2 | 3;
 
-interface EtapaProgreso {
-  etapa: string;
-  texto: string;
-  detalle?: string | null;
-}
-
-const ETAPAS_ESPERADAS = [
-  'PREPARANDO',
+/** Etapas que se le muestran al usuario, en orden. */
+const ETAPAS = [
+  'PREPARANDO_LECTOR',
+  'PREPARANDO_IMAGENES',
   'SUBIENDO',
   'LEYENDO_ENCABEZADO',
   'LEYENDO_ARTICULOS',
+  'LEYENDO_RESUMEN',
   'VERIFICANDO_TOTALES',
-];
+] as const;
 
 const ETAPA_TEXTO: Record<string, string> = {
-  PREPARANDO: 'Preparando las imágenes',
-  SUBIENDO: 'Subiendo el comprobante',
+  PREPARANDO_LECTOR: 'Preparando el lector',
+  PREPARANDO_IMAGENES: 'Preparando las imágenes',
+  SUBIENDO: 'Guardando el comprobante',
   LEYENDO_ENCABEZADO: 'Leyendo el encabezado',
   LEYENDO_ARTICULOS: 'Leyendo los artículos',
+  LEYENDO_RESUMEN: 'Leyendo los totales',
   VERIFICANDO_TOTALES: 'Verificando los totales',
   RELEYENDO: 'La lectura no cerró: releyendo el comprobante',
   LISTO: 'Listo',
   ERROR: 'No se pudo leer el comprobante',
 };
+
+interface EstadoProgreso {
+  etapa: string;
+  detalle?: string | null;
+  avance?: number | null;
+}
 
 interface Props {
   sucursales: Opcion[];
@@ -47,6 +48,7 @@ interface Props {
   productos: OpcionProducto[];
   hoy: string;
   puedeForzar: boolean;
+  maximoIntentos: number;
 }
 
 export function NuevaCompra({
@@ -56,6 +58,7 @@ export function NuevaCompra({
   productos,
   hoy,
   puedeForzar,
+  maximoIntentos,
 }: Props) {
   const router = useRouter();
   const [paso, setPaso] = useState<Paso>(1);
@@ -64,7 +67,7 @@ export function NuevaCompra({
   const [avisos, setAvisos] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
-  const [progreso, setProgreso] = useState<EtapaProgreso | null>(null);
+  const [progreso, setProgreso] = useState<EstadoProgreso | null>(null);
   const [etapasHechas, setEtapasHechas] = useState<string[]>([]);
   const [comprobante, setComprobante] = useState<ComprobanteRevision | null>(null);
 
@@ -80,6 +83,12 @@ export function NuevaCompra({
     };
     // Sólo al desmontar: la limpieza por archivo la hace quitarArchivo.
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const marcarEtapa = useCallback((etapa: string, detalle?: string | null, avance?: number | null) => {
+    setProgreso({ etapa, detalle: detalle ?? null, avance: avance ?? null });
+    const indice = (ETAPAS as readonly string[]).indexOf(etapa);
+    if (indice >= 0) setEtapasHechas(ETAPAS.slice(0, indice));
   }, []);
 
   const agregarArchivos = useCallback(
@@ -111,9 +120,7 @@ export function NuevaCompra({
           }
           preparados.push(preparado);
         } catch {
-          nuevosAvisos.push(
-            `No pudimos preparar "${archivo.name}". Probá sacar la foto de nuevo.`,
-          );
+          nuevosAvisos.push(`No pudimos preparar "${archivo.name}". Probá sacar la foto de nuevo.`);
         }
       }
 
@@ -141,7 +148,14 @@ export function NuevaCompra({
     });
   };
 
-  /** Sube las páginas, dispara la lectura y espera el informe de control. */
+  /**
+   * Lee el comprobante.
+   *
+   * El OCR corre acá, en el teléfono, con Tesseract: las imágenes no salen del
+   * aparato para leerse. Al servidor sólo van las fotos —para guardarlas— y el
+   * texto reconocido. Interpretar ese texto y decidir si el comprobante cierra
+   * es tarea del servidor, que puede rechazar la lectura y pedir otra vuelta.
+   */
   const leerComprobante = async () => {
     if (archivos.length === 0) {
       setError('Agregá al menos una foto o un PDF del comprobante.');
@@ -155,10 +169,31 @@ export function NuevaCompra({
     setTrabajando(true);
     setError(null);
     setEtapasHechas([]);
-    setProgreso({ etapa: 'PREPARANDO', texto: ETAPA_TEXTO.PREPARANDO });
+    marcarEtapa('PREPARANDO_LECTOR');
 
     try {
-      // 1. Abrir el comprobante en borrador.
+      // El lector pesa varios megabytes: se carga sólo cuando hace falta, no en
+      // el arranque de la aplicación.
+      const { SesionLectura } = await import('@/lib/cliente/ocr/lector');
+
+      // El nombre de la etapa ya lo pone ETAPA_TEXTO; el detalle sólo hace
+      // falta cuando el comprobante tiene más de una página.
+      const sesion = new SesionLectura((avance) => {
+        marcarEtapa(
+          avance.etapa,
+          avance.totalPaginas && avance.totalPaginas > 1
+            ? `Página ${avance.pagina} de ${avance.totalPaginas}`
+            : null,
+          avance.avance,
+        );
+      });
+
+      // 1. Preparar las imágenes: enderezar, corregir perspectiva y limpiar.
+      marcarEtapa('PREPARANDO_IMAGENES');
+      await sesion.preparar(archivos.map((a) => ({ archivo: a.archivo, nombre: a.nombre })));
+
+      // 2. Abrir el comprobante y subir las páginas para guardarlas.
+      marcarEtapa('SUBIENDO');
       const alta = await fetch('/api/comprobantes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -168,12 +203,8 @@ export function NuevaCompra({
       if (!alta.ok) throw new Error(datosAlta.error ?? 'No pudimos abrir el comprobante.');
       const documentId: string = datosAlta.id;
 
-      // 2. Subir las páginas.
-      setEtapasHechas(['PREPARANDO']);
-      setProgreso({ etapa: 'SUBIENDO', texto: ETAPA_TEXTO.SUBIENDO });
       const form = new FormData();
       for (const a of archivos) form.append('archivos', a.archivo, a.nombre);
-
       const subida = await fetch(`/api/comprobantes/${documentId}/archivos`, {
         method: 'POST',
         body: form,
@@ -188,9 +219,31 @@ export function NuevaCompra({
         );
       }
 
-      // 3. Leer, con el progreso en vivo.
-      setEtapasHechas(['PREPARANDO', 'SUBIENDO']);
-      await leerConProgreso(documentId);
+      // 3. Leer y controlar, con relectura focalizada si no cierra.
+      let intento = 1;
+      let motivo: string | undefined;
+
+      for (;;) {
+        if (intento > 1) marcarEtapa('RELEYENDO', motivo ?? null);
+        const lectura = await sesion.leer(intento, motivo);
+
+        marcarEtapa('VERIFICANDO_TOTALES');
+        const respuesta = await fetch(`/api/comprobantes/${documentId}/lectura`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lectura),
+        });
+        const control = await respuesta.json();
+        if (!respuesta.ok) throw new Error(control.error ?? 'No pudimos controlar el comprobante.');
+
+        if (Array.isArray(control.observaciones) && control.observaciones.length > 0) {
+          setAvisos((prev) => [...new Set([...prev, ...control.observaciones])]);
+        }
+
+        if (control.puedeGuardar || !control.releer || intento >= maximoIntentos) break;
+        motivo = control.releer.motivo;
+        intento += 1;
+      }
 
       // 4. Traer el comprobante ya calculado para revisarlo.
       const detalle = await fetch(`/api/comprobantes/${documentId}`);
@@ -202,63 +255,10 @@ export function NuevaCompra({
       setPaso(2);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'No pudimos leer el comprobante.');
-      setProgreso({ etapa: 'ERROR', texto: ETAPA_TEXTO.ERROR });
+      setProgreso({ etapa: 'ERROR' });
     } finally {
       setTrabajando(false);
     }
-  };
-
-  /** Consume el flujo de eventos de la lectura. */
-  const leerConProgreso = async (documentId: string) => {
-    const respuesta = await fetch(`/api/comprobantes/${documentId}/leer`, { method: 'POST' });
-    if (!respuesta.ok || !respuesta.body) {
-      throw new Error('No pudimos iniciar la lectura del comprobante.');
-    }
-
-    const lector = respuesta.body.getReader();
-    const decodificador = new TextDecoder();
-    let pendiente = '';
-    let fallo: string | null = null;
-
-    while (true) {
-      const { done, value } = await lector.read();
-      if (done) break;
-      pendiente += decodificador.decode(value, { stream: true });
-
-      const bloques = pendiente.split('\n\n');
-      pendiente = bloques.pop() ?? '';
-
-      for (const bloque of bloques) {
-        const evento = bloque.match(/^event: (.+)$/m)?.[1];
-        const datosCrudos = bloque.match(/^data: (.+)$/m)?.[1];
-        if (!evento || !datosCrudos) continue;
-
-        let datos: Record<string, unknown>;
-        try {
-          datos = JSON.parse(datosCrudos);
-        } catch {
-          continue;
-        }
-
-        if (evento === 'progreso') {
-          const etapa = String(datos.etapa);
-          setProgreso({
-            etapa,
-            texto: ETAPA_TEXTO[etapa] ?? String(datos.texto ?? ''),
-            detalle: (datos.detalle as string | null) ?? null,
-          });
-          setEtapasHechas((prev) => {
-            const indice = ETAPAS_ESPERADAS.indexOf(etapa);
-            if (indice < 0) return prev;
-            return ETAPAS_ESPERADAS.slice(0, indice);
-          });
-        } else if (evento === 'error') {
-          fallo = String(datos.mensaje ?? 'No pudimos leer el comprobante.');
-        }
-      }
-    }
-
-    if (fallo) throw new Error(fallo);
   };
 
   const volverAlPaso1 = () => {
@@ -327,8 +327,9 @@ export function NuevaCompra({
       <div className="card">
         <h2>El comprobante</h2>
         <p className="medio chico">
-          Sacale una foto a la factura o al remito, o elegí una imagen que ya tengas en el
-          teléfono. Podés cargar hasta {MAX_PAGINAS} páginas y también archivos PDF.
+          Sacale una foto a la factura o al remito, o elegí una imagen que ya tengas en el teléfono.
+          Podés cargar hasta {MAX_PAGINAS} páginas y también archivos PDF. La lectura se hace en el
+          teléfono: las fotos no se mandan a ningún servicio externo.
         </p>
 
         {/* Dos accesos bien separados, como pide el mostrador: uno abre la
@@ -382,7 +383,11 @@ export function NuevaCompra({
                 <li key={archivo.huella} className="miniatura">
                   <span className="miniatura-orden">{indice + 1}</span>
                   {archivo.esPdf ? (
-                    <div className="miniatura-pdf">PDF<br />{formatearPeso(archivo.pesoFinal)}</div>
+                    <div className="miniatura-pdf">
+                      PDF
+                      <br />
+                      {formatearPeso(archivo.pesoFinal)}
+                    </div>
                   ) : (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={archivo.vistaPrevia ?? ''} alt={`Página ${indice + 1}`} />
@@ -433,7 +438,7 @@ export function NuevaCompra({
         <div className="card">
           <h2>Leyendo el comprobante</h2>
           <div className="progreso">
-            {ETAPAS_ESPERADAS.map((etapa) => {
+            {ETAPAS.map((etapa) => {
               const hecha = etapasHechas.includes(etapa);
               const activa = progreso.etapa === etapa;
               return (
@@ -454,6 +459,10 @@ export function NuevaCompra({
             ) : null}
           </div>
           {progreso.detalle ? <p className="ayuda mb0">{progreso.detalle}</p> : null}
+          <p className="ayuda mb0">
+            La primera lectura tarda un poco más porque el teléfono descarga el lector. Después
+            queda guardado.
+          </p>
         </div>
       ) : null}
 

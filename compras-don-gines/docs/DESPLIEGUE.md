@@ -15,7 +15,6 @@ que no se puede saltear está en [Antes de exponerlo](#antes-de-exponerlo).
       nadie puede iniciar sesión. Además, sin contexto seguro Safari no da acceso a la
       cámara del iPhone.
 - [ ] Bucket S3 **privado** (o volumen persistente con el driver local).
-- [ ] `ANTHROPIC_API_KEY` cargada, si se quiere lectura automática real.
 - [ ] Migraciones aplicadas con `npx prisma migrate deploy`.
 - [ ] Seed corrido una vez y contraseña del administrador cambiada en el primer ingreso.
 - [ ] Copias de seguridad configuradas y **una restauración probada**.
@@ -39,9 +38,10 @@ La más rápida. Vercel corre la aplicación; la base y los archivos van aparte.
    ```
    DATABASE_URL, STORAGE_SIGNING_SECRET, APP_URL,
    STORAGE_DRIVER=s3, S3_BUCKET, S3_REGION,
-   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY,
-   ANTHROPIC_API_KEY
+   S3_ACCESS_KEY_ID, S3_SECRET_ACCESS_KEY
    ```
+
+   No hay ninguna clave de lectura automática que cargar: el OCR corre en el navegador.
 
 5. **Migraciones.** Poner el *Build Command* en:
 
@@ -55,9 +55,13 @@ La más rápida. Vercel corre la aplicación; la base y los archivos van aparte.
    DATABASE_URL="…" npm run db:seed
    ```
 
-**A tener en cuenta:** la lectura de un comprobante con varias páginas y relecturas puede
-pasar los 60 segundos del plan Hobby. Las rutas ya declaran `maxDuration` de 300 s, que
-requiere un plan Pro.
+**A tener en cuenta:** la lectura corre en el teléfono, así que no consume tiempo de
+función. El servidor sólo recibe el texto ya reconocido y lo interpreta, que es cuestión
+de milisegundos: entra de sobra en el límite de 60 s del plan Hobby.
+
+Los archivos del lector (`public/ocr/`, unos 38 MB) los genera `npm run build`, que ya
+corre `npm run ocr:preparar`. No se versionan: se copian desde `node_modules` en cada
+build.
 
 ---
 
@@ -149,10 +153,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
 
-        # La lectura con relecturas focalizadas puede tardar minutos.
+        # La lectura corre en el teléfono; al servidor sólo le llega texto. Aun
+        # así, subir diez fotos por una conexión móvil lenta lleva su tiempo.
         proxy_read_timeout 300s;
-        # El progreso de la lectura va por SSE: sin esto se entrega todo junto al final.
-        proxy_buffering off;
     }
 }
 ```
