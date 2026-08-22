@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ACCEPT_ATTRIBUTE } from '@/lib/formatos';
+import { AppError, toUserMessage } from '@/lib/errors';
 import { formatearPeso, prepararArchivo, type ArchivoPreparado } from '@/lib/cliente/imagenes';
 import { PasoRevision } from './PasoRevision';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -200,7 +201,7 @@ export function NuevaCompra({
         body: JSON.stringify({ branchId: sucursalId }),
       });
       const datosAlta = await alta.json();
-      if (!alta.ok) throw new Error(datosAlta.error ?? 'No pudimos abrir el comprobante.');
+      if (!alta.ok) throw new AppError(datosAlta.error ?? 'No pudimos abrir el comprobante.');
       const documentId: string = datosAlta.id;
 
       const form = new FormData();
@@ -210,7 +211,7 @@ export function NuevaCompra({
         body: form,
       });
       const datosSubida = await subida.json();
-      if (!subida.ok) throw new Error(datosSubida.error ?? 'No pudimos subir las imágenes.');
+      if (!subida.ok) throw new AppError(datosSubida.error ?? 'No pudimos subir las imágenes.');
       if (Array.isArray(datosSubida.rejected) && datosSubida.rejected.length > 0) {
         setAvisos(
           datosSubida.rejected.map(
@@ -234,7 +235,7 @@ export function NuevaCompra({
           body: JSON.stringify(lectura),
         });
         const control = await respuesta.json();
-        if (!respuesta.ok) throw new Error(control.error ?? 'No pudimos controlar el comprobante.');
+        if (!respuesta.ok) throw new AppError(control.error ?? 'No pudimos controlar el comprobante.');
 
         if (Array.isArray(control.observaciones) && control.observaciones.length > 0) {
           setAvisos((prev) => [...new Set([...prev, ...control.observaciones])]);
@@ -249,12 +250,15 @@ export function NuevaCompra({
       const detalle = await fetch(`/api/comprobantes/${documentId}`);
       const datosDetalle = await detalle.json();
       if (!detalle.ok) {
-        throw new Error(datosDetalle.error ?? 'No pudimos abrir el comprobante leído.');
+        throw new AppError(datosDetalle.error ?? 'No pudimos abrir el comprobante leído.');
       }
       setComprobante(datosDetalle as ComprobanteRevision);
       setPaso(2);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No pudimos leer el comprobante.');
+      // La lectura corre en el teléfono, así que acá caen también los errores
+      // del navegador —decodificar la imagen, quedarse sin memoria—, que vienen
+      // en inglés. Se traducen igual que los del servidor.
+      setError(toUserMessage(e));
       setProgreso({ etapa: 'ERROR' });
     } finally {
       setTrabajando(false);

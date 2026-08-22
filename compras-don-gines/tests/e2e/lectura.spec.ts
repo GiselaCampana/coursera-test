@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { facturaLosCalvosJpeg } from './factura-imagen';
 import { ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
+import { limpiarComprobantesLeidos } from './entorno';
 
 /**
  * Lectura automática de la factura de Los Calvos, con Tesseract en el navegador.
@@ -35,6 +36,13 @@ async function leer(page: Page, imagen: Buffer, nombre = 'factura-los-calvos.jpg
 }
 
 test.describe('lectura automática sin servicios pagos', () => {
+  // Estas pruebas cargan comprobantes de verdad. Si quedaran en la base, las
+  // que miran los listados y el historial contarían de más: esperan el
+  // escenario sembrado y nada más.
+  test.afterAll(async () => {
+    await limpiarComprobantesLeidos();
+  });
+
   test.beforeEach(async ({ page }) => {
     await ingresar(page, 'admin');
     await page.goto('/nueva-compra');

@@ -1,25 +1,10 @@
 import { test, expect } from '@playwright/test';
 import sharp from 'sharp';
 import { ingresar, sinScrollHorizontal, tamanoTactil } from './ayudas';
+import { facturaLosCalvosJpeg } from './factura-imagen';
 
 /** Reconocer una página con Tesseract lleva su tiempo: el margen es amplio. */
 test.describe.configure({ timeout: 300_000 });
-
-/**
- * Una foto que no es un comprobante: un papel con dos palabras sueltas.
- *
- * Se lee rápido y no tiene ni artículos ni totales, así que la lectura no puede
- * cerrar. Es justo el caso que tiene que terminar en rojo.
- */
-async function papelSinComprobante(): Promise<Buffer> {
-  const svg =
-    '<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1600">' +
-    '<rect width="1200" height="1600" fill="#f4f1ea"/>' +
-    '<text x="120" y="300" font-family="Liberation Sans, sans-serif" font-size="64">Lista del deposito</text>' +
-    '<text x="120" y="420" font-family="Liberation Sans, sans-serif" font-size="52">revisar heladera</text>' +
-    '</svg>';
-  return sharp(Buffer.from(svg)).jpeg({ quality: 90 }).toBuffer();
-}
 
 /** Una "foto" de comprobante, con peso parecido al de una del iPhone. */
 async function foto(semilla: number, ancho = 2400, alto = 1800): Promise<Buffer> {
@@ -118,11 +103,17 @@ test.describe('nueva compra desde el teléfono', () => {
   test('cuando la lectura no cierra, avisa en castellano y bloquea el guardado', async ({
     page,
   }) => {
-    // La foto no es un comprobante: no hay artículos ni totales que puedan
-    // cerrar. Es exactamente el caso que tiene que quedar en rojo y bloqueado.
+    // El comprobante se lee bien, pero el total impreso no coincide con el
+    // detalle: es el caso que tiene que quedar en rojo y con el guardado
+    // bloqueado. Una foto ilegible no serviría para esto, porque ahí la
+    // aplicación avisa antes de llegar a la revisión.
     const galeria = page.locator('input[type="file"]').nth(1);
     await galeria.setInputFiles([
-      { name: 'factura.jpg', mimeType: 'image/jpeg', buffer: await papelSinComprobante() },
+      {
+        name: 'factura.jpg',
+        mimeType: 'image/jpeg',
+        buffer: await facturaLosCalvosJpeg({ totalAlterado: true }),
+      },
     ]);
 
     await page.getByRole('button', { name: 'Leer el comprobante' }).click();

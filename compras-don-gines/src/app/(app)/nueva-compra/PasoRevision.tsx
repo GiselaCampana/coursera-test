@@ -5,6 +5,7 @@ import { costItems, type RawItem } from '@/lib/domain/costing';
 import { validateDocument } from '@/lib/domain/validation';
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL } from '@/lib/domain/payments';
 import { formatARS, formatQty } from '@/lib/money';
+import { AppError, toUserMessage } from '@/lib/errors';
 import { ListaControles, Semaforo } from '@/components/Estado';
 import { Pasos } from './NuevaCompra';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -302,10 +303,10 @@ export function PasoRevision({
         body: JSON.stringify(cuerpo),
       });
       const datos = await respuesta.json();
-      if (!respuesta.ok) throw new Error(datos.error ?? 'No pudimos guardar el comprobante.');
+      if (!respuesta.ok) throw new AppError(datos.error ?? 'No pudimos guardar el comprobante.');
       onGuardado(datos.documentId);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No pudimos guardar el comprobante.');
+      setError(toUserMessage(e));
     } finally {
       setGuardando(false);
     }

@@ -106,7 +106,10 @@ function texto(contenido: string, o: OpcionesTexto): string {
  * más chica y con menos contraste, que es lo que pasa cuando la foto sale
  * movida.
  */
-export function svgFactura(deterioro: 'nitido' | 'borroso' = 'nitido'): string {
+export function svgFactura(
+  deterioro: 'nitido' | 'borroso' = 'nitido',
+  totalAlterado = false,
+): string {
   const partes: string[] = [];
   const chico = deterioro === 'borroso';
 
@@ -177,7 +180,17 @@ export function svgFactura(deterioro: 'nitido' | 'borroso' = 'nitido'): string {
 
   y += 14;
   partes.push(texto('TOTAL:', { x: 1300, y, tamano: 44, peso: 'bold', anclaje: 'end' }));
-  partes.push(texto('2.196.120,52', { x: DERECHA, y, tamano: 44, peso: 'bold', anclaje: 'end' }));
+  // Con el total alterado el comprobante se lee perfecto pero no cierra: los
+  // renglones y el pie no coinciden con el total impreso.
+  partes.push(
+    texto(totalAlterado ? '2.296.120,52' : '2.196.120,52', {
+      x: DERECHA,
+      y,
+      tamano: 44,
+      peso: 'bold',
+      anclaje: 'end',
+    }),
+  );
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${ANCHO}" height="${ALTO}">${partes.join('')}</svg>`;
 }
@@ -193,9 +206,14 @@ export async function facturaLosCalvosJpeg(
     deterioro?: 'nitido' | 'borroso';
     desenfoque?: number;
     rotacionExif?: 1 | 6;
+    /** Imprime un total que no coincide con el detalle. */
+    totalAlterado?: boolean;
   } = {},
 ): Promise<Buffer> {
-  let imagen = sharp(Buffer.from(svgFactura(opciones.deterioro ?? 'nitido')), { density: 96 });
+  let imagen = sharp(
+    Buffer.from(svgFactura(opciones.deterioro ?? 'nitido', opciones.totalAlterado ?? false)),
+    { density: 96 },
+  );
 
   if (opciones.desenfoque) imagen = imagen.blur(opciones.desenfoque);
 

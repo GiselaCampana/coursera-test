@@ -103,6 +103,18 @@ const TRANSLATIONS: { match: RegExp; message: string }[] = [
     match: /heic|heif/i,
     message: 'No pudimos convertir la foto HEIC del iPhone. Probá sacarla de nuevo.',
   },
+  {
+    // El navegador no pudo decodificar el archivo: no era una imagen, o vino
+    // cortado. Pasa con un .zip renombrado y con descargas interrumpidas.
+    match: /could not be decoded|source image|decoding|not a valid image|createImageBitmap/i,
+    message:
+      'No pudimos abrir ese archivo como imagen. Aceptamos fotos JPG, PNG, WEBP o HEIC, y PDF.',
+  },
+  {
+    match: /out of memory|allocation failed|maximum call stack/i,
+    message:
+      'La foto es demasiado grande para procesarla en el teléfono. Probá sacarla de nuevo con menos resolución.',
+  },
 ];
 
 export function toUserMessage(error: unknown): string {
