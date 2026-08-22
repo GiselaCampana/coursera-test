@@ -1,0 +1,71 @@
+# Despliegue en Render, plan gratuito.
+#
+# Este archivo describe el servicio; no crea ninguna cuenta ni contrata nada.
+# El plan `free` es el único que se declara: Render no sube de plan solo, y sin
+# tarjeta cargada no puede generar cargos.
+#
+# La base de datos y el almacenamiento NO están acá a propósito: van en el
+# proyecto gratuito de Supabase, y sus credenciales se cargan a mano en el panel
+# de Render. Declarar una base de Render habría creado un PostgreSQL que se
+# borra a los 30 días.
+services:
+  - type: web
+    name: compras-don-gines
+    runtime: node
+    plan: free
+    region: oregon
+    rootDir: compras-don-gines
+    # `migrate deploy` aplica las migraciones pendientes sin borrar nada, y va
+    # antes del build para que el código nuevo encuentre el esquema nuevo.
+    # El build copia además los archivos del lector a public/ocr/.
+    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    startCommand: npm run start
+    healthCheckPath: /ingresar
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: '20.11.0'
+
+      # --- Supabase: base, almacenamiento y contraseñas --------------------
+      # Se cargan a mano en el panel de Render (Environment). Ninguna va acá:
+      # este archivo se versiona y las credenciales no se versionan nunca.
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+
+      - key: STORAGE_DRIVER
+        value: supabase
+      - key: SUPABASE_BUCKET
+        value: comprobantes
+      # 1 GB, que es lo que da el plan gratuito de Supabase. La aplicación avisa
+      # al 80 % y bloquea al 95 %, antes de que el proveedor rechace nada.
+      - key: STORAGE_LIMIT_BYTES
+        value: '1073741824'
+
+      # --- Autenticación ---------------------------------------------------
+      # Se deja en `local` hasta confirmar que el ingreso por Supabase funciona
+      # con un usuario real. Cambiarlo a `supabase` es una edición en el panel.
+      - key: AUTH_PROVIDER
+        value: local
+
+      # --- Seguridad -------------------------------------------------------
+      # generateValue crea un secreto al azar la primera vez y lo conserva.
+      - key: STORAGE_SIGNING_SECRET
+        generateValue: true
+      - key: APP_URL
+        sync: false
+
+      # --- Lectura de comprobantes ----------------------------------------
+      # Sin claves: el OCR corre en el teléfono con Tesseract.
+      - key: OCR_MAX_ATTEMPTS
+        value: '3'
+      - key: MAX_FILES_PER_DOCUMENT
+        value: '10'
+      - key: MAX_UPLOAD_BYTES
+        value: '26214400'

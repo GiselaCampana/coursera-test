@@ -107,7 +107,14 @@ src/
       parsers/            Un analizador por formato de comprobante
         los-calvos.ts     Analizador del proveedor Los Calvos
         generico.ts       Red de contención para formatos desconocidos
-    storage/              Interfaz + drivers local y S3
+    storage/              Interfaz + drivers local, S3 y Supabase
+    services/
+      almacenamiento.ts   Espacio usado, aviso al 80 %, bloqueo al 95 %
+      archivado.ts        Exportación en ZIP y archivado de imágenes viejas
+    auth/
+      proveedor.ts        Quién verifica la contraseña: local o Supabase Auth
+    cliente/
+      red.ts              Pedidos tolerantes al arranque en frío de Render
     auth/                 Contraseñas, sesiones y permisos
     services/             Casos de uso (comprobantes, pagos, precios, reportes)
   app/                    Pantallas y rutas de API
@@ -156,6 +163,18 @@ Todas están documentadas en [`.env.example`](.env.example). Las que importan:
 | Variable | Por defecto | Para qué |
 |---|---|---|
 | `OCR_MAX_ATTEMPTS` | `3` | Vueltas de relectura focalizada cuando el detalle no cierra. |
+
+### Supabase
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | — | Proyecto de Supabase. Obligatorias con `STORAGE_DRIVER=supabase` o `AUTH_PROVIDER=supabase`. |
+| `SUPABASE_BUCKET` | `comprobantes` | Bucket **privado** de las imágenes. |
+| `AUTH_PROVIDER` | `local` | `local` (hash scrypt propio) o `supabase` (Supabase Auth verifica la contraseña). |
+| `STORAGE_LIMIT_BYTES` | `1073741824` (1 GB) | Cuánto espacio se permite ocupar. Avisa al 80 % y bloquea al 95 %. |
+
+> `SUPABASE_SERVICE_ROLE_KEY` saltea todas las políticas de seguridad de Supabase. Va
+> sólo en el servidor: nunca en una variable `NEXT_PUBLIC_`, nunca en el repositorio.
 
 **No hay ninguna clave que configurar.** El lector corre dentro del navegador con
 Tesseract, y los archivos que necesita los sirve la propia aplicación desde `public/ocr/`
@@ -340,10 +359,14 @@ la tolerancia lo absorbe sin marcar error.
 
 ## Despliegue
 
-Ver [`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md) para el detalle, y
-[`docs/ALOJAMIENTO-COSTO-CERO.md`](docs/ALOJAMIENTO-COSTO-CERO.md) para las opciones de
-alojamiento sin costo compatibles con uso comercial —con sus límites, qué pasa al
-alcanzarlos y cuáles piden tarjeta de crédito—. En resumen:
+**La puesta en marcha elegida es Render Free + Supabase Free**, sin tarjeta de crédito y
+sin ningún servicio pago: ver [`docs/DESPLIEGUE-RENDER-SUPABASE.md`](docs/DESPLIEGUE-RENDER-SUPABASE.md),
+que incluye los límites gratuitos, qué pasa al alcanzarlos y las copias de seguridad.
+
+Para otras formas de desplegar —servidor propio, Docker, S3— ver
+[`docs/DESPLIEGUE.md`](docs/DESPLIEGUE.md); y para cómo se comparó cada opción de
+alojamiento gratuito, [`docs/ALOJAMIENTO-COSTO-CERO.md`](docs/ALOJAMIENTO-COSTO-CERO.md).
+En resumen:
 
 ```bash
 npm ci
@@ -406,8 +429,28 @@ tanto**: una copia que nunca se restauró no es una copia.
 - Auditoría de las operaciones sensibles.
 - Interfaz mobile first, verificada con perfil de iPhone 13.
 - Lectura automática gratuita con Tesseract en el navegador, sin clave ni costo por comprobante, verificada sobre la imagen de la factura de Los Calvos.
+- Imágenes comprimidas a ~500 kB, en una sola versión, con indicador de espacio, aviso al 80 %, bloqueo preventivo al 95 % y archivado en ZIP que conserva todos los datos.
+- Tolerancia al arranque en frío de Render: reintentos automáticos y aviso en castellano.
+- Pantalla de diagnóstico de lectura, que no guarda nada.
 
 ### Limitaciones conocidas
+
+- **Supabase Auth está implementado pero no verificado.** No existía un proyecto de
+  Supabase contra el cual probarlo. Por eso `AUTH_PROVIDER` viene en `local`, que sí está
+  probado, y pasar a `supabase` es cambiar una variable —y volver atrás, también—. El
+  primer ingreso con el proveedor nuevo es la prueba. Lo mismo vale para el driver de
+  Supabase Storage: el código está, las pruebas corren contra el driver local.
+- **El plan gratuito de Supabase pausa el proyecto a los 7 días sin actividad.** Si la
+  fiambrería cierra dos semanas, al volver hay que reactivarlo a mano desde el panel. Los
+  datos no se pierden, pero el sistema no arranca solo.
+- **El aviso de arranque en frío no alcanza a la primerísima visita.** Mientras Render
+  levanta el contenedor, la aplicación todavía no corre, así que no hay nada nuestro que
+  pueda dibujar un mensaje: el navegador muestra su propio indicador de carga. El aviso sí
+  aparece cuando la aplicación ya está abierta y el servidor se durmió entre dos acciones,
+  que es el caso frecuente.
+- **El plan gratuito de Supabase no hace copias de seguridad automáticas.** Es lo único de
+  toda la configuración que puede terminar en una pérdida irrecuperable. Ver el
+  procedimiento mensual en `docs/DESPLIEGUE-RENDER-SUPABASE.md`.
 
 - **El caso de Los Calvos se verifica sobre una factura generada, no sobre la foto
   original.** No conté con el papel. La prueba end to end dibuja la factura completa como
