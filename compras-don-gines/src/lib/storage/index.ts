@@ -72,7 +72,10 @@ let cached: ObjectStorage | null = null;
 
 export async function getStorage(): Promise<ObjectStorage> {
   if (cached) return cached;
-  if (env.storageDriver === 's3') {
+  if (env.storageDriver === 'supabase') {
+    const { SupabaseStorage } = await import('@/lib/storage/supabase');
+    cached = new SupabaseStorage();
+  } else if (env.storageDriver === 's3') {
     const { S3Storage } = await import('@/lib/storage/s3');
     cached = new S3Storage();
   } else {
@@ -91,7 +94,7 @@ export function resetStorageCache(): void {
 export function buildDocumentKey(opts: {
   documentId: string;
   pageOrder: number;
-  variant: 'original' | 'work';
+  variant: 'work';
   extension: string;
 }): string {
   const ext = opts.extension.replace(/^\./, '').toLowerCase();

@@ -14,6 +14,7 @@ import { normalizeUpload } from '@/lib/images';
 import { env } from '@/lib/env';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
+import { asegurarEspacio } from '@/lib/services/almacenamiento';
 
 // ---------------------------------------------------------------------------
 // Alta y archivos
@@ -112,6 +113,19 @@ export async function addFiles(
       result.duplicates.push(label);
       continue;
     }
+
+    // Se comprueba el espacio con la imagen ya optimizada, que es la que se va
+    // a guardar: preguntar antes de comprimir daría un número que no es el real.
+    try {
+      await asegurarEspacio(normalized.work.length);
+    } catch (error) {
+      result.rejected.push({
+        filename: label,
+        reason: error instanceof AppError ? error.message : 'No hay espacio para guardar la imagen.',
+      });
+      continue;
+    }
+
     seen.add(normalized.sha256);
 
     const pageOrder = nextOrder++;
@@ -121,29 +135,22 @@ export async function addFiles(
       variant: 'work',
       extension: normalized.workExtension,
     });
-    const originalKey = buildDocumentKey({
-      documentId,
-      pageOrder,
-      variant: 'original',
-      extension: normalized.originalExtension,
-    });
 
+    // Se guarda una sola versión, la optimizada. El original no se sube: en un
+    // plan gratuito de 1 GB, guardar dos copias de cada foto es gastar el
+    // espacio al doble de velocidad sin ganar nada, porque el OCR ya corrió en
+    // el teléfono sobre la foto original y lo que queda es el respaldo.
     await storage.put(workKey, normalized.work, normalized.workMime);
-    // El original sólo se guarda aparte si de verdad es otro archivo.
-    if (originalKey !== workKey) {
-      await storage.put(originalKey, normalized.original, normalized.originalMime);
-    }
 
     const created = await prisma.documentFile.create({
       data: {
         documentId,
         pageOrder,
         storageKey: workKey,
-        originalKey: originalKey === workKey ? null : originalKey,
         mimeType: normalized.workMime,
         originalMimeType: normalized.originalMime,
         sizeBytes: normalized.work.length,
-        originalSizeBytes: normalized.original.length,
+        originalSizeBytes: normalized.originalSizeBytes,
         sha256: normalized.sha256,
         width: normalized.width,
         height: normalized.height,
@@ -173,7 +180,6 @@ export async function removeFile(user: AuthUser, documentId: string, fileId: str
 
   const storage = await getStorage();
   await storage.delete(file.storageKey);
-  if (file.originalKey) await storage.delete(file.originalKey);
   await prisma.documentFile.delete({ where: { id: file.id } });
   await renumberPages(documentId);
 }

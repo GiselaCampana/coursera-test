@@ -32,7 +32,7 @@ export async function GET(
 
     const user = await requireUser();
     const file = await prisma.documentFile.findFirst({
-      where: { OR: [{ storageKey: key }, { originalKey: key }] },
+      where: { storageKey: key },
       include: { document: { select: { branchId: true } } },
     });
     if (!file) throw new NotFoundError('No encontramos ese archivo.');
@@ -40,7 +40,7 @@ export async function GET(
 
     const storage = await getStorage();
     const body = await storage.get(key);
-    const mime = key === file.originalKey ? (file.originalMimeType ?? file.mimeType) : file.mimeType;
+    const mime = file.mimeType;
 
     return new NextResponse(new Uint8Array(body), {
       headers: {

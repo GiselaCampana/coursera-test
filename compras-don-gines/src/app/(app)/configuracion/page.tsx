@@ -4,6 +4,7 @@ import { redirect } from 'next/navigation';
 import { requireUser, hasAnyPermission, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
+import { estadoAlmacenamiento, formatearBytes } from '@/lib/services/almacenamiento';
 
 export const metadata: Metadata = { title: 'Configuración' };
 export const dynamic = 'force-dynamic';
@@ -17,15 +18,17 @@ export default async function PaginaConfiguracion() {
     PERMISSIONS.PRODUCTOS_GESTIONAR,
     PERMISSIONS.ROLES_GESTIONAR,
     PERMISSIONS.AUDITORIA_VER,
+    PERMISSIONS.ALMACENAMIENTO_GESTIONAR,
   ]);
   if (!puedeEntrar) redirect('/');
 
-  const [usuarios, sucursales, proveedores, productos, roles] = await Promise.all([
+  const [usuarios, sucursales, proveedores, productos, roles, almacenamiento] = await Promise.all([
     prisma.user.count(),
     prisma.branch.count(),
     prisma.supplier.count(),
     prisma.product.count(),
     prisma.role.count(),
+    estadoAlmacenamiento(),
   ]);
 
   const secciones = [
@@ -60,6 +63,14 @@ export default async function PaginaConfiguracion() {
       visible: hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR),
     },
     {
+      href: '/configuracion/almacenamiento',
+      titulo: 'Almacenamiento',
+      texto:
+        `${formatearBytes(almacenamiento.usadoBytes)} de ${formatearBytes(almacenamiento.limiteBytes)} ` +
+        `(${Math.round(almacenamiento.proporcion * 100)} %). Archivar comprobantes viejos y liberar espacio.`,
+      visible: hasPermission(user, PERMISSIONS.ALMACENAMIENTO_GESTIONAR),
+    },
+    {
       href: '/configuracion/auditoria',
       titulo: 'Auditoría',
       texto: 'Historial de las operaciones sensibles.',
@@ -70,6 +81,15 @@ export default async function PaginaConfiguracion() {
   return (
     <>
       <h1>Configuración</h1>
+
+      {almacenamiento.mensaje && hasPermission(user, PERMISSIONS.ALMACENAMIENTO_GESTIONAR) ? (
+        <p
+          className={`mensaje ${almacenamiento.bloqueado ? 'mensaje-error' : 'mensaje-aviso'}`}
+          role={almacenamiento.bloqueado ? 'alert' : 'status'}
+        >
+          {almacenamiento.mensaje}
+        </p>
+      ) : null}
       <ul className="lista">
         {secciones.map((seccion) => (
           <li key={seccion.href}>

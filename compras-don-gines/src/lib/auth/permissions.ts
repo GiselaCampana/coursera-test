@@ -23,6 +23,7 @@ export const PERMISSIONS = {
   PRECIOS_GESTIONAR: 'precios.gestionar',
   REPORTES_VER: 'reportes.ver',
   AUDITORIA_VER: 'auditoria.ver',
+  ALMACENAMIENTO_GESTIONAR: 'almacenamiento.gestionar',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -46,6 +47,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'precios.gestionar': 'Definir márgenes y aprobar precios de venta',
   'reportes.ver': 'Ver reportes de compras',
   'auditoria.ver': 'Consultar la auditoría',
+  'almacenamiento.gestionar': 'Archivar comprobantes y liberar espacio',
 };
 
 /** Permisos de los dos roles iniciales. Se siembran; después se editan en la app. */

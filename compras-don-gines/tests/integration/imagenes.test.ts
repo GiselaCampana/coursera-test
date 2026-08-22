@@ -3,6 +3,7 @@ import sharp from 'sharp';
 import { AppError } from '@/lib/errors';
 import {
   WORK_MAX_DIMENSION,
+  WORK_MIN_DIMENSION,
   WORK_TARGET_BYTES,
   cropAndEnhance,
   detectMimeType,
@@ -74,15 +75,26 @@ describe('preparación de las fotos', () => {
     expect(resultado.compressed).toBe(true);
     expect(resultado.work.length).toBeLessThan(grande.length);
     expect(resultado.work.length).toBeLessThanOrEqual(WORK_TARGET_BYTES);
-    // Y conserva el original tal cual para el archivo.
-    expect(resultado.original.length).toBe(grande.length);
+    expect(resultado.overTarget).toBe(false);
+    // Del original se recuerda el dato, no el archivo: en un plan de 1 GB
+    // guardar dos copias de cada foto es gastar el espacio al doble.
+    expect(resultado.originalSizeBytes).toBe(grande.length);
     expect(resultado.originalMime).toBe('image/jpeg');
+    expect(resultado).not.toHaveProperty('original');
+  });
+
+  it('deja los 500 kB por comprobante que hacen que el plan gratuito alcance', async () => {
+    const resultado = await normalizeUpload(grande, 'image/jpeg');
+    expect(resultado.work.length).toBeLessThanOrEqual(500_000);
   });
 
   it('conserva resolución suficiente para leer los números chicos', async () => {
     const resultado = await normalizeUpload(grande, 'image/jpeg');
     const mayor = Math.max(resultado.width ?? 0, resultado.height ?? 0);
-    expect(mayor).toBe(WORK_MAX_DIMENSION);
+    // Se admite bajar hasta el mínimo, pero nunca por debajo: sin esos píxeles
+    // el respaldo no sirve para cotejar un importe contra el papel.
+    expect(mayor).toBeGreaterThanOrEqual(WORK_MIN_DIMENSION);
+    expect(mayor).toBeLessThanOrEqual(WORK_MAX_DIMENSION);
   });
 
   it('endereza la foto según la orientación EXIF', async () => {

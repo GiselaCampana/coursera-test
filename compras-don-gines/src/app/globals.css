@@ -1231,3 +1231,34 @@ tbody tr:last-child td {
     display: none;
   }
 }
+
+/* --- Barra de uso del almacenamiento ------------------------------------ */
+/* El color no es la única señal: al lado siempre va el porcentaje escrito,
+   porque un semáforo de color solo no le sirve a quien no distingue rojo de
+   verde, ni se lee bien con el sol de frente en la vereda. */
+.barra-uso {
+  height: 14px;
+  border-radius: 999px;
+  background: var(--crema-hundida);
+  overflow: hidden;
+  margin: 0 0 0.5rem;
+}
+
+.barra-uso > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 240ms ease;
+}
+
+.barra-uso-bien > span {
+  background: var(--ok);
+}
+
+.barra-uso-aviso > span {
+  background: var(--aviso);
+}
+
+.barra-uso-grave > span {
+  background: var(--error);
+}

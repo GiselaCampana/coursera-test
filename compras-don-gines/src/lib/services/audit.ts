@@ -31,6 +31,7 @@ export const AUDIT_ACTIONS = {
   SUPPLIER_UPDATED: 'proveedor.modificado',
   PRODUCT_UPDATED: 'producto.modificado',
   PRODUCT_ALIAS_LEARNED: 'producto.alias_aprendido',
+  IMAGENES_ARCHIVADAS: 'imagenes.archivadas',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -53,6 +54,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',
   'producto.modificado': 'Producto modificado',
+  'imagenes.archivadas': 'Imágenes de comprobantes archivadas',
   'producto.alias_aprendido': 'Alias de producto aprendido',
 };
 

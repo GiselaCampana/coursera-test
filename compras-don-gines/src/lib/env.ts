@@ -21,7 +21,7 @@ function optional(name: string, fallback: string): string {
   return value && value.trim() !== '' ? value : fallback;
 }
 
-export type StorageDriver = 'local' | 's3';
+export type StorageDriver = 'local' | 's3' | 'supabase';
 
 export const env = {
   get databaseUrl(): string {
@@ -43,7 +43,9 @@ export const env = {
   // --- Storage ---
   get storageDriver(): StorageDriver {
     const v = optional('STORAGE_DRIVER', 'local');
-    return v === 's3' ? 's3' : 'local';
+    if (v === 's3') return 's3';
+    if (v === 'supabase') return 'supabase';
+    return 'local';
   },
 
   get storageLocalDir(): string {
@@ -70,6 +72,38 @@ export const env = {
 
   get signedUrlTtlSeconds(): number {
     return Number(optional('SIGNED_URL_TTL_SECONDS', '900'));
+  },
+
+  /**
+   * Supabase: base, almacenamiento y autenticación en un solo proyecto.
+   *
+   * `serviceRoleKey` no puede llegar nunca al navegador: saltea todas las
+   * políticas de seguridad. Por eso vive sólo acá, del lado del servidor, y
+   * nunca en una variable NEXT_PUBLIC_.
+   */
+  get supabase(): {
+    url: string;
+    anonKey: string;
+    serviceRoleKey: string;
+    bucket: string;
+  } {
+    return {
+      url: required('SUPABASE_URL'),
+      anonKey: required('SUPABASE_ANON_KEY'),
+      serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+      bucket: optional('SUPABASE_BUCKET', 'comprobantes'),
+    };
+  },
+
+  /**
+   * Cuánto espacio se permite ocupar, en bytes.
+   *
+   * Es una decisión nuestra, no un dato del proveedor: por eso no vive junto a
+   * las credenciales de Supabase y se puede leer sin tenerlas. Por defecto, el
+   * gigabyte del plan gratuito.
+   */
+  get storageLimitBytes(): number {
+    return Number(optional('STORAGE_LIMIT_BYTES', String(1024 * 1024 * 1024)));
   },
 
   get s3(): {
@@ -119,5 +153,10 @@ export function assertProductionEnv(): void {
     required('S3_BUCKET');
     required('S3_ACCESS_KEY_ID');
     required('S3_SECRET_ACCESS_KEY');
+  }
+  if (env.storageDriver === 'supabase') {
+    required('SUPABASE_URL');
+    required('SUPABASE_ANON_KEY');
+    required('SUPABASE_SERVICE_ROLE_KEY');
   }
 }

@@ -13,23 +13,49 @@ import { ACCEPTED_MIME } from '@/lib/formatos';
  * resolución que hace falta para leer los números chicos de la factura.
  */
 
-/** Lado mayor de la imagen de trabajo. Alcanza para leer texto de 6 pt. */
-export const WORK_MAX_DIMENSION = 2600;
-/** Peso objetivo de la imagen de trabajo. */
-export const WORK_TARGET_BYTES = 1_600_000;
-const JPEG_QUALITY_STEPS = [88, 82, 76, 70, 62];
+/**
+ * Lado mayor de la imagen que se guarda.
+ *
+ * El OCR ya no depende de este archivo: la lectura corre en el teléfono, sobre
+ * la foto que el usuario eligió, antes de subir nada. Lo que se guarda es el
+ * respaldo del comprobante, para que alguien pueda abrirlo meses después y
+ * cotejarlo contra lo que se cargó. Así que la resolución que hace falta es la
+ * que necesita un ojo humano, no Tesseract.
+ *
+ * Aun así no se baja de 2000 px: a menos que eso, los números chicos de una
+ * factura A4 dejan de distinguirse en pantalla y el respaldo no sirve para
+ * discutirle nada a un proveedor.
+ */
+export const WORK_MAX_DIMENSION = 2200;
+/** Lado mínimo al que se puede llegar comprimiendo antes de resignarse. */
+export const WORK_MIN_DIMENSION = 2000;
+/**
+ * Peso objetivo del archivo guardado.
+ *
+ * El plan gratuito de Supabase da 1 GB. A 500 KB por comprobante eso son unos
+ * dos mil comprobantes, más de un año de las tres sucursales juntas. Es el
+ * número que hace que el almacenamiento gratuito alcance sin recortar nada
+ * importante.
+ */
+export const WORK_TARGET_BYTES = 500_000;
+/**
+ * Calidades que se prueban, de mejor a peor. El piso es 55: por debajo la
+ * trama del JPEG se come los decimales de los importes y el respaldo deja de
+ * ser legible, que es justamente lo que no se quiere.
+ */
+const JPEG_QUALITY_STEPS = [86, 80, 74, 68, 62, 55];
 
 export { ACCEPTED_IMAGE_MIME, ACCEPTED_MIME, ACCEPT_ATTRIBUTE } from '@/lib/formatos';
 
 export interface NormalizedUpload {
-  /** Versión sobre la que se hace OCR y que se muestra en pantalla. */
+  /** La única versión que se guarda: optimizada. */
   work: Buffer;
   workMime: string;
   workExtension: string;
-  /** Archivo tal como llegó, que se guarda como copia de archivo. */
-  original: Buffer;
+  /** Tipo del archivo tal como llegó, para poder explicar qué se recibió. */
   originalMime: string;
-  originalExtension: string;
+  /** Cuánto pesaba al llegar. No se guarda el archivo, sólo el dato. */
+  originalSizeBytes: number;
   sha256: string;
   width: number | null;
   height: number | null;
@@ -38,6 +64,10 @@ export interface NormalizedUpload {
   converted: boolean;
   /** true si hubo que bajar resolución o calidad. */
   compressed: boolean;
+  /** Calidad JPEG con la que quedó, para la pantalla de diagnóstico. */
+  quality: number | null;
+  /** true si ni siquiera con la calidad mínima se llegó al objetivo. */
+  overTarget: boolean;
 }
 
 export function sha256(buffer: Buffer): string {
@@ -149,20 +179,22 @@ export async function normalizeUpload(
   const hash = sha256(input);
 
   if (originalMime === 'application/pdf') {
-    // El PDF se manda tal cual al lector, que lo interpreta nativamente.
+    // Un PDF de remito ya viene liviano y comprimirlo lo arruinaría: se guarda
+    // tal cual. El lector lo rasteriza en el teléfono, no acá.
     return {
       work: input,
       workMime: 'application/pdf',
       workExtension: 'pdf',
-      original: input,
       originalMime,
-      originalExtension: 'pdf',
+      originalSizeBytes: input.length,
       sha256: hash,
       width: null,
       height: null,
       isPdf: true,
       converted: false,
       compressed: false,
+      quality: null,
+      overTarget: input.length > WORK_TARGET_BYTES,
     };
   }
 
@@ -192,29 +224,50 @@ export async function normalizeUpload(
   }
 
   const longest = Math.max(metadata.width ?? 0, metadata.height ?? 0);
-  const needsResize = longest > WORK_MAX_DIMENSION;
 
+  /*
+   * Se busca el archivo más liviano que siga siendo legible.
+   *
+   * Primero se baja calidad manteniendo la resolución, porque perder nitidez
+   * de trama molesta menos que perder píxeles. Recién si con la calidad mínima
+   * todavía no se llega al objetivo se achica la imagen, y nunca por debajo de
+   * WORK_MIN_DIMENSION.
+   *
+   * Si aun así no entra —una foto de un papel muy arrugado, con mucho grano—
+   * se guarda igual, la más chica que se consiguió, y se avisa con overTarget.
+   * Guardar un comprobante un poco más pesado es mejor que no guardarlo.
+   */
   let work: Buffer | null = null;
   let usedQuality = JPEG_QUALITY_STEPS[0];
-  for (const quality of JPEG_QUALITY_STEPS) {
-    const candidate = await sharp(decoded, { failOn: 'none' })
-      // .rotate() sin argumentos aplica la orientación EXIF: sin esto las
-      // fotos verticales del iPhone se leen acostadas.
-      .rotate()
-      .resize(
-        needsResize
-          ? { width: WORK_MAX_DIMENSION, height: WORK_MAX_DIMENSION, fit: 'inside', withoutEnlargement: true }
-          : undefined,
-      )
-      .jpeg({ quality, mozjpeg: true, chromaSubsampling: '4:4:4' })
-      .toBuffer();
-    work = candidate;
-    usedQuality = quality;
-    if (candidate.length <= WORK_TARGET_BYTES) break;
+  let usedDimension = Math.min(longest || WORK_MAX_DIMENSION, WORK_MAX_DIMENSION);
+
+  for (const dimension of [WORK_MAX_DIMENSION, WORK_MIN_DIMENSION]) {
+    const needsResize = longest > dimension;
+    for (const quality of JPEG_QUALITY_STEPS) {
+      const candidate = await sharp(decoded, { failOn: 'none' })
+        // .rotate() sin argumentos aplica la orientación EXIF: sin esto las
+        // fotos verticales del iPhone quedan acostadas.
+        .rotate()
+        .resize(
+          needsResize
+            ? { width: dimension, height: dimension, fit: 'inside', withoutEnlargement: true }
+            : undefined,
+        )
+        .jpeg({ quality, mozjpeg: true, chromaSubsampling: '4:4:4' })
+        .toBuffer();
+
+      if (!work || candidate.length < work.length) {
+        work = candidate;
+        usedQuality = quality;
+        usedDimension = needsResize ? dimension : longest;
+      }
+      if (candidate.length <= WORK_TARGET_BYTES) break;
+    }
+    if (work && work.length <= WORK_TARGET_BYTES) break;
   }
 
   if (!work) {
-    throw new AppError('No pudimos preparar la imagen para leerla.', { code: 'IMAGEN_ILEGIBLE' });
+    throw new AppError('No pudimos preparar la imagen para guardarla.', { code: 'IMAGEN_ILEGIBLE' });
   }
 
   const workMeta = await sharp(work).metadata();
@@ -223,15 +276,16 @@ export async function normalizeUpload(
     work,
     workMime: 'image/jpeg',
     workExtension: 'jpg',
-    original: input,
     originalMime,
-    originalExtension: extensionFor(originalMime),
+    originalSizeBytes: input.length,
     sha256: hash,
     width: workMeta.width ?? null,
     height: workMeta.height ?? null,
     isPdf: false,
     converted,
-    compressed: needsResize || usedQuality !== JPEG_QUALITY_STEPS[0] || converted,
+    compressed: work.length < input.length || converted,
+    quality: usedQuality,
+    overTarget: work.length > WORK_TARGET_BYTES,
   };
 }
 

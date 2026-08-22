@@ -64,6 +64,7 @@ model User {
   paymentEvents      PaymentEvent[]
   auditLogs          AuditLog[]
   salePricesApproved SalePriceHistory[]
+  archivosArchivados DocumentFile[] @relation("ArchivosArchivados")
 
   @@index([roleId])
   @@index([branchId])
@@ -394,19 +395,27 @@ model DocumentFile {
   documentId  String
   document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   pageOrder   Int
-  /// Clave en el storage de la versión de trabajo (normalizada / comprimida).
+  /// Clave en el storage. Es la única versión que se guarda: la optimizada.
   storageKey  String
-  /// Clave del archivo original tal cual lo subió el usuario.
-  originalKey String?
   mimeType    String
+  /// Tipo del archivo tal como llegó del teléfono (HEIC, PNG…). El archivo en
+  /// sí no se guarda: sólo el dato, para poder explicar qué se recibió.
   originalMimeType String?
   sizeBytes   Int
+  /// Cuánto pesaba al llegar, antes de optimizar.
   originalSizeBytes Int?
   /// SHA-256 del contenido original: evita cargar dos veces la misma foto.
   sha256      String
   width       Int?
   height      Int?
   createdAt   DateTime @default(now())
+  /// Cuándo se archivó la imagen para liberar espacio. Los datos extraídos del
+  /// comprobante —artículos, costos, pagos— se conservan siempre; lo que se
+  /// borra es la foto, y sólo después de exportarla.
+  archivedAt  DateTime?
+  /// Quién archivó la imagen.
+  archivedById String?
+  archivedBy   User? @relation("ArchivosArchivados", fields: [archivedById], references: [id])
 
   @@unique([documentId, sha256])
   @@index([documentId, pageOrder])
