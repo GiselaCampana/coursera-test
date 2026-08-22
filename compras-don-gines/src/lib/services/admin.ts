@@ -8,7 +8,8 @@ import {
   type Permission,
 } from '@/lib/auth/permissions';
 import { hasPermission, type AuthUser } from '@/lib/auth/session';
-import { checkPasswordStrength, hashPassword } from '@/lib/auth/password';
+import { checkPasswordStrength } from '@/lib/auth/password';
+import { cambiarCredenciales, crearCredenciales } from '@/lib/auth/proveedor';
 import { normalizeText } from '@/lib/domain/matching';
 import { toDecimal } from '@/lib/money';
 import { arToday, parseArDate } from '@/lib/datetime';
@@ -199,21 +200,43 @@ export async function saveUser(user: AuthUser, form: FormData) {
     }
   }
 
+  /*
+   * La contraseña la guarda quien corresponda según el proveedor configurado:
+   * con Supabase Auth el alta se hace allá y acá sólo queda el vínculo; en modo
+   * local se guarda el hash scrypt. Ver src/lib/auth/proveedor.ts.
+   */
+  const existente = id
+    ? await prisma.user.findUnique({ where: { id }, select: { supabaseUserId: true } })
+    : null;
+
+  let credenciales: { passwordHash: string; supabaseUserId?: string | null } | null = null;
+  if (password !== '') {
+    credenciales = id
+      ? await cambiarCredenciales(existente?.supabaseUserId ?? null, password)
+      : await crearCredenciales(email, password);
+  }
+
   const data = {
     email,
     name,
     roleId,
-    branchId: role.scopeAllBranches ? branchId : branchId,
+    branchId,
     active,
-    ...(password !== ''
-      ? { passwordHash: await hashPassword(password), mustChangePassword: !id }
+    ...(credenciales
+      ? {
+          passwordHash: credenciales.passwordHash,
+          mustChangePassword: !id,
+          ...(credenciales.supabaseUserId
+            ? { supabaseUserId: credenciales.supabaseUserId }
+            : {}),
+        }
       : {}),
   };
 
   const saved = id
     ? await prisma.user.update({ where: { id }, data })
     : await prisma.user.create({
-        data: { ...data, passwordHash: data.passwordHash ?? (await hashPassword(password)) },
+        data: { ...data, passwordHash: credenciales?.passwordHash ?? '' },
       });
 
   await recordAudit({

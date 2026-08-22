@@ -43,7 +43,11 @@ model User {
   id             String    @id @default(cuid())
   email          String    @unique
   name           String
+  /// Hash scrypt de la contraseña, o la marca "supabase-auth" cuando las
+  /// contraseñas las guarda Supabase Auth. Ver src/lib/auth/proveedor.ts.
   passwordHash   String
+  /// Id del usuario en Supabase Auth, cuando se usa ese proveedor.
+  supabaseUserId String?   @unique
   roleId         String
   role           Role      @relation(fields: [roleId], references: [id])
   /// Sucursal asignada. Obligatoria para roles sin scopeAllBranches.

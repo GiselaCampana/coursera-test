@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation';
 import { prisma } from '@/lib/db';
 import { verifyPassword } from '@/lib/auth/password';
+import { verificarCredenciales } from '@/lib/auth/proveedor';
 import { createSession, destroySession, getCurrentUser } from '@/lib/auth/session';
 import { AUDIT_ACTIONS, recordAudit, requestMeta } from '@/lib/services/audit';
 
@@ -60,8 +61,20 @@ export async function ingresar(_prev: LoginState, formData: FormData): Promise<L
     return { error: 'Este usuario está dado de baja. Hablá con el administrador.' };
   }
 
-  const ok = await verifyPassword(password, user.passwordHash);
-  if (!ok) {
+  const verificacion = await verificarCredenciales(email, password, user.passwordHash);
+
+  // El servicio de identidad no contestó. No es que la contraseña esté mal, y
+  // decirle "correo o contraseña incorrectos" mandaría a la persona a probar
+  // contraseñas que están bien. Tampoco se cuenta como intento fallido.
+  if (verificacion.servicioCaido) {
+    return {
+      error:
+        'No pudimos verificar tu contraseña en este momento. Esperá unos segundos y volvé a ' +
+        'intentar; si sigue pasando, avisale al administrador.',
+    };
+  }
+
+  if (!verificacion.ok) {
     const failed = user.failedLogins + 1;
     await prisma.user.update({
       where: { id: user.id },
@@ -83,7 +96,16 @@ export async function ingresar(_prev: LoginState, formData: FormData): Promise<L
 
   await prisma.user.update({
     where: { id: user.id },
-    data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() },
+    data: {
+      failedLogins: 0,
+      lockedUntil: null,
+      lastLoginAt: new Date(),
+      // La primera vez que entra por Supabase queda vinculado, para poder
+      // cambiarle la contraseña después desde la administración.
+      ...(verificacion.idExterno && !user.supabaseUserId
+        ? { supabaseUserId: verificacion.idExterno }
+        : {}),
+    },
   });
   await createSession(user.id, meta);
   await recordAudit({

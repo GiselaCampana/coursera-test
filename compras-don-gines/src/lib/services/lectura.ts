@@ -377,6 +377,47 @@ function elegirMejor(
   return evaluados[0];
 }
 
+/**
+ * Interpreta una lectura sin tocar la base.
+ *
+ * Es lo que usa la pantalla de diagnóstico. Corre los mismos analizadores, el
+ * mismo cálculo y los mismos autocontroles que `registrarLectura`, pero no
+ * guarda el comprobante ni la imagen: no consulta el proveedor en la base, así
+ * que las reglas impositivas quedan sin aplicar y los controles de IVA y
+ * percepciones se informan como no verificables. Todo lo demás —renglones,
+ * neto, peso, total— se controla igual.
+ */
+export function analizarSinGuardar(paginas: PaginaLeida[]): {
+  articulos: number;
+  analizador: string | null;
+  estado: string | null;
+  controles: ValidationReport['checks'];
+  observaciones: string[];
+  calculado: ValidationReport['computed'] | null;
+} {
+  const candidatos = analizarIntento(paginas, 1);
+  if (candidatos.length === 0) {
+    return {
+      articulos: 0,
+      analizador: null,
+      estado: null,
+      controles: [],
+      observaciones: ['No se reconoció ningún comprobante en el texto leído.'],
+      calculado: null,
+    };
+  }
+
+  const mejor = elegirMejor(candidatos, undefined, 1);
+  return {
+    articulos: mejor.costeados.length,
+    analizador: mejor.analizador,
+    estado: mejor.informe.state,
+    controles: mejor.informe.checks,
+    observaciones: mejor.observaciones,
+    calculado: mejor.informe.computed,
+  };
+}
+
 /** Resume en castellano qué fue lo que no cerró, para pedir la relectura. */
 export function describirProblema(informe: ValidationReport): string {
   const fallas = informe.checks.filter((c) => c.severity === 'ERROR');

@@ -40,6 +40,14 @@ export default async function PaginaMas() {
       texto: 'Quién hizo cada operación sensible y cuándo.',
       visible: hasPermission(user, PERMISSIONS.AUDITORIA_VER),
     },
+    {
+      href: '/diagnostico',
+      titulo: 'Diagnóstico de lectura',
+      texto: 'Probar una foto y ver por qué se lee bien o mal. No guarda nada.',
+      // Lo ve cualquiera que cargue comprobantes: es quien se topa con el
+      // problema y quien puede probar la foto ahí mismo, en el mostrador.
+      visible: hasPermission(user, PERMISSIONS.COMPROBANTES_CARGAR),
+    },
   ].filter((s) => s.visible);
 
   return (

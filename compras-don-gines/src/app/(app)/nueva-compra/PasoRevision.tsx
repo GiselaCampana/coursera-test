@@ -6,6 +6,7 @@ import { validateDocument } from '@/lib/domain/validation';
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL } from '@/lib/domain/payments';
 import { formatARS, formatQty } from '@/lib/money';
 import { AppError, toUserMessage } from '@/lib/errors';
+import { consultar, pedir } from '@/lib/cliente/red';
 import { ListaControles, Semaforo } from '@/components/Estado';
 import { Pasos } from './NuevaCompra';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -186,7 +187,7 @@ export function PasoRevision({
   useEffect(() => {
     if (!proveedorId || !fecha) return;
     let cancelado = false;
-    fetch(`/api/proveedores/${proveedorId}/condiciones?fecha=${fecha}`)
+    consultar(`/api/proveedores/${proveedorId}/condiciones?fecha=${fecha}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((datos) => {
         if (cancelado || !datos) return;

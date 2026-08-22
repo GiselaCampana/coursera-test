@@ -22,6 +22,7 @@ function optional(name: string, fallback: string): string {
 }
 
 export type StorageDriver = 'local' | 's3' | 'supabase';
+export type AuthProvider = 'local' | 'supabase';
 
 export const env = {
   get databaseUrl(): string {
@@ -102,6 +103,17 @@ export const env = {
    * las credenciales de Supabase y se puede leer sin tenerlas. Por defecto, el
    * gigabyte del plan gratuito.
    */
+  /**
+   * Quién guarda y verifica las contraseñas.
+   *
+   * Por defecto `local`, que es lo que usan las pruebas y el desarrollo. En
+   * producción se pone `supabase` una vez que el proyecto existe y los usuarios
+   * están dados de alta ahí.
+   */
+  get authProvider(): AuthProvider {
+    return optional('AUTH_PROVIDER', 'local') === 'supabase' ? 'supabase' : 'local';
+  },
+
   get storageLimitBytes(): number {
     return Number(optional('STORAGE_LIMIT_BYTES', String(1024 * 1024 * 1024)));
   },
@@ -154,7 +166,7 @@ export function assertProductionEnv(): void {
     required('S3_ACCESS_KEY_ID');
     required('S3_SECRET_ACCESS_KEY');
   }
-  if (env.storageDriver === 'supabase') {
+  if (env.storageDriver === 'supabase' || env.authProvider === 'supabase') {
     required('SUPABASE_URL');
     required('SUPABASE_ANON_KEY');
     required('SUPABASE_SERVICE_ROLE_KEY');

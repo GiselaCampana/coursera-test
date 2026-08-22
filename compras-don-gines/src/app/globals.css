@@ -1262,3 +1262,21 @@ tbody tr:last-child td {
 .barra-uso-grave > span {
   background: var(--error);
 }
+
+/* --- Texto crudo del OCR, en la pantalla de diagnóstico ------------------ */
+/* Se muestra tal cual, con su alineación de columnas: es justamente lo que hay
+   que mirar cuando un renglón no se interpreta. Scrollea solo, sin desbordar
+   la pantalla del teléfono. */
+.texto-ocr {
+  margin: 0;
+  padding: 0.75rem;
+  background: var(--crema-hundida);
+  border-radius: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  line-height: 1.45;
+  white-space: pre;
+  overflow-x: auto;
+  max-height: 60vh;
+  overflow-y: auto;
+}

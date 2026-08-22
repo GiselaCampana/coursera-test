@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ACCEPT_ATTRIBUTE } from '@/lib/formatos';
 import { AppError, toUserMessage } from '@/lib/errors';
+import { consultar, pedir } from '@/lib/cliente/red';
 import { formatearPeso, prepararArchivo, type ArchivoPreparado } from '@/lib/cliente/imagenes';
 import { PasoRevision } from './PasoRevision';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -69,6 +70,7 @@ export function NuevaCompra({
   const [error, setError] = useState<string | null>(null);
   const [trabajando, setTrabajando] = useState(false);
   const [progreso, setProgreso] = useState<EstadoProgreso | null>(null);
+  const [despertando, setDespertando] = useState<string | null>(null);
   const [etapasHechas, setEtapasHechas] = useState<string[]>([]);
   const [comprobante, setComprobante] = useState<ComprobanteRevision | null>(null);
 
@@ -195,10 +197,11 @@ export function NuevaCompra({
 
       // 2. Abrir el comprobante y subir las páginas para guardarlas.
       marcarEtapa('SUBIENDO');
-      const alta = await fetch('/api/comprobantes', {
+      const alta = await pedir('/api/comprobantes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ branchId: sucursalId }),
+        alEsperar: setDespertando,
       });
       const datosAlta = await alta.json();
       if (!alta.ok) throw new AppError(datosAlta.error ?? 'No pudimos abrir el comprobante.');
@@ -206,9 +209,10 @@ export function NuevaCompra({
 
       const form = new FormData();
       for (const a of archivos) form.append('archivos', a.archivo, a.nombre);
-      const subida = await fetch(`/api/comprobantes/${documentId}/archivos`, {
+      const subida = await pedir(`/api/comprobantes/${documentId}/archivos`, {
         method: 'POST',
         body: form,
+        alEsperar: setDespertando,
       });
       const datosSubida = await subida.json();
       if (!subida.ok) throw new AppError(datosSubida.error ?? 'No pudimos subir las imágenes.');
@@ -229,10 +233,11 @@ export function NuevaCompra({
         const lectura = await sesion.leer(intento, motivo);
 
         marcarEtapa('VERIFICANDO_TOTALES');
-        const respuesta = await fetch(`/api/comprobantes/${documentId}/lectura`, {
+        const respuesta = await pedir(`/api/comprobantes/${documentId}/lectura`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(lectura),
+          alEsperar: setDespertando,
         });
         const control = await respuesta.json();
         if (!respuesta.ok) throw new AppError(control.error ?? 'No pudimos controlar el comprobante.');
@@ -247,7 +252,7 @@ export function NuevaCompra({
       }
 
       // 4. Traer el comprobante ya calculado para revisarlo.
-      const detalle = await fetch(`/api/comprobantes/${documentId}`);
+      const detalle = await consultar(`/api/comprobantes/${documentId}`, { alEsperar: setDespertando });
       const datosDetalle = await detalle.json();
       if (!detalle.ok) {
         throw new AppError(datosDetalle.error ?? 'No pudimos abrir el comprobante leído.');
@@ -262,6 +267,7 @@ export function NuevaCompra({
       setProgreso({ etapa: 'ERROR' });
     } finally {
       setTrabajando(false);
+      setDespertando(null);
     }
   };
 
@@ -293,6 +299,12 @@ export function NuevaCompra({
     <>
       <h1>Nueva compra</h1>
       <Pasos actual={1} />
+
+      {despertando ? (
+        <p className="mensaje mensaje-info" role="status">
+          {despertando}
+        </p>
+      ) : null}
 
       {error ? (
         <p className="mensaje mensaje-error" role="alert">

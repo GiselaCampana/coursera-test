@@ -26,6 +26,11 @@ export interface ArchivoPreparado {
   comprimido: boolean;
   /** Huella del contenido, para no subir dos veces la misma foto. */
   huella: string;
+  /** Tipo del archivo tal como llegó del teléfono. Para el diagnóstico. */
+  tipoOriginal: string;
+  /** Resolución con la que queda la imagen, en píxeles. */
+  ancho: number | null;
+  alto: number | null;
 }
 
 async function huellaDe(archivo: File): Promise<string> {
@@ -79,10 +84,13 @@ export async function prepararArchivo(archivo: File): Promise<ArchivoPreparado> 
       pesoFinal: archivo.size,
       comprimido: false,
       huella,
+      tipoOriginal: archivo.type || 'application/pdf',
+      ancho: null,
+      alto: null,
     };
   }
 
-  const sinCambios = (): ArchivoPreparado => ({
+  const sinCambios = (medidas?: { ancho: number; alto: number }): ArchivoPreparado => ({
     archivo,
     nombre: archivo.name || 'foto.jpg',
     vistaPrevia: URL.createObjectURL(archivo),
@@ -91,6 +99,9 @@ export async function prepararArchivo(archivo: File): Promise<ArchivoPreparado> 
     pesoFinal: archivo.size,
     comprimido: false,
     huella,
+    tipoOriginal: archivo.type || 'image/jpeg',
+    ancho: medidas?.ancho ?? null,
+    alto: medidas?.alto ?? null,
   });
 
   const imagen = await decodificar(archivo);
@@ -104,7 +115,7 @@ export async function prepararArchivo(archivo: File): Promise<ArchivoPreparado> 
   const necesitaEscalar = mayor > LADO_MAXIMO;
   if (!necesitaEscalar && archivo.size <= PESO_MINIMO_PARA_COMPRIMIR) {
     if ('close' in imagen) imagen.close();
-    return sinCambios();
+    return sinCambios({ ancho, alto });
   }
 
   const escala = necesitaEscalar ? LADO_MAXIMO / mayor : 1;
@@ -122,7 +133,7 @@ export async function prepararArchivo(archivo: File): Promise<ArchivoPreparado> 
   const blob = await new Promise<Blob | null>((resolve) =>
     destino.toBlob(resolve, 'image/jpeg', CALIDAD),
   );
-  if (!blob || blob.size >= archivo.size) return sinCambios();
+  if (!blob || blob.size >= archivo.size) return sinCambios({ ancho, alto });
 
   const nombre = (archivo.name || 'foto').replace(/\.[^.]+$/, '') + '.jpg';
   const optimizado = new File([blob], nombre, { type: 'image/jpeg', lastModified: Date.now() });
@@ -136,6 +147,9 @@ export async function prepararArchivo(archivo: File): Promise<ArchivoPreparado> 
     pesoFinal: optimizado.size,
     comprimido: true,
     huella,
+    tipoOriginal: archivo.type || 'image/jpeg',
+    ancho: destino.width,
+    alto: destino.height,
   };
 }
 

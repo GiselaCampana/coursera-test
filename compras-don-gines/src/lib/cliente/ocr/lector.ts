@@ -126,6 +126,22 @@ export class SesionLectura {
   }
 
   /**
+   * Medidas de cada página ya preparada, para la pantalla de diagnóstico.
+   *
+   * Es la resolución con la que Tesseract va a leer, que no es la de la foto:
+   * en el medio se corrigió la perspectiva y se escaló. Cuando algo no se lee,
+   * este número es lo primero que hay que mirar.
+   */
+  get medidasDePaginas(): { ancho: number; alto: number; inclinacion: number; perspectivaCorregida: boolean }[] {
+    return this.paginas.map((mapa, i) => ({
+      ancho: mapa.width,
+      alto: mapa.height,
+      inclinacion: this.metadatos[i]?.inclinacion ?? 0,
+      perspectivaCorregida: this.metadatos[i]?.perspectivaCorregida ?? false,
+    }));
+  }
+
+  /**
    * Una vuelta de lectura.
    *
    * Intento 1: se lee la página entera para ubicar las zonas, y después se
