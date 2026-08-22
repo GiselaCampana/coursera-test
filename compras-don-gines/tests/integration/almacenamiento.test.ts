@@ -222,6 +222,37 @@ describe('archivar comprobantes viejos', () => {
     expect(guardado.files[0].archivedById).toBe(escenario.admin.id);
   });
 
+  it('el comprobante con la imagen archivada se puede seguir consultando', async () => {
+    // Es la promesa del archivado, y la que se rompe sola si alguien pide la
+    // URL firmada de un archivo que ya no está: la pantalla del comprobante
+    // entero se cae, justo la de los comprobantes viejos.
+    const documentId = await comprobanteConImagen({
+      numero: '00000015',
+      fecha: '2024-03-15',
+      bytes: 120_000,
+    });
+    await archivarImagenes(escenario.admin, {
+      anteriorA: new Date('2025-01-01T00:00:00'),
+      confirmoDescarga: true,
+    });
+
+    const guardado = await prisma.document.findUniqueOrThrow({
+      where: { id: documentId },
+      include: { files: true },
+    });
+
+    // La página separa las vigentes de las archivadas: sólo a las primeras les
+    // pide un enlace.
+    const vigentes = guardado.files.filter((f) => f.archivedAt === null);
+    const archivadas = guardado.files.filter((f) => f.archivedAt !== null);
+    expect(vigentes).toHaveLength(0);
+    expect(archivadas).toHaveLength(1);
+
+    const storage = await getStorage();
+    // Y se comprueba el motivo: pedirle el enlace a la archivada falla.
+    await expect(storage.get(archivadas[0].storageKey)).rejects.toThrow();
+  });
+
   it('un operador no puede archivar', async () => {
     await comprobanteConImagen({ numero: '00000014', fecha: '2024-03-15', bytes: 120_000 });
     await expect(

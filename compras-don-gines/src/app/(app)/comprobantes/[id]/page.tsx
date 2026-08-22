@@ -41,14 +41,27 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
   }
 
   const storage = await getStorage();
+
+  /*
+   * Las imágenes archivadas ya no están en el almacenamiento: se borraron para
+   * liberar espacio, después de exportarlas en un ZIP. Pedirles una URL firmada
+   * rompería la pantalla entera del comprobante, que es justamente lo que el
+   * archivado promete que no pasa: los datos se conservan y el comprobante se
+   * sigue viendo. Así que se separan y se explica en su lugar.
+   */
+  const vigentes = documento.files.filter((f) => f.archivedAt === null);
+  const archivadas = documento.files.filter((f) => f.archivedAt !== null);
+
   const paginas = await Promise.all(
-    documento.files.map(async (file) => ({
+    vigentes.map(async (file) => ({
       id: file.id,
       orden: file.pageOrder,
       url: await storage.signedUrl(file.storageKey),
       esPdf: file.mimeType === 'application/pdf',
     })),
   );
+
+  const fechaArchivado = archivadas[0]?.archivedAt ?? null;
 
   const informe = documento.checkReport as unknown as ValidationReport | null;
   const puedeAnular = hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR);
@@ -322,6 +335,19 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
             ))}
           </ul>
           <p className="ayuda">Los enlaces vencen a los 15 minutos por seguridad.</p>
+        </div>
+      ) : null}
+
+      {archivadas.length > 0 ? (
+        <div className="card">
+          <h2>Imágenes archivadas</h2>
+          <p className="chico medio mb0">
+            {archivadas.length === 1 ? 'La imagen de este comprobante se archivó' : `Las ${archivadas.length} imágenes de este comprobante se archivaron`}
+            {fechaArchivado ? ` el ${formatDateAr(fechaArchivado)}` : ''} para liberar espacio, y
+            están en el ZIP que se descargó antes de borrarlas.{' '}
+            <strong>Los datos del comprobante están completos</strong>: artículos, importes,
+            impuestos y pago son los que se cargaron y no cambiaron.
+          </p>
         </div>
       ) : null}
 
