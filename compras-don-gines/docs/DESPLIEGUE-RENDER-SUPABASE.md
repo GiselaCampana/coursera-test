@@ -121,6 +121,8 @@ el rol y la sucursal del usuario.
    SUPABASE_PUBLISHABLE_KEY    sb_publishable_…
    SUPABASE_SECRET_KEY         sb_secret_…
    APP_URL                     (la URL que asigne Render, ej. https://compras-don-gines.onrender.com)
+   SEED_ADMIN_EMAIL            (el correo del administrador; ver el Paso 4)
+   SEED_ADMIN_PASSWORD         (su contraseña inicial; ver el Paso 4)
    ```
 
    `STORAGE_SIGNING_SECRET` la genera Render sola. El resto viene del archivo.
@@ -148,31 +150,94 @@ el rol y la sucursal del usuario.
 > `tsconfig.json` sin mencionar en ningún lado que el problema son las
 > dependencias omitidas. Pasó en el primer despliegue.
 
-## Paso 4 — Datos iniciales
+## Paso 4 — Datos iniciales (el usuario administrador)
 
-Una sola vez, desde una máquina con acceso a la base:
+`prisma migrate deploy` crea las **tablas**, no las **filas**. Con el esquema
+vacío no hay ningún usuario, y el ingreso contesta *«El correo o la contraseña
+no son correctos»* porque efectivamente no lo son: no hay contra qué compararlos.
+Quien crea las filas iniciales es el seed.
 
-```bash
-cd compras-don-gines
-DATABASE_URL="…la cadena del pooler…" npm run db:seed
+El plan gratuito de Render **no da consola**: no hay forma de correr un comando
+suelto contra el servicio. Por eso el seed es un paso más del build:
+
+```
+npm ci --include=dev && npx prisma migrate deploy && npm run db:seed && npm run build
 ```
 
-Crea los roles, las tres sucursales, el proveedor Los Calvos y dos usuarios. Las
-contraseñas se imprimen **una sola vez** por pantalla: anotalas y cambialas al
-primer ingreso.
+Corre en cada despliegue, y eso es inofensivo: **el seed es idempotente y no
+destructivo**. Para cada cosa hace `findUnique` (o `upsert` con `update: {}`) y
+sólo crea lo que falta. No borra ni una fila, no pisa nada de lo que se haya
+editado desde la aplicación y **no es `migrate reset`**. Si el usuario ya
+existe, no lo toca.
 
-Para elegirlas de antemano:
+### Qué cargar en Render
 
-```bash
-SEED_ADMIN_PASSWORD="…" SEED_OPERATOR_PASSWORD="…" DATABASE_URL="…" npm run db:seed
+En *Environment*, dos variables más:
+
+| Variable | Valor |
+|---|---|
+| `SEED_ADMIN_EMAIL` | el correo con el que vas a entrar, p. ej. `gisela.campana@gmail.com` |
+| `SEED_ADMIN_PASSWORD` | una contraseña de **al menos 10 caracteres, con letras y números** |
+
+Si la contraseña no cumple el mínimo, el seed **falla el build** con el motivo
+escrito, en vez de crear un usuario que después no puede entrar. El correo se
+guarda en minúsculas, así que da igual cómo se escriba en el panel.
+
+Guardadas las variables, *Manual Deploy* → **Deploy latest commit**. No hace
+falta volver a crear el servicio ni tocar el blueprint, y las migraciones ya
+aplicadas no se vuelven a correr: `migrate deploy` aplica sólo las pendientes.
+
+### Después del deploy
+
+En el log del build, cerca del final:
+
 ```
+Usuarios creados:
+
+  Administrador            gisela.campana@gmail.com         (la de la variable de entorno)
+  Operador Devoto          devoto@dongines.local            xY7k…
+  …
+```
+
+La contraseña del administrador **no** se imprime: ya la conocés, y el log del
+despliegue queda escrito para siempre. La de los operadores sí, porque la generó
+el seed: se la genera al azar salvo que definas `SEED_OPERATOR_PASSWORD`.
+
+Si en cambio el log dice *«Los usuarios ya existían: no se creó ninguno ni se
+cambió ninguna contraseña»*, el administrador ya estaba. **Cambiar
+`SEED_ADMIN_PASSWORD` después no cambia ninguna contraseña**: es la contraseña
+de alta, no un modo de resetearla. Para eso está la pantalla de cambio, o
+*Configuración → Usuarios* con otro administrador.
 
 ## Paso 5 — Primer ingreso
 
 Abrir la URL de Render. **La primera vez puede tardar hasta un minuto**: el
 servicio está frío. La aplicación lo explica en pantalla cuando puede hacerlo.
 
-Ingresar con el usuario administrador y cambiar la contraseña.
+Ingresar con `SEED_ADMIN_EMAIL` y `SEED_ADMIN_PASSWORD`.
+
+La aplicación lleva derecho a **Cambiar contraseña** y no deja pasar a ninguna
+otra pantalla hasta hacerlo. No es una recomendación en pantalla: el corte está
+en el servidor, en el layout por el que pasan todas las páginas, así que escribir
+la URL a mano tampoco sirve.
+
+Es a propósito. Esa contraseña la escribiste en el panel de Render, donde la ve
+cualquiera que entre, y viaja en la configuración del servicio: sirve para entrar
+una vez, no para ser la contraseña de nadie. Al guardar la nueva se cierran
+además las demás sesiones de ese usuario, por si alguien había entrado con la
+vieja.
+
+Lo mismo vale para los operadores, cuya contraseña inicial es común a los tres y
+está impresa en el log.
+
+### Correr el seed desde otra máquina (alternativa)
+
+Si en algún momento hay acceso a la base desde afuera, el mismo seed corre suelto:
+
+```bash
+cd compras-don-gines
+SEED_ADMIN_EMAIL="…" SEED_ADMIN_PASSWORD="…" DATABASE_URL="…la cadena del pooler…" npm run db:seed
+```
 
 ## Paso 6 — Pasar las contraseñas a Supabase Auth (opcional, después)
 

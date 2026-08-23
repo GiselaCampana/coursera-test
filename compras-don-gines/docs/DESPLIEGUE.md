@@ -16,7 +16,8 @@ que no se puede saltear está en [Antes de exponerlo](#antes-de-exponerlo).
       cámara del iPhone.
 - [ ] Bucket S3 **privado** (o volumen persistente con el driver local).
 - [ ] Migraciones aplicadas con `npx prisma migrate deploy`.
-- [ ] Seed corrido una vez y contraseña del administrador cambiada en el primer ingreso.
+- [ ] Seed corrido una vez. La contraseña del administrador se cambia sola en el primer
+      ingreso: la aplicación lo exige antes de dejar entrar a ninguna pantalla.
 - [ ] Copias de seguridad configuradas y **una restauración probada**.
 
 > Las claves van por variables de entorno, nunca en el repositorio. `.env` está en

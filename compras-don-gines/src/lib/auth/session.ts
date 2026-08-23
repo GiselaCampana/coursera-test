@@ -157,6 +157,25 @@ export function branchScopeFilter(user: AuthUser): { branchId?: string } {
   return user.scopeAllBranches ? {} : { branchId: user.branchId ?? '__sin_sucursal__' };
 }
 
+/**
+ * Cierra las demás sesiones del usuario y deja viva la actual.
+ *
+ * Se usa al cambiar la contraseña: si alguien más había entrado con la
+ * contraseña vieja, cambiarla tiene que echarlo. Sin esto el cambio protege la
+ * próxima entrada pero no la sesión que el intruso ya tiene abierta.
+ */
+export async function closeOtherSessions(userId: string): Promise<number> {
+  const store = await cookies();
+  const token = store.get(SESSION_COOKIE)?.value;
+  const { count } = await prisma.session.deleteMany({
+    where: {
+      userId,
+      ...(token ? { tokenHash: { not: hashToken(token) } } : {}),
+    },
+  });
+  return count;
+}
+
 export async function purgeExpiredSessions(): Promise<number> {
   const { count } = await prisma.session.deleteMany({
     where: { expiresAt: { lte: new Date() } },

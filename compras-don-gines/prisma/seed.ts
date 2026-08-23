@@ -6,10 +6,16 @@
  *
  * Las contraseñas se toman de SEED_ADMIN_PASSWORD / SEED_OPERATOR_PASSWORD; si
  * no están definidas se generan al azar y se imprimen una sola vez.
+ *
+ * En los dos casos el usuario queda con `mustChangePassword`. Una contraseña
+ * escrita en una variable de entorno del panel de despliegue la ve cualquiera
+ * que entre a ese panel, y una impresa en el log del build queda escrita ahí:
+ * ninguna de las dos es la contraseña personal de nadie, sino la llave para
+ * entrar una vez y elegir la propia.
  */
 import { randomBytes } from 'node:crypto';
 import { PrismaClient, type PurchaseUnit, type SaleMode } from '@prisma/client';
-import { hashPassword } from '../src/lib/auth/password';
+import { checkPasswordStrength, hashPassword } from '../src/lib/auth/password';
 import {
   ADMIN_PERMISSIONS,
   OPERADOR_PERMISSIONS,
@@ -88,10 +94,35 @@ async function main() {
   }
 
   // --- Usuarios -----------------------------------------------------------
-  const adminEmail = process.env.SEED_ADMIN_EMAIL || 'admin@dongines.local';
+  // En minúsculas, como en el ingreso y en el alta desde la aplicación. Sin
+  // esto, un SEED_ADMIN_EMAIL escrito con mayúsculas crea un usuario que
+  // después nadie encuentra: el ingreso busca por el correo ya normalizado y no
+  // hay forma de escribirlo "bien" desde el formulario.
+  const adminEmail = (process.env.SEED_ADMIN_EMAIL || 'admin@dongines.local').trim().toLowerCase();
   const adminPassword = process.env.SEED_ADMIN_PASSWORD || randomPassword();
   const operatorPassword = process.env.SEED_OPERATOR_PASSWORD || randomPassword();
-  const createdCredentials: { email: string; password: string; role: string }[] = [];
+  const adminDeVariable = Boolean(process.env.SEED_ADMIN_PASSWORD);
+  const operadorDeVariable = Boolean(process.env.SEED_OPERATOR_PASSWORD);
+
+  // Una contraseña que la aplicación después no aceptaría al cambiarla tampoco
+  // sirve para entrar la primera vez. Mejor que el seed falle acá, con el
+  // motivo escrito, que descubrirlo en el primer intento de ingreso.
+  for (const [variable, valor] of [
+    ['SEED_ADMIN_PASSWORD', adminDeVariable ? adminPassword : null],
+    ['SEED_OPERATOR_PASSWORD', operadorDeVariable ? operatorPassword : null],
+  ] as const) {
+    if (valor === null) continue;
+    const problema = checkPasswordStrength(valor);
+    if (!problema.ok) {
+      throw new Error(`${variable}: ${problema.message}`);
+    }
+  }
+  const createdCredentials: {
+    email: string;
+    password: string;
+    role: string;
+    deVariable: boolean;
+  }[] = [];
 
   const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
   if (!existingAdmin) {
@@ -103,10 +134,17 @@ async function main() {
         roleId: adminRole.id,
         // El administrador ve todas las sucursales: no se le asigna ninguna.
         branchId: null,
-        mustChangePassword: !process.env.SEED_ADMIN_PASSWORD,
+        // Siempre, incluso con la contraseña puesta a mano en una variable:
+        // esa contraseña la vio quien cargó la variable y la guarda el panel.
+        mustChangePassword: true,
       },
     });
-    createdCredentials.push({ email: adminEmail, password: adminPassword, role: 'Administrador' });
+    createdCredentials.push({
+      email: adminEmail,
+      password: adminPassword,
+      role: 'Administrador',
+      deVariable: adminDeVariable,
+    });
   }
 
   for (const branch of branches) {
@@ -120,13 +158,14 @@ async function main() {
         passwordHash: await hashPassword(operatorPassword),
         roleId: operatorRole.id,
         branchId: branch.id,
-        mustChangePassword: !process.env.SEED_OPERATOR_PASSWORD,
+        mustChangePassword: true,
       },
     });
     createdCredentials.push({
       email,
       password: operatorPassword,
       role: `Operador ${branch.name}`,
+      deVariable: operadorDeVariable,
     });
   }
 
@@ -264,13 +303,20 @@ async function main() {
   console.log('Listo:', counts, '\n');
 
   if (createdCredentials.length > 0) {
-    console.log('Credenciales iniciales (se muestran una sola vez):\n');
+    console.log('Usuarios creados:\n');
     for (const c of createdCredentials) {
-      console.log(`  ${c.role.padEnd(24)} ${c.email.padEnd(32)} ${c.password}`);
+      // La contraseña sólo se imprime si la generamos nosotros: la que vino en
+      // una variable ya la conoce quien la cargó, y repetirla acá la deja
+      // escrita en el log del despliegue, que no se puede borrar.
+      const clave = c.deVariable ? '(la de la variable de entorno)' : c.password;
+      console.log(`  ${c.role.padEnd(24)} ${c.email.padEnd(32)} ${clave}`);
     }
-    console.log('\nCambialas después del primer ingreso.\n');
+    console.log(
+      '\nTodos entran una sola vez con esa contraseña: la aplicación les pide cambiarla\n' +
+        'antes de dejarlos usar ninguna pantalla.\n',
+    );
   } else {
-    console.log('Los usuarios ya existían: no se generaron contraseñas nuevas.\n');
+    console.log('Los usuarios ya existían: no se creó ninguno ni se cambió ninguna contraseña.\n');
   }
 }
 

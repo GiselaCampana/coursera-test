@@ -143,7 +143,16 @@ npm run dev                         # http://localhost:3000
 ```
 
 El seed imprime las credenciales iniciales **una sola vez**. Si no se definen
-`SEED_ADMIN_PASSWORD` y `SEED_OPERATOR_PASSWORD`, las genera al azar.
+`SEED_ADMIN_PASSWORD` y `SEED_OPERATOR_PASSWORD`, las genera al azar; si sí se
+definen, no las imprime, porque ya las conoce quien las eligió.
+
+Es idempotente: crea sólo lo que falta y no pisa nada. Correrlo de nuevo sobre
+una base ya sembrada no cambia ninguna contraseña.
+
+Esas contraseñas sirven **para entrar una vez**. Todo usuario que crea el seed
+queda con `mustChangePassword`, y el layout del servidor lo manda a
+`/cambiar-contrasena` hasta que elija una propia: no llega a ninguna pantalla
+antes de eso, ni escribiendo la URL a mano.
 
 ---
 
@@ -383,7 +392,8 @@ Antes de exponerlo:
   viaja. Además, sin contexto seguro Safari no da acceso a la cámara.
 - `STORAGE_DRIVER=s3` con un bucket **privado**, o un volumen persistente si se usa el
   driver local.
-- El primer ingreso con el usuario administrador y cambio inmediato de contraseña.
+- El primer ingreso con el usuario administrador. Del cambio de contraseña no hay que
+  acordarse: la aplicación no deja entrar a ninguna pantalla hasta que se haga.
 
 ---
 

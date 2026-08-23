@@ -32,8 +32,16 @@ services:
     #
     # `migrate deploy` aplica las migraciones pendientes sin borrar nada, y va
     # antes del build para que el código nuevo encuentre el esquema nuevo.
+    #
+    # `db:seed` va acá porque el plan gratuito de Render no da consola: no hay
+    # forma de correr un comando suelto contra la base de producción. El seed
+    # es idempotente y no destructivo —crea sólo lo que falta, con findUnique +
+    # create, y no pisa nada de lo que se haya editado desde la aplicación—, así
+    # que correrlo en cada despliegue es inofensivo. NO es `migrate reset`: no
+    # borra ni una fila.
+    #
     # El build copia además los archivos del lector a public/ocr/.
-    buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run build
+    buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run db:seed && npm run build
     startCommand: npm run start
     healthCheckPath: /ingresar
     envVars:
@@ -72,6 +80,27 @@ services:
       # con un usuario real. Cambiarlo a `supabase` es una edición en el panel.
       - key: AUTH_PROVIDER
         value: local
+
+      # --- Usuario administrador inicial ------------------------------------
+      # Los toma el seed la primera vez que corre, para crear el administrador.
+      # Si el usuario ya existe no se toca: cambiar estas variables después NO
+      # cambia ninguna contraseña.
+      #
+      # La contraseña sirve para entrar una sola vez: la aplicación exige
+      # cambiarla antes de dejar usar ninguna pantalla, porque una contraseña
+      # guardada en este panel la ve cualquiera que entre acá.
+      #
+      # Mínimo 10 caracteres combinando letras y números, o el seed falla.
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      #
+      # Los tres operadores de sucursal se crean igual, con una contraseña al
+      # azar que el seed imprime en el log del build. Si se prefiere elegirla,
+      # se agrega SEED_OPERATOR_PASSWORD al panel *y a este archivo*: una
+      # variable que esté sólo en el panel se pierde en la próxima
+      # sincronización del blueprint.
 
       # --- Seguridad -------------------------------------------------------
       # generateValue crea un secreto al azar la primera vez y lo conserva.

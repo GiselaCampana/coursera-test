@@ -86,6 +86,10 @@ export default async function PaginaMas() {
           </div>
         </dl>
 
+        <Link href="/cambiar-contrasena" className="boton boton-secundario boton-bloque mt">
+          Cambiar mi contraseña
+        </Link>
+
         <form action={salir} className="mt">
           <button type="submit" className="boton boton-secundario boton-bloque">
             Cerrar sesión

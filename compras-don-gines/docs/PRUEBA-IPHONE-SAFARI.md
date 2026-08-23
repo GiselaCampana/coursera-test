@@ -25,6 +25,10 @@ captura y guardá el resultado de la pantalla de Diagnóstico.
 | 1.1 | Abrir la URL en Safari después de varias horas sin usarla | Puede tardar hasta un minuto (Render estaba dormido). No aparece ningún error técnico | |
 | 1.2 | Ingresar con el usuario operador | Entra y muestra "Hola, …" | |
 | 1.3 | Escribir mal la contraseña una vez | Dice "El correo o la contraseña no son correctos", sin aclarar cuál de los dos | |
+| 1.3a | **La primera vez de cada usuario**: ingresar con la contraseña inicial | Va derecho a "Cambiar contraseña" y explica por qué. Escribir a mano `/comprobantes` en la barra vuelve a la misma pantalla | |
+| 1.3b | Elegir una contraseña nueva (10+ caracteres, letras y números) y guardarla | Entra a "Hola, …" sin volver a pedir la contraseña. Safari ofrece guardarla en el llavero | |
+| 1.3c | Salir e intentar entrar con la contraseña vieja | No la acepta | |
+| 1.3d | Más → "Cambiar mi contraseña" con la sesión ya normal | Deja cambiarla de nuevo, sin el aviso de contraseña inicial | |
 | 1.4 | Cerrar Safari por completo y volver a abrir la URL | Sigue la sesión iniciada | |
 | 1.5 | Agregar la aplicación a la pantalla de inicio (Compartir → Agregar a inicio) y abrirla desde ahí | Abre a pantalla completa y la sesión sigue | |
 

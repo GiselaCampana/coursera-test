@@ -12,6 +12,12 @@ export default async function LayoutAplicacion({ children }: { children: React.R
   const user = await getCurrentUser();
   if (!user) redirect('/ingresar');
 
+  // Contraseña inicial todavía sin cambiar: no se entra a ninguna pantalla de
+  // la aplicación hasta cambiarla. El corte va acá, en el layout del servidor,
+  // porque es el único punto por el que pasan todas las páginas del grupo.
+  // La pantalla de cambio vive fuera de este grupo, así que no se autobloquea.
+  if (user.mustChangePassword) redirect('/cambiar-contrasena');
+
   const pendientes = await prisma.document.count({
     where: { ...branchScopeFilter(user), status: 'REQUIERE_REVISION' },
   });
