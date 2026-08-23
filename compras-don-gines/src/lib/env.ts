@@ -16,6 +16,18 @@ function required(name: string): string {
   return value;
 }
 
+/** La primera de estas variables que esté cargada. Para nombres que cambiaron. */
+function cualquiera(names: string[]): string {
+  for (const name of names) {
+    const value = process.env[name];
+    if (value && value.trim() !== '') return value;
+  }
+  throw new Error(
+    `Falta la variable de entorno ${names[0]} (o ${names.slice(1).join(' o ')}). ` +
+      'Copiá .env.example a .env y completala.',
+  );
+}
+
 function optional(name: string, fallback: string): string {
   const value = process.env[name];
   return value && value.trim() !== '' ? value : fallback;
@@ -88,10 +100,21 @@ export const env = {
     serviceRoleKey: string;
     bucket: string;
   } {
+    /*
+     * Supabase tiene dos generaciones de claves y los proyectos nuevos vienen
+     * con la segunda:
+     *
+     *   antes            ahora
+     *   anon (JWT)   ->  sb_publishable_...   (pública, puede ir al navegador)
+     *   service_role ->  sb_secret_...        (saltea todo: sólo en el servidor)
+     *
+     * Se aceptan los dos nombres para que no importe cuál muestre el panel el
+     * día que alguien copie las variables.
+     */
     return {
       url: required('SUPABASE_URL'),
-      anonKey: required('SUPABASE_ANON_KEY'),
-      serviceRoleKey: required('SUPABASE_SERVICE_ROLE_KEY'),
+      anonKey: cualquiera(['SUPABASE_PUBLISHABLE_KEY', 'SUPABASE_ANON_KEY']),
+      serviceRoleKey: cualquiera(['SUPABASE_SECRET_KEY', 'SUPABASE_SERVICE_ROLE_KEY']),
       bucket: optional('SUPABASE_BUCKET', 'comprobantes'),
     };
   },
@@ -167,8 +190,7 @@ export function assertProductionEnv(): void {
     required('S3_SECRET_ACCESS_KEY');
   }
   if (env.storageDriver === 'supabase' || env.authProvider === 'supabase') {
-    required('SUPABASE_URL');
-    required('SUPABASE_ANON_KEY');
-    required('SUPABASE_SERVICE_ROLE_KEY');
+    // Con leerlas alcanza: `cualquiera` falla si no está ninguna de las dos.
+    env.supabase;
   }
 }

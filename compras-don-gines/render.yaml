@@ -34,9 +34,13 @@ services:
         sync: false
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_ANON_KEY
+      # Clave pública del proyecto (sb_publishable_… o la "anon" de antes).
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
-      - key: SUPABASE_SERVICE_ROLE_KEY
+      # Clave secreta (sb_secret_… o la "service_role" de antes). Saltea todas
+      # las políticas de seguridad: sólo del lado del servidor, nunca en el
+      # repositorio ni en una variable NEXT_PUBLIC_.
+      - key: SUPABASE_SECRET_KEY
         sync: false
 
       - key: STORAGE_DRIVER

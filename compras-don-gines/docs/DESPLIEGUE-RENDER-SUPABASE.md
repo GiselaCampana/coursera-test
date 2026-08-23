@@ -30,12 +30,8 @@ del recorrido cambió respecto de lo previsto.
 
 ## Paso 1 — Proyecto en Supabase
 
-1. Entrar a Supabase y crear un proyecto nuevo.
-2. Elegir la región más cercana (**South America (São Paulo)** es la que menos
-   latencia da desde Argentina).
-3. Anotar la contraseña de la base que genera: se usa una sola vez y después no
-   se puede volver a ver.
-4. Plan: **Free**. Es el que viene por defecto.
+El proyecto ya está creado: **`jdhljvfznwkvqcodxrjn`**, plan Free.
+`SUPABASE_URL` es `https://jdhljvfznwkvqcodxrjn.supabase.co`.
 
 ### Datos que hay que copiar
 
@@ -44,9 +40,18 @@ En *Project Settings*:
 | Dónde | Qué | Para qué variable |
 |---|---|---|
 | Database → Connection string → **Session pooler** | La cadena `postgresql://…` | `DATABASE_URL` |
-| API → Project URL | `https://xxxx.supabase.co` | `SUPABASE_URL` |
-| API → Project API keys → `anon` `public` | La clave anónima | `SUPABASE_ANON_KEY` |
-| API → Project API keys → `service_role` | La clave de servicio | `SUPABASE_SERVICE_ROLE_KEY` |
+| API Keys → **Publishable** | `sb_publishable_…` | `SUPABASE_PUBLISHABLE_KEY` |
+| API Keys → **Secret** | `sb_secret_…` | `SUPABASE_SECRET_KEY` |
+
+> Los proyectos nuevos usan un formato de claves distinto al de los viejos:
+> *publishable* reemplaza a *anon* y *secret* reemplaza a *service_role*. La
+> aplicación acepta los dos nombres, así que no importa cuál muestre el panel.
+
+> **Dónde poner cada cosa.** La clave publishable no es un secreto —en una
+> aplicación común viaja al navegador—. La **secret** y la contraseña de la base
+> sí lo son: **cargalas directamente en el panel de Render**, no las mandes por
+> chat ni por correo. Si alguna se filtró, se rota desde el panel de Supabase y
+> listo; no hay que rehacer nada.
 
 > **Usá la cadena del pooler, no la directa.** Render Free reinicia el servicio
 > cada vez que se duerme y se despierta; con conexiones directas se agota el
@@ -56,6 +61,40 @@ En *Project Settings*:
 > únicamente en las variables de entorno de Render, del lado del servidor.
 > Nunca en el repositorio, nunca en una variable `NEXT_PUBLIC_`, nunca en un
 > correo.
+
+### Por qué no se usa el arranque rápido que muestra el panel
+
+El panel de Supabase ofrece un ejemplo con `@supabase/ssr`, variables
+`NEXT_PUBLIC_…` y un middleware que refresca la sesión en cookies. **Es correcto,
+pero para otra arquitectura**: la que se usa cuando el navegador le habla
+directamente a Supabase y las políticas RLS deciden qué puede ver cada uno.
+
+Acá el navegador **nunca** le habla a Supabase. El circuito es:
+
+```
+teléfono  ──fotos y texto reconocido──>  aplicación en Render  ──>  Supabase
+                                          (único cliente)
+```
+
+Quién puede ver qué lo decide la aplicación, con el rol y la sucursal del
+usuario, antes de pedirle nada a Supabase. Las razones de fondo:
+
+- **El alcance por sucursal y los roles configurables ya viven en nuestra base**,
+  porque son reglas del negocio: un operador de Devoto no ve Pueyrredón, y se
+  pueden crear roles nuevos sin tocar código. Con RLS habría que mantener las
+  mismas reglas escritas dos veces, en dos lugares, con el riesgo de que se
+  separen.
+- **Las imágenes se sirven con URLs firmadas que vencen a los 15 minutos**, y la
+  aplicación decide caso por caso si las emite. El bucket es privado y el
+  navegador nunca tiene una credencial de Supabase.
+- **Habría dos sesiones a la vez**: la cookie de Supabase y la nuestra, que ya
+  maneja el bloqueo por intentos fallidos y la auditoría. Dos mecanismos de
+  sesión conviviendo es una fuente de errores difíciles.
+
+Por eso no hace falta `@supabase/ssr` ni los helpers de `utils/supabase/`. Se
+usa `@supabase/supabase-js` desde el servidor, que ya está instalado, y las
+credenciales no llevan prefijo `NEXT_PUBLIC_` justamente para que no puedan
+terminar en el navegador por descuido.
 
 ## Paso 2 — El bucket de comprobantes
 
