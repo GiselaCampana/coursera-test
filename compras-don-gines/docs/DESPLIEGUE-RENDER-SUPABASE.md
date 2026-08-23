@@ -136,6 +136,18 @@ el rol y la sucursal del usuario.
 > **Verificá que el plan diga Free.** Render no sube de plan solo, pero conviene
 > mirarlo una vez.
 
+> **Por qué el build usa `npm ci --include=dev`.** En runtime hace falta
+> `NODE_ENV=production`, y con esa variable npm omite las devDependencies. Pero
+> ahí viven cosas que se necesitan para *compilar*: `typescript` y los `@types`
+> con los que Next chequea tipos, y el CLI de `prisma` que corre las migraciones
+> y genera el cliente.
+>
+> Sin `--include=dev`, Next detecta que faltan los `@types` e intenta
+> instalarlos solo a mitad del build. Si esa instalación no prospera, el build
+> muere con `Next.js build worker exited with code: 1` y un mensaje que habla de
+> `tsconfig.json` sin mencionar en ningún lado que el problema son las
+> dependencias omitidas. Pasó en el primer despliegue.
+
 ## Paso 4 — Datos iniciales
 
 Una sola vez, desde una máquina con acceso a la base:

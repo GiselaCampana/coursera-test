@@ -20,10 +20,20 @@ services:
     plan: free
     region: oregon
     rootDir: compras-don-gines
+    # `--include=dev` no es opcional. Con NODE_ENV=production —que hace falta en
+    # runtime— npm omite las devDependencies, y ahí viven cosas que se necesitan
+    # para *compilar*: typescript y los @types que Next usa para chequear tipos,
+    # y el CLI de prisma que corre las migraciones y genera el cliente.
+    #
+    # Sin esto, Next detecta que faltan los @types e intenta instalarlos solo a
+    # mitad del build. Cuando esa instalación no prospera, el worker muere con
+    # "Next.js build worker exited with code: 1" y el mensaje sobre tsconfig.json,
+    # que no dice en ningún lado que el problema son las dependencias omitidas.
+    #
     # `migrate deploy` aplica las migraciones pendientes sin borrar nada, y va
     # antes del build para que el código nuevo encuentre el esquema nuevo.
     # El build copia además los archivos del lector a public/ocr/.
-    buildCommand: npm ci && npx prisma migrate deploy && npm run build
+    buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run build
     startCommand: npm run start
     healthCheckPath: /ingresar
     envVars:
