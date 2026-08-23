@@ -1,5 +1,10 @@
 # Despliegue en Render, plan gratuito.
 #
+# ESTE ARCHIVO VA EN LA RAÍZ DEL REPOSITORIO, no dentro de compras-don-gines/.
+# Render busca el blueprint en la raíz y sólo ahí; si está en una subcarpeta no
+# lo encuentra y el servicio hay que configurarlo a mano. La aplicación sí vive
+# en la subcarpeta, y eso lo resuelve `rootDir` más abajo.
+#
 # Este archivo describe el servicio; no crea ninguna cuenta ni contrata nada.
 # El plan `free` es el único que se declara: Render no sube de plan solo, y sin
 # tarjeta cargada no puede generar cargos.

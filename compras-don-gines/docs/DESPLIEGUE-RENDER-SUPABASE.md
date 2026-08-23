@@ -96,14 +96,11 @@ usa `@supabase/supabase-js` desde el servidor, que ya está instalado, y las
 credenciales no llevan prefijo `NEXT_PUBLIC_` justamente para que no puedan
 terminar en el navegador por descuido.
 
-## Paso 2 — El bucket de comprobantes
+## Paso 2 — El bucket de comprobantes ✅
 
-En *Storage* → **New bucket**:
-
-- Nombre: `comprobantes`
-- **Public bucket: desactivado.** Es lo más importante de este paso. Con el
-  bucket público, cualquiera con el enlace vería las facturas de la fiambrería.
-- Restricción de tipos: opcional; la aplicación ya sólo sube JPG y PDF.
+**Ya está hecho:** el bucket `comprobantes` existe y quedó **privado**, con
+*Public bucket* desactivado. Es lo más importante de toda la configuración: con
+el bucket público, cualquiera con el enlace vería las facturas de la fiambrería.
 
 La aplicación nunca sirve un archivo por URL directa: pide una URL firmada con
 vencimiento cada vez que alguien abre un comprobante, y decide si se la da según
@@ -111,23 +108,30 @@ el rol y la sucursal del usuario.
 
 ## Paso 3 — La aplicación en Render
 
-1. Render → **New** → **Web Service** → conectar el repositorio.
-2. Render lee `render.yaml` y propone el servicio ya configurado: plan **Free**,
-   Node, con `rootDir` en `compras-don-gines`.
-3. Completar en *Environment* las variables marcadas como `sync: false`:
+1. Render → **New** → **Blueprint** → conectar el repositorio
+   `giselacampana/coursera-test`.
+2. Elegir la rama **`compras-don-gines-deploy`**.
+3. Render lee `render.yaml` **de la raíz del repositorio** y propone el servicio
+   ya configurado: plan **Free**, Node, con `rootDir` en `compras-don-gines`.
+4. Completar en *Environment* las variables marcadas como `sync: false`:
 
    ```
-   DATABASE_URL                 (la cadena del pooler de Supabase)
-   SUPABASE_URL
-   SUPABASE_ANON_KEY
-   SUPABASE_SERVICE_ROLE_KEY
-   APP_URL                      (la URL que asigna Render, ej. https://compras-don-gines.onrender.com)
+   DATABASE_URL                (la cadena del pooler de Supabase)
+   SUPABASE_URL                https://jdhljvfznwkvqcodxrjn.supabase.co
+   SUPABASE_PUBLISHABLE_KEY    sb_publishable_…
+   SUPABASE_SECRET_KEY         sb_secret_…
+   APP_URL                     (la URL que asigne Render, ej. https://compras-don-gines.onrender.com)
    ```
 
    `STORAGE_SIGNING_SECRET` la genera Render sola. El resto viene del archivo.
 
-4. Deploy. El primer build tarda unos minutos: instala, aplica las migraciones y
+5. Deploy. El primer build tarda unos minutos: instala, aplica las migraciones y
    compila.
+
+> **`render.yaml` va en la raíz del repositorio.** Render busca el blueprint ahí
+> y sólo ahí. Estuvo un tiempo dentro de `compras-don-gines/` y por eso Render
+> no lo encontraba. La aplicación sigue viviendo en la subcarpeta: eso lo
+> resuelve `rootDir` dentro del archivo, no la ubicación del archivo.
 
 > **Verificá que el plan diga Free.** Render no sube de plan solo, pero conviene
 > mirarlo una vez.
