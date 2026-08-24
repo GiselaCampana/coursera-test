@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getDocumentForReview } from '@/lib/services/documents';
 import { getStorage } from '@/lib/storage';
@@ -28,7 +28,7 @@ interface Props {
 }
 
 export default async function PaginaComprobante({ params, searchParams }: Props) {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   const { id } = await params;
   const { guardado } = await searchParams;
 
