@@ -79,9 +79,29 @@ export interface ValidationReport {
     netAmount: string;
     ivaAmount: string;
     perceptionAmount: string;
+    /**
+     * Las percepciones abiertas por etiqueta, en el orden del comprobante.
+     *
+     * El resumen las muestra por separado —"Percepción IVA RG 5329" y
+     * "Percepción IIBB Buenos Aires"— porque así están impresas y así se
+     * pueden contrastar. Un único "Percepciones" no se compara con nada.
+     */
+    perceptionsByLabel: { label: string; amount: string }[];
+    /**
+     * Los centavos de redondeo entre la suma de los renglones y el neto impreso.
+     *
+     * El costo final se arma sobre los importes del pie, que son la fuente de
+     * verdad, así que cuando los renglones quedan a unos centavos hay que decir
+     * dónde están: sin este renglón el resumen mostraría un total que no se
+     * puede reconstruir sumando lo que está arriba.
+     */
+    netRounding: string;
     totalCost: string;
     totalQuantityKg: string;
     totalUnits: string;
+    /** Cuántos artículos van por kilo y cuántos por unidad. */
+    kgItemCount: number;
+    unitItemCount: number;
   };
   errorCount: number;
   warningCount: number;
@@ -555,9 +575,16 @@ export function validateDocument(input: ValidationInput): ValidationReport {
       netAmount: sums.netAmount.toFixed(2),
       ivaAmount: sums.ivaAmount.toFixed(2),
       perceptionAmount: sums.perceptionAmount.toFixed(2),
+      perceptionsByLabel: sums.perceptionsByLabel.map((p) => ({
+        label: p.label,
+        amount: p.amount.toFixed(2),
+      })),
+      netRounding: sums.netRounding.toFixed(2),
       totalCost: sums.totalCost.toFixed(2),
       totalQuantityKg: sums.totalQuantityKg.toFixed(3),
       totalUnits: sums.totalUnits.toFixed(3),
+      kgItemCount: sums.kgItemCount,
+      unitItemCount: sums.unitItemCount,
     },
   };
 }

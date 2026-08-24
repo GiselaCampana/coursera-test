@@ -111,3 +111,70 @@ describe('kilos, piezas y peso promedio', () => {
     expect(sums.totalUnits.toFixed(2)).toBe('24.00');
   });
 });
+
+describe('el pie impreso manda sobre el costo final', () => {
+  /** Dos renglones de $1.000 cada uno, con IVA del 21 % y $50 de percepción. */
+  const dosRenglones: RawItem[] = [
+    {
+      lineNumber: 1,
+      description: 'Primero',
+      quantity: '10',
+      unit: 'KG',
+      unitNetPrice: '100',
+      grossSubtotal: '1000',
+      ivaRate: '0.21',
+    },
+    {
+      lineNumber: 2,
+      description: 'Segundo',
+      quantity: '10',
+      unit: 'KG',
+      unitNetPrice: '100',
+      grossSubtotal: '1000',
+      ivaRate: '0.21',
+    },
+  ];
+
+  const sumaDeCostos = (items: ReturnType<typeof costItems>) =>
+    items.reduce((acc, i) => acc.plus(i.totalCost), new Decimal(0));
+
+  it('los costos finales caen exactamente sobre el total impreso', () => {
+    const items = costItems(dosRenglones, {
+      netTotal: '2000',
+      ivaTotal: '420',
+      perceptionsTotal: '50',
+    });
+    expect(sumaDeCostos(items).toFixed(2)).toBe('2470.00');
+  });
+
+  it('absorbe los centavos de redondeo del proveedor sin tocar el neto del renglón', () => {
+    /*
+     * El papel dice $2.000,05 de neto y los renglones suman $2.000: son los
+     * cinco centavos que el proveedor redondea renglón por renglón. El costo
+     * final se arma sobre el neto impreso —es lo que hay que pagar— pero el
+     * neto de cada renglón queda como está, que es contra lo que se controla.
+     */
+    const items = costItems(dosRenglones, {
+      netTotal: '2000.05',
+      ivaTotal: '420.01',
+      perceptionsTotal: '50',
+    });
+    expect(sumaDeCostos(items).toFixed(2)).toBe('2470.06');
+    expect(items.map((i) => i.netAmount.toFixed(2))).toEqual(['1000.00', '1000.00']);
+    expect(summarizeItems(items).netAmount.toFixed(2)).toBe('2000.00');
+    expect(summarizeItems(items).netRounding.toFixed(2)).toBe('0.05');
+  });
+
+  it('con una diferencia de un peso o más no estira nada', () => {
+    // Un peso ya no es redondeo: falta un renglón o hay uno mal leído. El costo
+    // se arma con lo que dicen los renglones y la diferencia queda a la vista
+    // para que los autocontroles la marquen.
+    const items = costItems(dosRenglones, {
+      netTotal: '2001',
+      ivaTotal: '420.21',
+      perceptionsTotal: '50',
+    });
+    expect(sumaDeCostos(items).toFixed(2)).toBe('2470.21');
+    expect(summarizeItems(items).netRounding.toFixed(2)).toBe('0.00');
+  });
+});

@@ -143,6 +143,50 @@ test.describe('lectura de una foto real de Errecalde', () => {
     await expect(detalle).toContainText(/3\.830\.467,\d\d/);
   });
 
+  test('el resumen muestra los kilos, las unidades y los impuestos por separado', async ({
+    page,
+  }, testInfo) => {
+    soloEnIphone(test, testInfo.project.name);
+    await leer(page, await fotoErrecalde());
+
+    /*
+     * Lo que se controla acá es el recálculo posterior a la lectura, que es
+     * donde la pantalla mostraba 550,59 kg —los 479,59 kg de fiambre más las
+     * 71 latas, sumados como si fueran lo mismo— y un "costo total" que en
+     * realidad era el neto.
+     *
+     * Los importes van sin el signo pesos: el formato es-AR lo separa con un
+     * espacio angosto que una expresión regular no normaliza.
+     */
+    const detalle = page.locator('.card', { hasText: 'Lo que da el detalle' });
+    // La etiqueta se busca contra el <dt> y anclada al principio: "IVA" no
+    // puede engancharse con "Percepción IVA RG 5329", que es otro número.
+    const dato = (etiqueta: string) =>
+      detalle
+        .locator('.dato')
+        .filter({ has: page.locator('dt', { hasText: new RegExp(`^${etiqueta}`) }) })
+        .locator('dd');
+
+    await expect(dato('Renglones')).toHaveText('23');
+
+    // Los kilos son sólo de los 16 artículos que se venden por peso.
+    await expect(dato('Kilos')).toContainText('480,34 kg');
+    await expect(dato('Kilos')).toContainText('16 artículos');
+
+    // Y las 71 unidades van aparte, con los 7 artículos que las componen.
+    await expect(dato('Unidades')).toContainText('71');
+    await expect(dato('Unidades')).toContainText('7 artículos');
+
+    // Del neto al total, impuesto por impuesto, como los imprime el pie.
+    await expect(dato('Neto')).toContainText(/3\.830\.467,\d\d/);
+    await expect(dato('IVA')).toContainText(/804\.398,1\d/);
+    await expect(dato('Percepción IVA')).toContainText(/114\.914,0\d/);
+    await expect(dato('Percepción IIBB')).toContainText(/67\.033,1\d/);
+
+    // El total es el costo real de la compra, no el neto otra vez.
+    await expect(dato('Total del comprobante')).toContainText(/4\.816\.812,73/);
+  });
+
   test('distingue los artículos por kilo de los que van por unidad', async ({ page }, testInfo) => {
     soloEnIphone(test, testInfo.project.name);
     await leer(page, await fotoErrecalde());

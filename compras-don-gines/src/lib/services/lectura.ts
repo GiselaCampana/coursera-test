@@ -5,7 +5,12 @@ import { type AuthUser } from '@/lib/auth/session';
 import { toDecimal } from '@/lib/money';
 import { arToday, parseArDate } from '@/lib/datetime';
 import { computeDueDate } from '@/lib/domain/payments';
-import { costItems, type CostedItem, type RawItem } from '@/lib/domain/costing';
+import {
+  consistentPerceptionLines,
+  costItems,
+  type CostedItem,
+  type RawItem,
+} from '@/lib/domain/costing';
 import {
   validateDocument,
   type PrintedSummary,
@@ -411,6 +416,12 @@ function elegirMejor(
       netTotal: printed.netTotal ?? '0',
       ivaTotal: printed.ivaTotal ?? '0',
       perceptionsTotal: printed.perceptionsTotal ?? '0',
+      // Las percepciones que el comprobante discrimina, para repartir cada una
+      // contra su propio importe impreso en vez de repartir el bulto.
+      perceptionLines: consistentPerceptionLines(
+        candidato.summary?.perceptionLines,
+        printed.perceptionsTotal ?? '0',
+      ),
     });
     const informe = validateDocument({
       items: costeados,

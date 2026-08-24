@@ -49,6 +49,20 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         netWeightKg: document.printedNetWeightKg?.toString() ?? null,
         totalUnits: document.printedTotalUnits?.toString() ?? null,
       },
+      /*
+       * El IVA y las percepciones tal como los discrimina el comprobante.
+       *
+       * La pantalla las necesita para dos cosas: mostrarlas por separado en el
+       * resumen —"Percepción IVA RG 5329" y "Percepción IIBB Buenos Aires" son
+       * dos números distintos del papel— y repartir cada una contra su propio
+       * importe al recalcular, que es como las reparte el servidor.
+       */
+      impuestos: document.taxLines.map((linea) => ({
+        tipo: linea.kind,
+        etiqueta: linea.label,
+        tasa: linea.rate.toString(),
+        importe: linea.amount.toString(),
+      })),
       condiciones: {
         plazo: document.appliedTermType,
         dias: document.appliedTermDays,

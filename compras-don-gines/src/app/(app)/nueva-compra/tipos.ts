@@ -64,6 +64,10 @@ export interface InformeControl {
     netAmount: string;
     ivaAmount: string;
     perceptionAmount: string;
+    perceptionsByLabel: { label: string; amount: string }[];
+    netRounding: string;
+    kgItemCount: number;
+    unitItemCount: number;
     totalCost: string;
     totalQuantityKg: string;
     totalUnits: string;
@@ -92,6 +96,8 @@ export interface ComprobanteRevision {
   control: string;
   informe: InformeControl | null;
   resumen: ResumenComprobante;
+  /** IVA y percepciones discriminados tal como los imprime el comprobante. */
+  impuestos: { tipo: 'IVA' | 'PERCEPCION'; etiqueta: string; tasa: string; importe: string }[];
   condiciones: {
     plazo: string | null;
     dias: number | null;

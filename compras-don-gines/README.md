@@ -321,6 +321,27 @@ prorrateados sobre el neto, `costo total = neto + IVA + percepciones`,
 ajusta en el último artículo**, para que la suma dé exactamente el IVA y la percepción de
 la factura.
 
+Tres reglas que hacen que el costo sea el costo y no otra cosa:
+
+- **Los kilos y las unidades no se suman.** Un artículo por peso aporta a los kilos y uno
+  por unidad a las unidades; el resumen muestra las dos magnitudes por separado, con
+  cuántos artículos componen cada una. Y el neto de un renglón por kilo es
+  `kilos × precio por kilo`: la columna de piezas es un dato del bulto, no un factor.
+- **"Costo total" no es sinónimo de "neto".** El costo real de comprar incluye el IVA y
+  todas las percepciones, así que el resumen abre neto, IVA y **cada percepción con su
+  etiqueta impresa** —"Percepción IVA RG 5329" y "Percepción IIBB Buenos Aires" son dos
+  números distintos del papel— antes de llegar al total. Cada percepción se prorratea
+  contra su propio importe impreso, no como un bulto único, así lo repartido cierra
+  exactamente con cada renglón del pie y se puede decir cuánta percepción de IVA le tocó a
+  un artículo.
+- **El pie impreso es la fuente de verdad.** El costo final se arma repartiendo los
+  importes del pie, de modo que la suma de los costos de todos los renglones caiga
+  exactamente en el total impreso. Cuando la suma de los renglones queda a centavos del
+  neto impreso —el proveedor redondea renglón por renglón— esos centavos se reparten de
+  forma determinística y aparecen como un renglón propio, "Redondeo contra el neto
+  impreso": el resumen se puede sumar a mano. Si la diferencia llega a **$1 o más** no se
+  estira nada: es un renglón mal leído o faltante, y los autocontroles lo marcan.
+
 Por comprobante se controla que la suma de los netos coincida con el neto impreso, que el
 bruto y los descuentos coincidan, que los kilos sumen el peso neto, que la cantidad de
 renglones coincida con la impresa, que el IVA y las percepciones se correspondan con las
@@ -453,6 +474,15 @@ foto del teléfono:
 | Percepción IIBB Buenos Aires | $67.033,18 | $67.033,18 |
 | Total | $4.816.812,73 | $4.816.812,73 |
 | Artículos por kilo / por unidad | 16 / 7 | 16 / 7 |
+| Kilos (sólo los 16 por peso) | 480,34 kg | 480,34 kg |
+| Unidades (sólo los 7 por unidad) | 71 | 71 |
+| Suma de los 23 costos finales | $4.816.812,73 | $4.816.812,73 |
+
+Las cuatro últimas filas son la prueba de regresión de los cálculos **posteriores** al
+OCR (`tests/unit/errecalde-calculos.test.ts`): falla si vuelve a aparecer un neto distinto
+de $3.830.467,37, kilos distintos de 480,34 —sumar las 71 unidades daría 551— o un costo
+total distinto de $4.816.812,73. Son dos etapas separadas y fallan por motivos distintos:
+la factura puede leerse perfecta y el resumen mostrar igual un total mal armado.
 
 Esta factura mezcla las dos formas de vender en la misma columna: "39.2 kg" al lado de un
 "6" pelado que son seis latas. Lo único que las distingue es el sufijo impreso, y por eso

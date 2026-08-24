@@ -5,7 +5,12 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { Decimal, money, parseArNumber, toDecimal } from '@/lib/money';
 import { arToday, dateOnlyFromISO, parseArDate, toDateOnly } from '@/lib/datetime';
-import { costItems, type CostedItem, type RawItem } from '@/lib/domain/costing';
+import {
+  consistentPerceptionLines,
+  costItems,
+  type CostedItem,
+  type RawItem,
+} from '@/lib/domain/costing';
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
@@ -428,10 +433,31 @@ export async function confirmDocument(
 
   // --- Revalidación completa en el backend --------------------------------
   const conditions = await getSupplierConditions(supplier.id, issueDate);
+
+  /*
+   * Las percepciones discriminadas salen de lo que quedó guardado al leer el
+   * comprobante, no de lo que manda el navegador.
+   *
+   * El cliente sólo edita el total de percepciones; el desglose lo leyó el
+   * servidor y está en las líneas de impuestos del comprobante. Usarlo acá hace
+   * que el guardado reparta exactamente igual que la lectura y que la pantalla:
+   * repartir cada percepción por separado o repartir el bulto da los mismos
+   * totales pero puede mover un centavo de un artículo a otro, y un comprobante
+   * tiene que costar lo mismo mirado desde donde se lo mire.
+   */
+  const percepcionesGuardadas = await prisma.documentTaxLine.findMany({
+    where: { documentId: input.documentId, kind: 'PERCEPCION' },
+    orderBy: { id: 'asc' },
+  });
+
   const costed = costItems(input.items, {
     netTotal: input.printed.netTotal ?? '0',
     ivaTotal: input.printed.ivaTotal ?? '0',
     perceptionsTotal: input.printed.perceptionsTotal ?? '0',
+    perceptionLines: consistentPerceptionLines(
+      percepcionesGuardadas.map((l) => ({ label: l.label, amount: l.amount.toString() })),
+      input.printed.perceptionsTotal ?? '0',
+    ),
   });
   const report = validateDocument({
     items: costed,

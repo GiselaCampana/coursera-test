@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { costItems, type RawItem } from '@/lib/domain/costing';
+import { consistentPerceptionLines, costItems, type RawItem } from '@/lib/domain/costing';
 import { validateDocument } from '@/lib/domain/validation';
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL } from '@/lib/domain/payments';
 import { formatARS, formatQty } from '@/lib/money';
@@ -162,6 +162,15 @@ export function PasoRevision({
       netTotal: printed.netTotal ?? '0',
       ivaTotal: printed.ivaTotal ?? '0',
       perceptionsTotal: printed.perceptionsTotal ?? '0',
+      // Las percepciones que el comprobante discrimina. `consistentPerceptionLines`
+      // las descarta si alguien editó el total y ya no lo suman, para que el
+      // desglose no contradiga el número de arriba.
+      perceptionLines: consistentPerceptionLines(
+        comprobante.impuestos
+          .filter((i) => i.tipo === 'PERCEPCION')
+          .map((i) => ({ label: i.etiqueta, amount: i.importe })),
+        printed.perceptionsTotal ?? '0',
+      ),
     });
 
     const reglas =
@@ -198,6 +207,7 @@ export function PasoRevision({
     comprobante.condiciones,
     comprobante.lecturas.length,
     comprobante.informe,
+    comprobante.impuestos,
   ]);
 
   // Al cambiar el proveedor o la fecha se recalcula la fecha prevista de pago.
@@ -701,6 +711,33 @@ export function PasoRevision({
                       <dt>Neto del renglón</dt>
                       <dd>{formatARS(calculado.netAmount)}</dd>
                     </div>
+                    {/*
+                      De dónde sale el costo de este artículo: su neto más la
+                      parte que le toca de cada impuesto del comprobante. Sin
+                      esto, el costo unitario final es un número que aparece sin
+                      explicación.
+                    */}
+                    <div className="dato">
+                      <dt>IVA proporcional</dt>
+                      <dd>{formatARS(calculado.ivaAmount)}</dd>
+                    </div>
+                    {calculado.perceptionBreakdown.map((percepcion) => (
+                      <div className="dato" key={percepcion.label}>
+                        <dt>{percepcion.label} proporcional</dt>
+                        <dd>{formatARS(percepcion.amount)}</dd>
+                      </div>
+                    ))}
+                    {/* El centavo de redondeo que le tocó, si le tocó alguno. */}
+                    {!calculado.netCostBase.eq(calculado.netAmount) ? (
+                      <div className="dato">
+                        <dt>Redondeo</dt>
+                        <dd>{formatARS(calculado.netCostBase.minus(calculado.netAmount))}</dd>
+                      </div>
+                    ) : null}
+                    <div className="dato">
+                      <dt>Costo final del renglón</dt>
+                      <dd>{formatARS(calculado.totalCost)}</dd>
+                    </div>
                     <div className="dato">
                       <dt>Costo unitario final</dt>
                       <dd>
@@ -808,9 +845,25 @@ export function PasoRevision({
             <dt>Renglones</dt>
             <dd>{informe.computed.itemCount}</dd>
           </div>
+          {/*
+            Kilos y unidades por separado, nunca sumados.
+            Son magnitudes distintas: 480,34 kg de fiambre y 71 latas no se
+            suman a 551. Cada una dice cuántos artículos la componen, para poder
+            contarlos contra el papel.
+          */}
           <div className="dato">
             <dt>Kilos</dt>
-            <dd>{formatQty(informe.computed.totalQuantityKg, 2)} kg</dd>
+            <dd>
+              {formatQty(informe.computed.totalQuantityKg, 2)} kg
+              <span className="chico medio"> · {informe.computed.kgItemCount} artículos</span>
+            </dd>
+          </div>
+          <div className="dato">
+            <dt>Unidades</dt>
+            <dd>
+              {formatQty(informe.computed.totalUnits, 0)}
+              <span className="chico medio"> · {informe.computed.unitItemCount} artículos</span>
+            </dd>
           </div>
           <div className="dato">
             <dt>Subtotal bruto</dt>
@@ -824,11 +877,45 @@ export function PasoRevision({
             <dt>Neto</dt>
             <dd>{formatARS(informe.computed.netAmount)}</dd>
           </div>
+          {/*
+            Los centavos que separan la suma de los renglones del neto impreso.
+            El costo final se arma sobre los importes del pie, que es lo que la
+            sucursal termina pagando, así que si los renglones quedan a unos
+            centavos hay que decir dónde están: el resumen tiene que poder
+            sumarse a mano y dar el total de abajo.
+          */}
+          {informe.computed.netRounding !== '0.00' ? (
+            <div className="dato">
+              <dt>Redondeo contra el neto impreso</dt>
+              <dd>{formatARS(informe.computed.netRounding)}</dd>
+            </div>
+          ) : null}
+
+          {/*
+            Del neto al costo final, un renglón por cada impuesto.
+            El costo de comprar no es el neto: es el neto más todo lo que hay
+            que pagar por él. Mostrarlos sumados en un solo "impuestos" impide
+            contrastar cada uno con su renglón del pie de la factura.
+          */}
+          <div className="dato">
+            <dt>IVA</dt>
+            <dd>{formatARS(informe.computed.ivaAmount)}</dd>
+          </div>
+          {informe.computed.perceptionsByLabel.map((percepcion) => (
+            <div className="dato" key={percepcion.label}>
+              <dt>{percepcion.label}</dt>
+              <dd>{formatARS(percepcion.amount)}</dd>
+            </div>
+          ))}
           <div className="dato destacado">
-            <dt>Costo total</dt>
+            <dt>Total del comprobante</dt>
             <dd>{formatARS(informe.computed.totalCost)}</dd>
           </div>
         </dl>
+        <p className="ayuda mb0">
+          El total es el costo real de la compra: el neto más el IVA y las percepciones. Cada
+          artículo lleva su parte proporcional, repartida sobre los importes impresos del pie.
+        </p>
       </div>
 
       {informe.canSave ? (

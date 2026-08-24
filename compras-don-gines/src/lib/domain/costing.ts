@@ -48,9 +48,50 @@ export interface CostedItem {
   netAmount: Decimal;
   ivaRate: Decimal;
   ivaAmount: Decimal;
+  /** Suma de todas las percepciones que le tocaron al artículo. */
   perceptionAmount: Decimal;
+  /**
+   * Esa misma suma, abierta por percepción impresa.
+   *
+   * Es lo que permite explicar el costo de un artículo renglón por renglón:
+   * neto + IVA + percepción de IVA + percepción de IIBB. Cuando el comprobante
+   * no discrimina las percepciones queda una sola entrada con el total.
+   */
+  perceptionBreakdown: PerceptionShare[];
+  /**
+   * El neto con el que se armó el costo final del renglón.
+   *
+   * Casi siempre es el mismo `netAmount`. Se separa porque el pie impreso manda:
+   * cuando la suma de los renglones queda a unos centavos del neto impreso —el
+   * proveedor redondea cada renglón por su cuenta, y el OCR puede perder un
+   * centavo suelto— el costo final se arma repartiendo el neto **impreso**, para
+   * que la suma de los costos de los 23 renglones caiga exactamente en el total
+   * del papel y no un centavo más abajo.
+   *
+   * `netAmount` no se toca: sigue siendo lo que dice el renglón, que es contra
+   * lo que se controla. La diferencia entre los dos queda a la vista en el
+   * resumen en vez de esconderse dentro de los importes.
+   */
+  netCostBase: Decimal;
   totalCost: Decimal;
   unitCost: Decimal;
+}
+
+/**
+ * Hasta cuánto puede apartarse la suma de los renglones del neto impreso para
+ * seguir tratándose como redondeo.
+ *
+ * Es el mismo peso que usa la conciliación de centavos. Más que eso ya no es
+ * redondeo: es un renglón mal leído o faltante, los autocontroles lo marcan y
+ * el costo se arma con lo que efectivamente dicen los renglones, sin estirarlo
+ * hasta un total que no le corresponde.
+ */
+const MARGEN_DE_REDONDEO = new Decimal('1');
+
+/** Una percepción tal como la imprime el comprobante. */
+export interface PerceptionLine {
+  label: string;
+  amount: MoneyInput;
 }
 
 export interface DocumentTotals {
@@ -58,6 +99,23 @@ export interface DocumentTotals {
   netTotal: MoneyInput;
   ivaTotal: MoneyInput;
   perceptionsTotal: MoneyInput;
+  /**
+   * Las percepciones discriminadas, cuando el comprobante las imprime por
+   * separado —"Percepción IVA RG 5329" y "Percepción IIBB Buenos Aires"—.
+   *
+   * Cada una se prorratea por su cuenta contra su propio importe impreso, así
+   * que la suma de lo repartido da exactamente lo que dice el papel para cada
+   * una, y no sólo para el conjunto. Sin esto no se puede decir cuánta
+   * percepción de IVA le tocó a un artículo, que es lo que hace falta para
+   * explicar su costo.
+   */
+  perceptionLines?: PerceptionLine[] | null;
+}
+
+/** Lo que le tocó a un artículo de cada percepción impresa. */
+export interface PerceptionShare {
+  label: string;
+  amount: Decimal;
 }
 
 /**
@@ -89,6 +147,30 @@ export function prorate(weights: Decimal[], total: MoneyInput): Decimal[] {
   // El último absorbe la diferencia de redondeo.
   parts.push(money(amount.minus(accumulated)));
   return parts;
+}
+
+/**
+ * Las percepciones discriminadas, pero sólo si siguen cuadrando con el total.
+ *
+ * El detalle de las percepciones se lee una vez y queda guardado, mientras que
+ * el total de percepciones es un campo editable de la pantalla de revisión. Si
+ * alguien lo corrige a mano, el detalle viejo deja de sumar ese total y usarlo
+ * mostraría un desglose que contradice el número de arriba.
+ *
+ * Con esta comprobación, las tres partes del sistema que costean —la lectura,
+ * la pantalla y el guardado— deciden lo mismo con la misma regla, y un
+ * comprobante cuesta igual mirado desde donde se lo mire. Repartir por separado
+ * o repartir el total junto da los mismos totales pero puede mover un centavo
+ * de un artículo a otro, así que no da lo mismo quién lo haga.
+ */
+export function consistentPerceptionLines(
+  lines: PerceptionLine[] | null | undefined,
+  aggregate: MoneyInput,
+): PerceptionLine[] | undefined {
+  if (!lines || lines.length === 0) return undefined;
+  const total = money(aggregate);
+  const suma = lines.reduce<Decimal>((acc, l) => acc.plus(money(l.amount)), ZERO);
+  return suma.minus(total).abs().lte('0.01') ? lines : undefined;
 }
 
 /**
@@ -163,14 +245,52 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
     ivaParts = prorateByRateGroups(nets, rates, ivaTotal);
   }
 
-  // Las percepciones (IIBB y otras) se calculan sobre el neto, sin distinguir
-  // tasa de IVA.
-  const perceptionParts = prorate(nets, perceptionsTotal);
+  /*
+   * Las percepciones se reparten sobre el neto, cada una por separado.
+   *
+   * Prorratear el conjunto y después abrirlo por porcentaje volvería a
+   * introducir el redondeo que se quiere evitar. Repartiendo cada percepción
+   * contra su propio importe impreso, la suma de lo que se le asignó a cada
+   * artículo da exactamente el número del papel para *esa* percepción, y la
+   * suma de todas da el total. El residuo de redondeo lo absorbe el último
+   * artículo, que es determinístico: dos corridas con los mismos datos reparten
+   * igual.
+   */
+  const lineasDePercepcion =
+    totals.perceptionLines && totals.perceptionLines.length > 0
+      ? totals.perceptionLines
+      : [{ label: 'Percepciones', amount: perceptionsTotal }];
+
+  const repartoPorPercepcion = lineasDePercepcion.map((linea) => ({
+    label: linea.label,
+    partes: prorate(nets, linea.amount),
+  }));
+
+  const perceptionParts = resolved.map((_, i) =>
+    money(repartoPorPercepcion.reduce((suma, p) => suma.plus(p.partes[i]), ZERO)),
+  );
+
+  /*
+   * El neto con el que se arma el costo final.
+   *
+   * El pie impreso es la fuente de verdad: el IVA y las percepciones ya se
+   * reparten contra sus importes del papel, así que el neto se reparte igual y
+   * el costo total cae exactamente en el total impreso. Sólo se hace cuando la
+   * diferencia contra la suma de los renglones es de redondeo (menos de un
+   * peso); si es más, no se estira nada y el costo queda armado con lo que
+   * dicen los renglones, para que la diferencia se vea.
+   */
+  const netTotal = money(totals.netTotal);
+  const netoDelDetalle = nets.reduce<Decimal>((acc, n) => acc.plus(n), ZERO);
+  const esRedondeo =
+    !netTotal.isZero() && netTotal.minus(netoDelDetalle).abs().lt(MARGEN_DE_REDONDEO);
+  const netBases = esRedondeo ? prorate(nets, netTotal) : nets;
 
   return resolved.map((r, i) => {
     const ivaAmount = ivaParts[i];
     const perceptionAmount = perceptionParts[i];
-    const totalCost = money(r.netAmount.plus(ivaAmount).plus(perceptionAmount));
+    const netCostBase = netBases[i];
+    const totalCost = money(netCostBase.plus(ivaAmount).plus(perceptionAmount));
     const quantity = r.quantity;
     const unitCost = quantity.isZero() ? ZERO : money(totalCost.div(quantity));
 
@@ -205,6 +325,11 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
       ivaRate: rates[i],
       ivaAmount,
       perceptionAmount,
+      perceptionBreakdown: repartoPorPercepcion.map((p) => ({
+        label: p.label,
+        amount: p.partes[i],
+      })),
+      netCostBase,
       totalCost,
       unitCost,
     };
@@ -248,13 +373,39 @@ export function summarizeItems(items: CostedItem[]) {
   const add = (pick: (i: CostedItem) => Decimal) =>
     items.reduce<Decimal>((acc, i) => acc.plus(pick(i)), ZERO);
 
+  /*
+   * Las percepciones, sumadas por etiqueta y en el orden en que las imprime el
+   * comprobante. Con esto el resumen puede mostrar "Percepción IVA RG 5329" y
+   * "Percepción IIBB Buenos Aires" por separado, que es como están en el papel,
+   * en vez de un único "Percepciones" que no se puede contrastar con nada.
+   */
+  const percepciones = new Map<string, Decimal>();
+  for (const item of items) {
+    for (const parte of item.perceptionBreakdown) {
+      percepciones.set(parte.label, (percepciones.get(parte.label) ?? ZERO).plus(parte.amount));
+    }
+  }
+
   return {
+    perceptionsByLabel: [...percepciones].map(([label, amount]) => ({
+      label,
+      amount: money(amount),
+    })),
+    /** Cuántos artículos se venden por kilo y cuántos por unidad. */
+    kgItemCount: items.filter((i) => i.unit === 'KG').length,
+    unitItemCount: items.filter((i) => i.unit === 'UNIT').length,
     count: items.length,
     grossSubtotal: money(add((i) => i.grossSubtotal)),
     discountAmount: money(add((i) => i.discountAmount)),
     netAmount: money(add((i) => i.netAmount)),
     ivaAmount: money(add((i) => i.ivaAmount)),
     perceptionAmount: money(add((i) => i.perceptionAmount)),
+    /**
+     * Los centavos que separan la suma de los renglones del neto impreso con el
+     * que se armó el costo final. Casi siempre cero; cuando no lo es se muestra
+     * como un renglón propio, así el resumen suma sin trampas.
+     */
+    netRounding: money(add((i) => i.netCostBase).minus(add((i) => i.netAmount))),
     totalCost: money(add((i) => i.totalCost)),
     totalQuantityKg: items
       .filter((i) => i.unit === 'KG')
