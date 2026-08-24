@@ -209,6 +209,23 @@ cambió ninguna contraseña»*, el administrador ya estaba. **Cambiar
 de alta, no un modo de resetearla. Para eso está la pantalla de cambio, o
 *Configuración → Usuarios* con otro administrador.
 
+## El chequeo de salud
+
+Render marca el despliegue como bueno cuando `healthCheckPath` contesta 200. Ese
+camino es **`/api/health`**, un endpoint propio que devuelve `{"estado":"ok"}` y
+no toca nada más: ni cookies, ni sesión, ni permisos, ni la base, ni el
+almacenamiento, ni ninguna pantalla.
+
+Que no consulte la base es a propósito. Si lo hiciera, un rato de Supabase caído
+no dejaría la aplicación degradada sino **reiniciándose en loop**, porque Render
+mata lo que no pasa el chequeo. Que la base esté sana es otra pregunta y se
+contesta en otro lado.
+
+Antes apuntaba a `/ingresar`. Esa pantalla es pública, pero sigue siendo una
+pantalla: pasa por el renderizado de React, lee cookies y puede redirigir. Con eso,
+cualquier cambio ahí se convertía sin querer en un requisito para que el despliegue
+terminara.
+
 ## Comprobar qué versión quedó desplegada
 
 Cada vez que se sube un cambio y hay que confirmar que llegó:
