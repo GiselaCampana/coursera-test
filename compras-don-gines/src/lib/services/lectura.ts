@@ -49,6 +49,15 @@ export interface PaginaLeida {
   confianza?: number | null;
   inclinacion?: number | null;
   perspectivaCorregida?: boolean | null;
+  /**
+   * Lo que el lector vio en la página antes de interpretar nada.
+   *
+   * `filasDetectadas` es cuántas filas de la tabla contó sobre la imagen. Sirve
+   * para contrastarlo contra cuántos renglones se pudieron entender: son dos
+   * medidas independientes, y la diferencia entre ellas es la que delata una
+   * lectura incompleta.
+   */
+  regiones?: { filasDetectadas?: number | null } | null;
 }
 
 export interface LecturaEntrante {
@@ -82,6 +91,8 @@ interface Candidato {
   items: RawItem[];
   analizador: string;
   observaciones: string[];
+  /** Filas que el lector contó en la imagen, sumando todas las páginas. */
+  filasEnLaImagen: number | null;
 }
 
 interface CandidatoEvaluado extends Candidato {
@@ -275,6 +286,7 @@ export async function registrarLectura(
 function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candidato[] {
   const conRecortes = juntarPaginas(paginas, false);
   const soloCompleto = juntarPaginas(paginas, true);
+  const filasEnLaImagen = contarFilasVistas(paginas);
 
   const candidatos: Candidato[] = [];
   for (const [modo, textos] of [
@@ -292,9 +304,24 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
       items: toRawItems(analisis.items),
       analizador: analizador.codigo,
       observaciones: analisis.observaciones,
+      filasEnLaImagen,
     });
   }
   return candidatos;
+}
+
+/** Filas de tabla que el lector contó en la imagen, sumando las páginas. */
+function contarFilasVistas(paginas: PaginaLeida[]): number | null {
+  let total = 0;
+  let alguna = false;
+  for (const pagina of paginas) {
+    const filas = pagina.regiones?.filasDetectadas;
+    if (typeof filas === 'number' && filas > 0) {
+      total += filas;
+      alguna = true;
+    }
+  }
+  return alguna ? total : null;
 }
 
 /** Une las páginas en un solo juego de textos por zona. */
@@ -346,6 +373,7 @@ function elegirMejor(
       printed,
       supplierRules: reglas,
       attempts: intentos,
+      filasEnLaImagen: candidato.filasEnLaImagen,
     });
 
     const diferencia = printed.netTotal

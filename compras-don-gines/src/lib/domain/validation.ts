@@ -48,6 +48,15 @@ export interface ValidationInput {
   supplierRules?: SupplierTaxExpectation;
   /** Cantidad de lecturas que hizo falta. >1 y sin errores => amarillo. */
   attempts?: number;
+  /**
+   * Cuántas filas se vieron en la imagen, contadas sobre los renglones que
+   * devolvió el OCR de la página completa antes de interpretarlos.
+   *
+   * Es una medida independiente del analizador: dice cuántas filas hay en el
+   * papel, no cuántas se pudieron entender. La diferencia entre las dos es
+   * justamente lo que hay que detectar.
+   */
+  filasEnLaImagen?: number | null;
 }
 
 export interface ValidationReport {
@@ -127,6 +136,25 @@ function lineProductTolerance(item: { quantity: Decimal }): Decimal {
   return item.quantity.abs().times('0.005').plus('0.02');
 }
 
+/**
+ * A partir de cuántas filas se considera que hay una tabla de verdad.
+ *
+ * Con menos que esto el conteo del lector es demasiado ruidoso para exigirle
+ * nada: una factura de tres renglones puede dar dos o cuatro según cómo caiga
+ * el recorte, y el control haría más ruido que bien.
+ */
+const UMBRAL_TABLA_RECONOCIBLE = 8;
+
+/**
+ * Qué proporción de las filas vistas hay que llegar a interpretar.
+ *
+ * No se exige el 100 %: el lector cuenta filas sobre la página completa y
+ * también se equivoca, de más y de menos. Con el 70 % se detecta una lectura
+ * rota —1 de 23 da 4 %— sin frenar una que perdió un renglón, que el control de
+ * los totales agarra igual.
+ */
+const PROPORCION_MINIMA_DE_FILAS = 0.7;
+
 export function validateDocument(input: ValidationInput): ValidationReport {
   const { items, printed, supplierRules } = input;
   const attempts = input.attempts ?? 1;
@@ -168,6 +196,40 @@ export function validateDocument(input: ValidationInput): ValidationReport {
           `(${sinImporteImpreso.map((i) => `renglón ${i.lineNumber}`).join(', ')}): ` +
           'se calculó como cantidad × precio, así que la cantidad no quedó verificada contra el comprobante.',
   });
+
+  /*
+   * ¿Se interpretaron todas las filas que se ven en la imagen?
+   *
+   * El control existe porque el modo de fallar más peligroso del OCR no es
+   * equivocarse en un número: es devolver un renglón donde hay veintitrés y que
+   * ese único renglón cierre solo. Ahí no hay ninguna cuenta que no dé —el
+   * comprobante queda "controlado" con el 4 % de la mercadería— y la diferencia
+   * sólo se descubre pagándola.
+   *
+   * Las dos cifras vienen de lugares distintos: `filasEnLaImagen` la cuenta el
+   * lector sobre la página, antes de interpretar nada, y `items.length` es lo
+   * que el analizador logró entender. Si la segunda se queda muy corta respecto
+   * de la primera, la lectura está incompleta, sin importar cuán bien cierren
+   * los renglones que sí se leyeron.
+   */
+  const filasVistas = input.filasEnLaImagen ?? null;
+  if (filasVistas !== null && filasVistas >= UMBRAL_TABLA_RECONOCIBLE) {
+    const faltan = filasVistas - items.length;
+    const proporcion = items.length / filasVistas;
+    checks.push({
+      code: 'ART_RENGLONES_COMPLETOS',
+      label: 'Renglones leídos contra filas de la tabla',
+      severity: proporcion >= PROPORCION_MINIMA_DE_FILAS ? 'OK' : 'ERROR',
+      expected: String(filasVistas),
+      actual: String(items.length),
+      message:
+        proporcion >= PROPORCION_MINIMA_DE_FILAS
+          ? `Se interpretaron ${items.length} renglones y en la imagen se ven ${filasVistas} filas.`
+          : `En la imagen se ven ${filasVistas} filas de la tabla y sólo se interpretaron ` +
+            `${items.length}: faltan alrededor de ${faltan}. La lectura está incompleta y no ` +
+            'sirve aunque los renglones leídos cierren entre sí.',
+    });
+  }
 
   checks.push({
     code: 'ART_ARITMETICA',

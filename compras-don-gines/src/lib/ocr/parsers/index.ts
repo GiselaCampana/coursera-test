@@ -1,5 +1,6 @@
 import { analizadorGenerico } from '@/lib/ocr/parsers/generico';
 import { analizadorLosCalvos } from '@/lib/ocr/parsers/los-calvos';
+import { analizadorErrecalde } from '@/lib/ocr/parsers/errecalde';
 import type { AnalizadorComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
 
 /**
@@ -8,7 +9,11 @@ import type { AnalizadorComprobante, TextosComprobante } from '@/lib/ocr/parsers
  * Sumar un proveedor nuevo es escribir su analizador y agregarlo a esta lista.
  * El genérico queda siempre al final como red de contención.
  */
-export const ANALIZADORES: AnalizadorComprobante[] = [analizadorLosCalvos, analizadorGenerico];
+export const ANALIZADORES: AnalizadorComprobante[] = [
+  analizadorLosCalvos,
+  analizadorErrecalde,
+  analizadorGenerico,
+];
 
 export interface AnalizadorElegido {
   analizador: AnalizadorComprobante;
@@ -25,5 +30,5 @@ export function elegirAnalizador(textos: TextosComprobante): AnalizadorElegido {
   return mejor;
 }
 
-export { analizadorGenerico, analizadorLosCalvos };
+export { analizadorGenerico, analizadorLosCalvos, analizadorErrecalde };
 export * from '@/lib/ocr/parsers/tipos';

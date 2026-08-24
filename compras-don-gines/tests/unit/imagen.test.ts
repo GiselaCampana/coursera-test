@@ -12,6 +12,7 @@ import {
   escalar,
   estimarInclinacion,
   normalizarContraste,
+  pareceHojaDePapel,
   recortar,
   reducirRuido,
   rotar,
@@ -246,6 +247,41 @@ describe('perspectiva', () => {
     expect(supDer.x).toBeGreaterThan(140);
     expect(infDer.y).toBeGreaterThan(140);
     expect(infIzq.x).toBeLessThan(60);
+  });
+
+  it('rechaza el cuadrilátero que no puede ser una hoja', () => {
+    /*
+     * Estas son las esquinas que la aplicación encontró en una foto real: la
+     * factura sobre una caja de cartón, con la esquina inferior izquierda a la
+     * mitad de la imagen. El lado izquierdo mide 2810 y el derecho 5690, más
+     * del doble.
+     *
+     * Enderezar por ahí cizalla la página: la descripción de cada renglón queda
+     * más de cien píxeles arriba de sus propios números, ninguna línea del OCR
+     * vuelve a contener la fila entera y el pie se va del recorte. De ahí salían
+     * las lecturas de un solo renglón sin totales. Más vale no corregir nada.
+     */
+    expect(
+      pareceHojaDePapel([
+        { x: 0, y: 46 },
+        { x: 4273, y: 11 },
+        { x: 4273, y: 5701 },
+        { x: 34, y: 2856 },
+      ]),
+    ).toBe(false);
+  });
+
+  it('acepta una hoja fotografiada en ángulo, que sigue siendo un rectángulo', () => {
+    // Perspectiva marcada pero real: lados opuestos parecidos y esquinas que
+    // siguen siendo esquinas. Acá sí conviene corregir.
+    expect(
+      pareceHojaDePapel([
+        { x: 120, y: 60 },
+        { x: 1880, y: 130 },
+        { x: 1820, y: 2600 },
+        { x: 60, y: 2520 },
+      ]),
+    ).toBe(true);
   });
 
   it('no corrige cuando el papel ya ocupa toda la foto', () => {

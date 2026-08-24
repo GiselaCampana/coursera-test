@@ -44,6 +44,10 @@ interface Resultado {
   controles: CheckResult[];
   observaciones: string[];
   textoArticulos: string | null;
+  textoResumen: string | null;
+  textoCompleto: string | null;
+  /** Filas que el lector contó en la imagen, antes de interpretar nada. */
+  filasDetectadas: number | null;
   errorWorker: string | null;
 }
 
@@ -126,7 +130,10 @@ export function PanelDiagnostico({
         estado: analisis.estado ?? null,
         controles: analisis.controles ?? [],
         observaciones: analisis.observaciones ?? [],
-        textoArticulos: lectura.paginas[0]?.textoArticulos ?? lectura.paginas[0]?.textoCompleto ?? null,
+        textoArticulos: lectura.paginas[0]?.textoArticulos ?? null,
+        textoResumen: lectura.paginas[0]?.textoResumen ?? null,
+        textoCompleto: lectura.paginas[0]?.textoCompleto ?? null,
+        filasDetectadas: lectura.paginas[0]?.regiones?.filasDetectadas ?? null,
         errorWorker,
       });
     } catch (e) {
@@ -139,6 +146,24 @@ export function PanelDiagnostico({
       if (entrada.current) entrada.current.value = '';
     }
   };
+
+  /*
+   * ¿La interpretación falló?
+   *
+   * Alcanza con que no haya renglones, con que algún control dé error, o con
+   * que se hayan visto en la imagen bastantes más filas de las que se pudieron
+   * entender. Ese último caso es el que importa: una lectura de un renglón
+   * sobre una tabla de veintitrés no dispara ningún otro control, porque el
+   * único renglón que leyó cierra perfecto solo.
+   */
+  const filasVistas = resultado?.filasDetectadas ?? null;
+  const fallo = resultado
+    ? resultado.articulos === 0 ||
+      resultado.controles.some((c) => c.severity === 'ERROR') ||
+      (filasVistas !== null && filasVistas >= 8 && resultado.articulos < filasVistas * 0.7)
+    : false;
+  // Si falló, el texto se muestra sin que haya que pedirlo.
+  const mostrarTexto = verTexto || fallo;
 
   return (
     <>
@@ -220,8 +245,16 @@ export function PanelDiagnostico({
                 valor={`${Math.round(resultado.confianza * 100)} %`}
               />
               <Dato etiqueta="Analizador" valor={resultado.analizador ?? '—'} />
-              <div className="dato destacado">
-                <dt>Artículos detectados</dt>
+              {/*
+                Las dos cifras juntas, que es como se leen: cuántas filas hay en
+                la foto y cuántas se entendieron. Separadas no dicen nada.
+              */}
+              <Dato
+                etiqueta="Filas vistas en la imagen"
+                valor={filasVistas === null ? 'no se pudo contar' : String(filasVistas)}
+              />
+              <div className={`dato destacado${fallo ? ' atencion' : ''}`}>
+                <dt>Artículos interpretados</dt>
                 <dd>{resultado.articulos}</dd>
               </div>
             </dl>
@@ -258,15 +291,46 @@ export function PanelDiagnostico({
                 className="boton boton-secundario boton-chico"
                 onClick={() => setVerTexto((v) => !v)}
               >
-                {verTexto ? 'Ocultar' : 'Ver'}
+                {mostrarTexto ? 'Ocultar' : 'Ver'}
               </button>
             </div>
-            {verTexto ? (
-              <pre className="texto-ocr">{resultado.textoArticulos ?? 'Sin texto.'}</pre>
+
+            {/*
+              Cuando la interpretación falla, esto se abre solo.
+              Es la única forma de saber, sin conectar el teléfono a nada, si
+              Tesseract no leyó la tabla o si la leyó bien y el analizador no la
+              entendió. Son dos problemas distintos y se arreglan en lugares
+              distintos.
+            */}
+            {fallo ? (
+              <p className="mensaje mensaje-aviso">
+                {resultado.filasDetectadas !== null
+                  ? `En la imagen se contaron ${resultado.filasDetectadas} filas y se interpretaron ${resultado.articulos} renglones. `
+                  : ''}
+                Abajo está el texto tal cual salió del lector: si la tabla se ve bien escrita, el
+                problema es del analizador; si se ve rota, es de la lectura.
+              </p>
+            ) : null}
+
+            {mostrarTexto ? (
+              <>
+                <h3 className="chico">Tabla de artículos</h3>
+                <pre className="texto-ocr">
+                  {resultado.textoArticulos ?? 'No se recortó la tabla: no se detectó la zona.'}
+                </pre>
+
+                <h3 className="chico">Pie con los totales</h3>
+                <pre className="texto-ocr">
+                  {resultado.textoResumen ?? 'No se recortó el pie: no se detectó la zona.'}
+                </pre>
+
+                <h3 className="chico">Página completa</h3>
+                <pre className="texto-ocr">{resultado.textoCompleto ?? 'Sin texto.'}</pre>
+              </>
             ) : (
               <p className="ayuda mb0">
-                Es lo que Tesseract leyó, tal cual. Sirve para ver si el problema está en la
-                lectura o en la interpretación.
+                Es lo que Tesseract leyó, tal cual, zona por zona. Sirve para ver si el problema
+                está en la lectura o en la interpretación.
               </p>
             )}
           </div>

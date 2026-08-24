@@ -500,6 +500,8 @@ export function detectarEsquinas(mapa: Mapa): [Punto, Punto, Punto, Punto] | nul
   );
   if (minimo < Math.min(mapa.width, mapa.height) * 0.25) return null;
 
+  if (!pareceHojaDePapel(esquinas)) return null;
+
   // Si el cuadrilátero ya es el rectángulo de la imagen, no hay perspectiva que
   // corregir. Enderezar igual no arregla nada y cuesta caro: reescribe todos los
   // píxeles interpolando, y esa interpolación redondea los trazos finos. Es la
@@ -518,6 +520,60 @@ export function detectarEsquinas(mapa: Mapa): [Punto, Punto, Punto, Punto] | nul
   if (yaEsRectangular) return null;
 
   return esquinas;
+}
+
+/**
+ * ¿El cuadrilátero encontrado puede ser una hoja de papel?
+ *
+ * Esta pregunta no es un detalle: enderezar por las esquinas equivocadas es
+ * mucho peor que no enderezar. Pasó con una factura real fotografiada sobre una
+ * caja de cartón. La zona clara no era sólo el papel —había cartón claro y otra
+ * hoja debajo— y el cuadrilátero de área máxima salió con tres esquinas contra
+ * el borde de la foto y la cuarta en el medio de la imagen. La homografía que
+ * sale de ahí estira un lado al doble del otro, y el resultado es una página
+ * cizallada: la descripción de cada renglón queda desplazada más de cien
+ * píxeles respecto de sus propios números, así que ninguna línea del OCR vuelve
+ * a contener la fila entera, y el pie con los totales se va fuera del recorte.
+ * De ahí salían las lecturas de un solo renglón sin totales.
+ *
+ * Una hoja fotografiada con un teléfono, por más inclinada que esté, sigue
+ * siendo un rectángulo visto en perspectiva: sus lados opuestos miden parecido
+ * y sus esquinas siguen siendo más o menos rectas. Se exige eso, y nada más.
+ * Ante la duda se devuelve null y se lee la foto como vino: perder una
+ * corrección de perspectiva cuesta unos puntos de confianza; aplicar una mal
+ * calculada cuesta el comprobante entero.
+ */
+export function pareceHojaDePapel(esquinas: [Punto, Punto, Punto, Punto]): boolean {
+  const lado = (a: Punto, b: Punto) => Math.hypot(a.x - b.x, a.y - b.y);
+  const [sa, sb, sc, sd] = esquinas;
+
+  // Lados opuestos: arriba contra abajo, derecha contra izquierda.
+  const arriba = lado(sa, sb);
+  const derecha = lado(sb, sc);
+  const abajo = lado(sc, sd);
+  const izquierda = lado(sd, sa);
+
+  const proporcion = (p: number, q: number) => Math.max(p, q) / Math.max(1e-6, Math.min(p, q));
+  // 1,6 es holgado: una foto sacada bien de costado no pasa de 1,4. El caso que
+  // motivó el control daba 2,02.
+  if (proporcion(arriba, abajo) > 1.6) return false;
+  if (proporcion(izquierda, derecha) > 1.6) return false;
+
+  // Y las cuatro esquinas tienen que seguir siendo esquinas, no puntas.
+  for (let i = 0; i < 4; i++) {
+    const previa = esquinas[(i + 3) % 4];
+    const actual = esquinas[i];
+    const siguiente = esquinas[(i + 1) % 4];
+    const u = { x: previa.x - actual.x, y: previa.y - actual.y };
+    const v = { x: siguiente.x - actual.x, y: siguiente.y - actual.y };
+    const normas = Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y);
+    if (normas < 1e-6) return false;
+    const coseno = (u.x * v.x + u.y * v.y) / normas;
+    const grados = (Math.acos(Math.min(1, Math.max(-1, coseno))) * 180) / Math.PI;
+    if (grados < 60 || grados > 120) return false;
+  }
+
+  return true;
 }
 
 /** Envolvente convexa por cadena monótona de Andrew. */

@@ -106,6 +106,7 @@ src/
       text-parser.ts      Lectura del texto reconocido, por columnas
       parsers/            Un analizador por formato de comprobante
         los-calvos.ts     Analizador del proveedor Los Calvos
+        errecalde.ts      Analizador de Distribución Errecalde
         generico.ts       Red de contención para formatos desconocidos
     storage/              Interfaz + drivers local, S3 y Supabase
     services/
@@ -273,6 +274,35 @@ no hace falta ninguna clave y no hay costo por comprobante.
 En ningún momento se completa un número para hacer cerrar la cuenta. Lo que no se pudo
 leer queda vacío y el semáforo lo marca.
 
+### Lo que enseñó la primera foto de verdad
+
+La lectura andaba sobre una factura dibujada y fallaba sobre una foto. Vale dejar
+anotado por qué, porque ninguna de las tres causas se parecía a "el OCR lee mal":
+
+1. **La corrección de perspectiva enganchaba las esquinas equivocadas.** La foto tenía
+   cartón claro alrededor, así que el cuadrilátero de área máxima salía con tres esquinas
+   contra el borde de la imagen y la cuarta en el medio. La homografía que sale de ahí
+   estira un lado al doble del otro y cizalla la página: la descripción de cada renglón
+   queda más de cien píxeles arriba de sus propios números, ninguna línea del OCR contiene
+   la fila entera, y el pie se va afuera del recorte. Ahora se comprueba que el
+   cuadrilátero pueda ser una hoja —lados opuestos parecidos, esquinas más o menos
+   rectas— y ante la duda no se corrige nada.
+
+2. **El recorte de la tabla se leía como un bloque único.** Con una línea horizontal entre
+   fila y fila, Tesseract en modo bloque devolvía **un renglón de veintitrés**. En modo
+   columna devuelve los veintitrés.
+
+3. **Una sola pasada no alcanza sobre una tabla larga.** Leída de una, salían 17 de 23, y
+   las seis que faltaban perdían la descripción aunque en la imagen se lee perfecta. No es
+   resolución —probado hasta 4284 px de ancho, no cambia— sino cuántas filas ve de una
+   vez. Se lee por franjas y con dos divisiones distintas, y el analizador unifica los
+   renglones repetidos por código de artículo.
+
+Y una lección de diseño: el modo de fallar peligroso no era equivocarse en un número, sino
+devolver **un** renglón donde hay veintitrés y que ese renglón cerrara solo. No había
+ninguna cuenta que no diera. Por eso ahora el lector cuenta las filas que ve en la imagen
+antes de interpretar nada, y si se interpretan bastantes menos, es error y no se guarda.
+
 ### Números argentinos
 
 El parser resuelve como el mismo importe `2.196.120,52`, `2 196 120,52`, `$ 2.196.120,52`
@@ -343,7 +373,16 @@ clave de API, que los archivos del lector los sirva la propia aplicación y que 
 navegador no salga a ningún dominio externo, y que ninguna pantalla tenga scroll
 horizontal.
 
-### El caso de aceptación
+### Los casos de aceptación
+
+Son dos, y sirven para cosas distintas. El de Los Calvos corre sobre una factura
+que la propia prueba dibuja, así que ejercita la contabilidad con números
+conocidos al centavo. El de Errecalde corre sobre **una foto de verdad** —sacada
+con un iPhone, la factura apoyada sobre una caja de cartón, torcida, con una
+botella al lado y las tildes hechas a mano sobre cada renglón— y es el que
+ejercita lo que una imagen dibujada nunca rompe.
+
+#### Los Calvos: la contabilidad
 
 La factura A 0010-00212356 de Los Calvos del 14/08/2026 se verifica de punta a punta:
 
@@ -363,6 +402,34 @@ La factura A 0010-00212356 de Los Calvos del 14/08/2026 se verifica de punta a p
 Un detalle que vale la pena: el IVA impreso de $376.477,81 **no** es el 21 % del neto
 total, que da $376.477,80. Sale de redondear el IVA renglón por renglón. Es un centavo, y
 la tolerancia lo absorbe sin marcar error.
+
+#### Errecalde: la foto real
+
+La factura-remito A 00008-00002647 de Distribución Errecalde del 22/08/2026, leída de la
+foto del teléfono:
+
+| | Esperado | Resultado |
+|---|---|---|
+| Renglones | 23 | 23 |
+| Suma de los 23 subtotales | $3.830.467,37 | $3.830.467,37 |
+| Neto gravado | $3.830.467,37 | $3.830.467,37 |
+| IVA | $804.398,16 | $804.398,16 |
+| Percepción IVA RG 5329 | $114.914,02 | $114.914,02 |
+| Percepción IIBB Buenos Aires | $67.033,18 | $67.033,18 |
+| Total | $4.816.812,73 | $4.816.812,73 |
+| Artículos por kilo / por unidad | 16 / 7 | 16 / 7 |
+
+Esta factura mezcla las dos formas de vender en la misma columna: "39.2 kg" al lado de un
+"6" pelado que son seis latas. Lo único que las distingue es el sufijo impreso, y por eso
+el analizador lo mira en vez de suponer. También mezcla dos formatos numéricos en la misma
+fila —la cantidad con punto decimal ("18.38 kg") y los importes en formato argentino
+("$8.090,08")—, que leídos con la misma regla convierten 156,3 kg en 1563.
+
+Lo que **no** sale perfecto de esta foto, y conviene saberlo: tres de los veintitrés
+códigos de artículo salen con un dígito cambiado (ART-60487 por ART-00487) y alguna
+descripción larga sale recortada. No mueve un peso —los importes, las cantidades y los
+totales están todos verificados— pero puede hacer que un artículo no se asocie solo a su
+producto y haya que elegirlo a mano la primera vez.
 
 ---
 

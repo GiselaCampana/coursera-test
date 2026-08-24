@@ -107,6 +107,30 @@ async function sembrarCon(prisma: PrismaClient) {
     },
   });
 
+  // Distribución Errecalde, para la prueba de aceptación con la foto real. Se
+  // lo da de alta con su CUIT, que es por donde lo reconoce la lectura.
+  await prisma.supplier.create({
+    data: {
+      tradeName: 'Distribución Errecalde',
+      legalName: 'Distribución Errecalde S.A.',
+      cuit: '30-71780890-4',
+      aliases: {
+        create: {
+          alias: 'Distribución Errecalde',
+          normalized: normalizeText('Distribución Errecalde'),
+        },
+      },
+      paymentTerms: {
+        create: { termType: 'DAYS', days: 30, paymentMethod: 'TRANSFERENCIA', validFrom: EPOCH },
+      },
+      taxRules: {
+        // Las percepciones de este proveedor son montos por comprobante, no una
+        // alícuota: se toman de lo impreso.
+        create: { ivaRate: '0.21', iibbRate: '0', otherPerceptions: [], validFrom: EPOCH },
+      },
+    },
+  });
+
   const producto = await prisma.product.create({
     data: {
       internalCode: '1001',

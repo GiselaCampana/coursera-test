@@ -47,14 +47,32 @@ const ETIQUETAS_DE_PIE =
 const ENCABEZADO_DE_TABLA =
   /\b(c[oó]d(?:igo)?|descripci[oó]n|detalle|art[ií]culo|cantidad|kg|precio|unitario|bonif|importe|subtotal)\b/i;
 
-/** Cuántas columnas numéricas tiene el renglón. */
+/**
+ * Cuántos valores numéricos tiene el renglón.
+ *
+ * Se cuenta sobre las palabras, no sobre las columnas separadas por espacios
+ * anchos. Parece un detalle y no lo es: en una foto de verdad las columnas de
+ * la derecha llegan pegadas por un solo espacio y con basura en el medio
+ * —"6 $965963 0% 21% — $57957,76"—, así que partir por espacios anchos deja
+ * todo eso en una sola columna que no es un número, y el renglón entero pasa
+ * por no numérico.
+ *
+ * Eso fue exactamente lo que rompió una factura real: de veintitrés filas se
+ * reconocieron cinco, y con cinco la banda de la tabla salió corta y la del pie
+ * arrancó adentro de la tabla. Acá conviene pecar de generoso: esta cuenta sólo
+ * sirve para ubicar las zonas del recorte, y una fila de más no hace daño
+ * mientras que una de menos corre el corte.
+ */
 export function columnasNumericas(texto: string): number {
-  const columnas = texto.trim().split(/\s{2,}/);
-  const candidatas = columnas.length >= 3 ? columnas : texto.trim().split(/\s+/);
   let total = 0;
-  for (const columna of candidatas) {
-    if (!/^[$\s]*-?[\d.,\s]+%?$/.test(columna)) continue;
-    if (parseArNumber(columna) !== null) total++;
+  for (const palabra of texto.trim().split(/\s+/)) {
+    // Se limpia la basura que el OCR pega a los importes: el guión largo que
+    // sale de las líneas de la tabla, la barra vertical del borde.
+    const limpia = palabra.replace(/^[$|—–-]+/, '').replace(/[|—–]+$/, '');
+    if (limpia === '') continue;
+    if (!/^-?[\d.,]+%?$/.test(limpia)) continue;
+    if (!/\d/.test(limpia)) continue;
+    if (parseArNumber(limpia) !== null) total++;
   }
   return total;
 }
@@ -69,11 +87,20 @@ export function pareceFilaDeArticulo(linea: LineaOcr): boolean {
   return /[A-Za-zÁÉÍÓÚÑáéíóúñ]{3,}/.test(texto);
 }
 
-/** ¿Es un renglón del recuadro de totales? */
+/**
+ * ¿Es un renglón del recuadro de totales?
+ *
+ * Una etiqueta del pie con **un** importe al lado. El tope de arriba es tan
+ * necesario como el de abajo: una fila de la tabla que traiga la palabra "total"
+ * en la descripción, o que el OCR ensucie, tiene cuatro o cinco números, y
+ * tomarla por pie hace que la banda del resumen arranque en medio de la tabla.
+ * Un renglón de totales nunca tiene tres importes.
+ */
 export function pareceRenglonDePie(linea: LineaOcr): boolean {
   const texto = linea.texto.trim();
   if (!ETIQUETAS_DE_PIE.test(texto)) return false;
-  return columnasNumericas(texto) >= 1;
+  const numeros = columnasNumericas(texto);
+  return numeros >= 1 && numeros < 3;
 }
 
 /**
@@ -125,12 +152,36 @@ export function detectarRegiones(
 
   // El pie empieza donde termina la última fila; si se reconocieron renglones
   // de totales, se usa el primero de ellos que esté por debajo de la tabla.
-  const pieDebajo = pie.filter((l) => l.caja.y0 >= abajoTabla - margen);
-  const inicioResumen = limitar(
-    ((pieDebajo.length > 0 ? Math.min(...pieDebajo.map((l) => l.caja.y0)) : abajoTabla) - margen) /
-      alto,
-  );
-  const finArticulos = limitar((abajoTabla + margen) / alto);
+  //
+  // "Por debajo" es estricto a propósito, sin restarle el margen. Con el margen,
+  // un renglón que empieza apenas antes de terminar la última fila califica como
+  // pie, y entonces la banda del resumen arranca adentro de la tabla: los
+  // últimos artículos quedan del lado del pie y no los lee nadie.
+  const pieDebajo = pie.filter((l) => l.caja.y0 >= abajoTabla);
+
+  /*
+   * Dónde termina la tabla.
+   *
+   * Con el pie a la vista es fácil: la tabla llega hasta ahí. El caso difícil es
+   * cuando el pie no se reconoció, que es lo habitual en una foto: el recuadro
+   * de totales tiene las etiquetas de un lado y los importes del otro, y en la
+   * pasada de página completa suele salir sin etiquetas.
+   *
+   * Ahí no se puede cortar en la última fila *reconocida*. Las filas que el OCR
+   * no alcanzó a leer en la página completa son casi siempre las de abajo —la
+   * descripción se corta, el renglón queda sin letras y deja de parecer una
+   * fila—, así que cortar ahí garantiza perderlas justo en el recorte que
+   * existe para recuperarlas. Se estira la banda unas cuantas alturas de fila:
+   * llevarse de más sólo agrega texto que el analizador descarta, mientras que
+   * llevarse de menos borra artículos del comprobante.
+   */
+  const estiradoSinPie = Math.min(alto * 0.1, altoFila * 4);
+  const finTabla = pieDebajo.length > 0 ? Math.min(...pieDebajo.map((l) => l.caja.y0)) : abajoTabla + estiradoSinPie;
+
+  const inicioResumen = limitar((finTabla - margen) / alto);
+  // Las dos bandas son contiguas: entre la primera fila y el pie no hay otra
+  // cosa que tabla.
+  const finArticulos = limitar((finTabla + margen) / alto);
 
   return {
     encabezado:

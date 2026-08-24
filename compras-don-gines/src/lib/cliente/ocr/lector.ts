@@ -191,8 +191,7 @@ export class SesionLectura {
       if (regiones.articulos) {
         this.avisar({ etapa: 'LEYENDO_ARTICULOS', avance: null, pagina: numero, totalPaginas: total });
         const region = focalizada ? ensanchar(regiones.articulos, 0.08) : regiones.articulos;
-        const lectura = await this.leerRegion(mapa, region, focalizada, 'LEYENDO_ARTICULOS');
-        textoArticulos = lectura;
+        textoArticulos = await this.leerTabla(mapa, region, focalizada);
       }
 
       // --- Pie con los totales ---
@@ -200,7 +199,15 @@ export class SesionLectura {
       if (regiones.resumen) {
         this.avisar({ etapa: 'LEYENDO_RESUMEN', avance: null, pagina: numero, totalPaginas: total });
         const region = focalizada ? ensanchar(regiones.resumen, 0.05) : regiones.resumen;
-        textoResumen = await this.leerRegion(mapa, region, focalizada, 'LEYENDO_RESUMEN');
+        // El pie es un recuadro de etiquetas a la izquierda e importes a la
+        // derecha: también son renglones apilados, no un párrafo.
+        textoResumen = await this.leerRegion(
+          mapa,
+          region,
+          focalizada,
+          'LEYENDO_RESUMEN',
+          PSM.SINGLE_COLUMN,
+        );
       }
 
       // --- Encabezado, sólo en la primera página ---
@@ -244,20 +251,99 @@ export class SesionLectura {
     };
   }
 
+  /**
+   * Lee la tabla de artículos por franjas horizontales.
+   *
+   * Dos decisiones, las dos medidas sobre una factura real de veintitrés
+   * renglones fotografiada con un iPhone:
+   *
+   *  - **SINGLE_COLUMN y no SINGLE_BLOCK.** La tabla trae una línea horizontal
+   *    entre fila y fila; tratada como un bloque único, Tesseract la segmenta
+   *    mal y devuelve *un solo renglón*. Declarándola una columna de renglones
+   *    apilados salen todos.
+   *
+   *  - **Por franjas y no de una.** Con la tabla entera en una sola pasada se
+   *    leían 17 de 23, y las seis que faltaban perdían la descripción aunque en
+   *    la imagen se leen perfectas: el análisis de disposición se le complica en
+   *    una imagen muy alta con muchas filas regladas. Partida en tres franjas se
+   *    recuperan los veintitrés códigos y sus descripciones. No es cuestión de
+   *    resolución —probado hasta 4284 px de ancho, no cambia— sino de cuántas
+   *    filas ve de una vez.
+   *
+   * Las franjas se solapan un poco para no cortar un renglón justo en el borde.
+   * El renglón que cae en las dos sale repetido, y de eso se ocupa el analizador,
+   * que descarta el duplicado: preferimos leerlo dos veces que perderlo.
+   */
+  private async leerTabla(mapa: Mapa, region: Region, agresivo: boolean): Promise<string> {
+    const franjas = this.cuantasFranjas(region);
+    if (franjas === 1) {
+      return this.leerRegion(mapa, region, agresivo, 'LEYENDO_ARTICULOS', PSM.SINGLE_COLUMN);
+    }
+
+    /*
+     * Se lee dos veces con divisiones distintas, y se manda todo junto.
+     *
+     * Dónde cae el corte cambia el resultado más de lo que uno esperaría: la
+     * fila que con una división sale partida en dos líneas —descripción por un
+     * lado, importes por otro— con la otra sale entera. Como no hay forma de
+     * saber de antemano cuál corte le va a caer bien a cada fila, se hacen las
+     * dos y se concatenan.
+     *
+     * El texto sale con casi todos los renglones repetidos, y está bien: el
+     * analizador los unifica por código de artículo y se queda con la lectura
+     * que cierra contra su subtotal impreso. Repetir sale barato; perder un
+     * renglón, no.
+     */
+    const partes: string[] = [];
+    for (const division of [franjas, franjas + 1]) {
+      for (const franja of this.franjasDe(region, division)) {
+        partes.push(
+          await this.leerRegion(mapa, franja, agresivo, 'LEYENDO_ARTICULOS', PSM.SINGLE_COLUMN),
+        );
+      }
+    }
+
+    return partes.join('\n');
+  }
+
+  /** Reparte la región en franjas que se solapan un poco. */
+  private franjasDe(region: Region, cuantas: number): Region[] {
+    const alto = region.height / cuantas;
+    const solape = Math.min(alto * 0.08, 0.015);
+    const franjas: Region[] = [];
+
+    for (let i = 0; i < cuantas; i++) {
+      const arriba = Math.max(0, region.top + alto * i - (i === 0 ? 0 : solape));
+      franjas.push({
+        left: region.left,
+        top: arriba,
+        width: region.width,
+        height: Math.min(1 - arriba, alto + solape * 2),
+      });
+    }
+    return franjas;
+  }
+
+  /**
+   * En cuántas franjas conviene partir la tabla.
+   *
+   * Se apunta a unas ocho filas por franja. Con menos filas que eso no hay nada
+   * que ganar partiendo, y cada franja cuesta una pasada de OCR.
+   */
+  private cuantasFranjas(region: Region): number {
+    if (region.height < 0.2) return 1;
+    return Math.min(4, Math.max(2, Math.round(region.height / 0.18)));
+  }
+
   private async leerRegion(
     mapa: Mapa,
     region: Region,
     agresivo: boolean,
     etapa: EtapaLectura,
+    psm: PSM = PSM.SINGLE_BLOCK,
   ): Promise<string> {
     const recorte = prepararRecorte(recortar(mapa, region), agresivo);
-    const lectura = await leerMapa(
-      recorte,
-      // Un recorte es un bloque de texto: decirlo evita que Tesseract intente
-      // encontrar columnas donde no las hay.
-      { psm: PSM.SINGLE_BLOCK },
-      (p) => this.progresoDelLector(p, etapa),
-    );
+    const lectura = await leerMapa(recorte, { psm }, (p) => this.progresoDelLector(p, etapa));
     return lectura.texto;
   }
 }

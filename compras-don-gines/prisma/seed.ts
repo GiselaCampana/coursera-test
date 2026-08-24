@@ -210,6 +210,57 @@ async function main() {
     });
   }
 
+  // --- Proveedor Distribución Errecalde -----------------------------------
+  // Se lo da de alta con su CUIT para que la lectura lo reconozca sola: el
+  // analizador saca el CUIT del encabezado y el proveedor se ubica por ahí,
+  // que es más confiable que por el nombre.
+  let errecalde = await prisma.supplier.findFirst({
+    where: { tradeName: 'Distribución Errecalde' },
+  });
+  if (!errecalde) {
+    errecalde = await prisma.supplier.create({
+      data: {
+        tradeName: 'Distribución Errecalde',
+        legalName: 'Distribución Errecalde S.A.',
+        cuit: '30-71780890-4',
+        currency: 'ARS',
+        active: true,
+        notes: 'Quesos, fiambres y conservas. Factura-remito A, con percepciones.',
+        aliases: {
+          create: [
+            'Distribución Errecalde',
+            'DISTRIBUCION ERRECALDE S. A.',
+            'ERRECALDE',
+          ].map((alias) => ({ alias, normalized: normalizeText(alias) })),
+        },
+        paymentTerms: {
+          create: {
+            termType: 'DAYS',
+            days: 30,
+            paymentMethod: 'TRANSFERENCIA',
+            validFrom: EPOCH,
+            notes: 'Cuenta corriente. Revisar el plazo real con el proveedor.',
+          },
+        },
+        taxRules: {
+          create: {
+            ivaRate: '0.21',
+            // Las percepciones de esta factura son montos fijos por comprobante,
+            // no una alícuota sobre el neto: la de IVA sale de la RG 5329 y la
+            // de IIBB del padrón de Buenos Aires. Se dejan en cero para que el
+            // control use las que vienen impresas y no una tasa inventada.
+            iibbRate: '0',
+            otherPerceptions: [],
+            validFrom: EPOCH,
+            notes:
+              'IVA 21 %. Las percepciones (IVA RG 5329 e IIBB Buenos Aires) se toman de lo ' +
+              'impreso en cada comprobante.',
+          },
+        },
+      },
+    });
+  }
+
   // --- Catálogo de productos ---------------------------------------------
   const products: {
     internalCode: string;

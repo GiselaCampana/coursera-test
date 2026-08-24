@@ -16,6 +16,15 @@ sesión no viaja: nada de esto se puede probar en `http://`.
 Anotá lo que salga en la columna de la derecha. Donde diga *falla*, sacá una
 captura y guardá el resultado de la pantalla de Diagnóstico.
 
+> **Lo que más conviene probar es una factura de tabla larga.** La primera foto
+> real que se cargó —una factura de Errecalde de 23 renglones, apoyada sobre una
+> caja de cartón— rompió tres cosas que ninguna prueba automática con una imagen
+> generada había tocado: la corrección de perspectiva enganchaba las esquinas
+> equivocadas, el recorte de la tabla se leía como un bloque único y devolvía un
+> renglón de veintitrés, y la banda de los artículos se cortaba antes de la
+> última fila. Están arregladas y probadas, pero el patrón vale: **las facturas
+> largas y las fotos con cosas alrededor son las que encuentran los problemas.**
+
 ---
 
 ## 1. Ingreso y sesión
@@ -58,6 +67,9 @@ captura y guardá el resultado de la pantalla de Diagnóstico.
 | 3.4 | Comparar los números con el papel | Cantidades, precios y total coinciden | |
 | 3.5 | Repetir con una foto **movida o con sombra** | O cierra, o queda en rojo con el guardado bloqueado. **Nunca inventa números** | |
 | 3.6 | Repetir con un comprobante de **letra muy chica** | Anotá si cierra y en cuántos intentos | |
+| 3.7 | Foto de una factura de **tabla larga** (20 renglones o más), como las de Errecalde | Cuenta los renglones que se ven en el papel: la pantalla tiene que mostrar **esa misma cantidad**. Si muestra uno o dos, es el error que hay que reportar | |
+| 3.8 | Con esa misma factura, comparar el pie | Neto, IVA y **las dos percepciones** por separado, y el total | |
+| 3.9 | Con una factura que mezcle **kilos y unidades** en la columna Cantidad | Los que dicen "kg" en el papel muestran kilos; los otros, unidades y ningún peso | |
 
 > La primera lectura de cada teléfono descarga unos 15 MB del lector. Hacela con
 > wifi. Después queda en caché.
@@ -70,7 +82,14 @@ captura y guardá el resultado de la pantalla de Diagnóstico.
 | 4.2 | Mirar "Resolución al leer" | Debería rondar los 2200 px de lado mayor | |
 | 4.3 | Mirar "Errores del lector" | Dice que no hubo errores | |
 | 4.4 | Mirar "Duración del OCR" | **Anotá el número.** Es la referencia de cuánto tarda este modelo de iPhone | |
-| 4.5 | Tocar "Ver" en Texto reconocido | Se lee el texto crudo y se puede desplazar sin romper el ancho de la pantalla | |
+| 4.5 | Tocar "Ver" en Texto reconocido | Se leen las tres zonas —tabla, pie y página completa— y se pueden desplazar sin romper el ancho de la pantalla | |
+| 4.6 | Comparar "Filas vistas en la imagen" con "Artículos interpretados" | Tienen que ser parecidos. Si se ven 23 filas y se interpretan 3, la lectura está rota aunque no marque ningún otro error | |
+| 4.7 | Probar a propósito una foto que falle (muy movida, o media factura fuera de cuadro) | El texto crudo **se abre solo**, sin tener que tocar "Ver" | |
+
+> Para qué sirve 4.6 y 4.7: separan los dos problemas que se ven igual desde
+> afuera. Si en el texto crudo la tabla se lee bien escrita, el que falló es el
+> analizador; si se lee rota, falló el reconocimiento. Se arreglan en lugares
+> distintos, y sin este dato no hay forma de saber cuál de los dos fue.
 
 ## 5. Guardado y pagos
 
