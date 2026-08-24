@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { formatDateTimeAr } from '@/lib/datetime';
@@ -14,7 +14,7 @@ export default async function PaginaAuditoria({
 }: {
   searchParams: Promise<{ accion?: string }>;
 }) {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.AUDITORIA_VER)) redirect('/configuracion');
 
   const { accion } = await searchParams;

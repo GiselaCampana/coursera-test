@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { requireUser, hasAnyPermission, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasAnyPermission, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { estadoAlmacenamiento, formatearBytes } from '@/lib/services/almacenamiento';
@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: 'Configuración' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaConfiguracion() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   const puedeEntrar = hasAnyPermission(user, [
     PERMISSIONS.USUARIOS_GESTIONAR,
     PERMISSIONS.SUCURSALES_GESTIONAR,

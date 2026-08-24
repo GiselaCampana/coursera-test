@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { FormularioConfig, Casilla } from '@/components/FormularioConfig';
@@ -10,7 +10,7 @@ export const metadata: Metadata = { title: 'Sucursales' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaSucursales() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.SUCURSALES_GESTIONAR)) redirect('/configuracion');
 
   const sucursales = await prisma.branch.findMany({
