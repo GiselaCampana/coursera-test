@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { listPayments } from '@/lib/services/payments';
 import { arTodayISO, formatDateAr } from '@/lib/datetime';
@@ -24,7 +24,7 @@ export default async function PaginaPagos({
 }: {
   searchParams: Promise<{ grupo?: string; confirmado?: string }>;
 }) {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PAGOS_VER)) redirect('/');
 
   const { grupo, confirmado } = await searchParams;

@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getPriceBoard, PRICE_ALERT_THRESHOLD } from '@/lib/services/pricing';
 import { formatARS, formatRate } from '@/lib/money';
@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: 'Precios' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaPrecios() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PRECIOS_VER)) redirect('/');
 
   const filas = await getPriceBoard(user);
