@@ -49,6 +49,7 @@ interface Resultado {
   textoCompleto: string | null;
   /** Filas que el lector contó en la imagen, antes de interpretar nada. */
   filasDetectadas: number | null;
+  tiempos: { zona: string; ms: number }[];
   errorWorker: string | null;
 }
 
@@ -137,6 +138,7 @@ export function PanelDiagnostico({
         textoResumen: lectura.paginas[0]?.textoResumen ?? null,
         textoCompleto: lectura.paginas[0]?.textoCompleto ?? null,
         filasDetectadas: lectura.paginas[0]?.regiones?.filasDetectadas ?? null,
+        tiempos: lectura.paginas[0]?.tiempos ?? [],
         errorWorker,
       });
     } catch (e) {
@@ -284,12 +286,43 @@ export function PanelDiagnostico({
               </div>
             </dl>
 
+            {/*
+              En qué se fue el tiempo, zona por zona.
+              El total no alcanza para decidir nada: siete minutos repartidos en
+              diez pasadas parejas y siete minutos que se van casi enteros en la
+              tabla se arreglan de maneras distintas, y sin abrirlo no se sabe
+              cuál de los dos es.
+            */}
+            {resultado.tiempos.length > 0 ? (
+              <>
+                <h3 className="chico">Dónde se fue el tiempo</h3>
+                <dl style={{ margin: 0 }}>
+                  {resultado.tiempos.map((t) => (
+                    <Dato
+                      key={t.zona}
+                      etiqueta={t.zona}
+                      valor={t.ms >= 1000 ? `${(t.ms / 1000).toFixed(1)} s` : `${t.ms} ms`}
+                    />
+                  ))}
+                </dl>
+              </>
+            ) : null}
+
             {resultado.errorWorker ? (
               <p className="mensaje mensaje-error mb0" role="alert">
                 <strong>Error del lector:</strong> {resultado.errorWorker}
               </p>
             ) : (
-              <p className="mensaje mensaje-ok mb0">El lector no reportó errores.</p>
+              /*
+                "Sin errores" acá quiere decir que el motor de OCR funcionó, no
+                que el comprobante haya cerrado. Decirlo en verde justo encima de
+                unos autocontroles en rojo confundía las dos cosas: son fallas de
+                naturaleza distinta y se arreglan de maneras distintas.
+              */
+              <p className="mensaje mensaje-ok mb0">
+                El motor OCR no tuvo errores técnicos. Que la lectura cierre o no es otra cosa:
+                lo dicen los autocontroles de abajo.
+              </p>
             )}
           </div>
 

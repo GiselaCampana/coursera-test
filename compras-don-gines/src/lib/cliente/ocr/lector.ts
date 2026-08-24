@@ -46,6 +46,8 @@ export interface LecturaPagina {
   inclinacion: number;
   perspectivaCorregida: boolean;
   regiones: RegionesDetectadas;
+  /** Cuánto tardó cada zona, para poder ver dónde se va el tiempo. */
+  tiempos: { zona: string; ms: number }[];
 }
 
 export interface LecturaComprobante {
@@ -171,6 +173,7 @@ export class SesionLectura {
       const mapa = focalizada ? limpiarFuerte(this.paginas[i]) : this.paginas[i];
       const numero = i + 1;
       const total = this.paginas.length;
+      const comienzoPagina = performance.now();
 
       // --- Página completa: ubica las zonas y sirve de red de contención ---
       this.avisar({ etapa: 'LEYENDO_ENCABEZADO', avance: null, pagina: numero, totalPaginas: total });
@@ -186,12 +189,27 @@ export class SesionLectura {
           : detectarRegiones(completa.lineas, mapa.width, mapa.height);
       this.regionesPorPagina[i] = regiones;
 
+      const tiempos: { zona: string; ms: number }[] = [
+        { zona: 'Página completa', ms: Math.round(performance.now() - comienzoPagina) },
+      ];
+      const cronometrar = async <T>(zona: string, tarea: () => Promise<T>): Promise<T> => {
+        const desde = performance.now();
+        const resultado = await tarea();
+        tiempos.push({ zona, ms: Math.round(performance.now() - desde) });
+        return resultado;
+      };
+
       // --- Tabla de artículos, recortada y ampliada ---
       let textoArticulos: string | null = null;
+      let filasEnLaTabla = 0;
       if (regiones.articulos) {
         this.avisar({ etapa: 'LEYENDO_ARTICULOS', avance: null, pagina: numero, totalPaginas: total });
         const region = focalizada ? ensanchar(regiones.articulos, 0.08) : regiones.articulos;
-        textoArticulos = await this.leerTabla(mapa, region, focalizada);
+        const tabla = await cronometrar('Tabla de artículos', () =>
+          this.leerTabla(mapa, region, focalizada, regiones.filasDetectadas),
+        );
+        textoArticulos = tabla.texto;
+        filasEnLaTabla = tabla.filasLeidas;
       }
 
       // --- Pie con los totales ---
@@ -201,23 +219,16 @@ export class SesionLectura {
         const region = focalizada ? ensanchar(regiones.resumen, 0.05) : regiones.resumen;
         // El pie es un recuadro de etiquetas a la izquierda e importes a la
         // derecha: también son renglones apilados, no un párrafo.
-        textoResumen = await this.leerRegion(
-          mapa,
-          region,
-          focalizada,
-          'LEYENDO_RESUMEN',
-          PSM.SINGLE_COLUMN,
+        textoResumen = await cronometrar('Pie con los totales', () =>
+          this.leerRegion(mapa, region, focalizada, 'LEYENDO_RESUMEN', PSM.SINGLE_COLUMN),
         );
       }
 
       // --- Encabezado, sólo en la primera página ---
       let textoEncabezado: string | null = null;
       if (numero === 1 && regiones.encabezado) {
-        textoEncabezado = await this.leerRegion(
-          mapa,
-          regiones.encabezado,
-          false,
-          'LEYENDO_ENCABEZADO',
+        textoEncabezado = await cronometrar('Encabezado', () =>
+          this.leerRegion(mapa, regiones.encabezado!, false, 'LEYENDO_ENCABEZADO'),
         );
       }
 
@@ -230,7 +241,25 @@ export class SesionLectura {
         confianza: completa.confianza,
         inclinacion: this.metadatos[i]?.inclinacion ?? 0,
         perspectivaCorregida: this.metadatos[i]?.perspectivaCorregida ?? false,
-        regiones,
+        /*
+         * Cuántas filas se llegaron a ver, contando las dos fuentes.
+         *
+         * El detector de disposición cuenta las filas sobre la imagen de la
+         * página entera, y sobre esta factura ve 17 de 23: las de abajo pierden
+         * la descripción y dejan de parecer una fila. La lectura por franjas
+         * recupera las 23, así que quedarse con el número del detector deja el
+         * control diciendo "vi 17, interpreté 23", que además de contradictorio
+         * es inútil.
+         *
+         * Se toma el mayor de los dos, y no el de las franjas: el del detector
+         * es el que no depende de haber leído bien, y es el que delata una
+         * lectura que devolvió un renglón donde hay veintitrés.
+         */
+        regiones: {
+          ...regiones,
+          filasDetectadas: Math.max(regiones.filasDetectadas, filasEnLaTabla),
+        },
+        tiempos,
       });
     }
 
@@ -274,10 +303,22 @@ export class SesionLectura {
    * El renglón que cae en las dos sale repetido, y de eso se ocupa el analizador,
    * que descarta el duplicado: preferimos leerlo dos veces que perderlo.
    */
-  private async leerTabla(mapa: Mapa, region: Region, agresivo: boolean): Promise<string> {
+  private async leerTabla(
+    mapa: Mapa,
+    region: Region,
+    agresivo: boolean,
+    filasEsperadas: number,
+  ): Promise<{ texto: string; filasLeidas: number }> {
     const franjas = this.cuantasFranjas(region);
     if (franjas === 1) {
-      return this.leerRegion(mapa, region, agresivo, 'LEYENDO_ARTICULOS', PSM.SINGLE_COLUMN);
+      const texto = await this.leerRegion(
+        mapa,
+        region,
+        agresivo,
+        'LEYENDO_ARTICULOS',
+        PSM.SINGLE_COLUMN,
+      );
+      return { texto, filasLeidas: contarFilasLegibles(texto) };
     }
 
     /*
@@ -293,17 +334,28 @@ export class SesionLectura {
      * analizador los unifica por código de artículo y se queda con la lectura
      * que cierra contra su subtotal impreso. Repetir sale barato; perder un
      * renglón, no.
+     *
+     * Pero sólo cuando hace falta. La segunda división cuesta otras tres o
+     * cuatro pasadas de OCR, que en un iPhone son minutos, y no aporta nada si
+     * la primera ya recuperó todas las filas que el detector vio en la imagen.
+     * Así que se corta ahí: no es aflojar un control —los controles corren
+     * después, en el servidor, sobre el texto que salga— sino dejar de pagar
+     * por una lectura que no va a agregar un renglón.
      */
     const partes: string[] = [];
+    let filasLeidas = 0;
+
     for (const division of [franjas, franjas + 1]) {
+      if (division > franjas && alcanzaConUnaDivision(filasLeidas, filasEsperadas)) break;
       for (const franja of this.franjasDe(region, division)) {
         partes.push(
           await this.leerRegion(mapa, franja, agresivo, 'LEYENDO_ARTICULOS', PSM.SINGLE_COLUMN),
         );
       }
+      filasLeidas = contarFilasLegibles(partes.join('\n'));
     }
 
-    return partes.join('\n');
+    return { texto: partes.join('\n'), filasLeidas };
   }
 
   /** Reparte la región en franjas que se solapan un poco. */
@@ -346,6 +398,62 @@ export class SesionLectura {
     const lectura = await leerMapa(recorte, { psm }, (p) => this.progresoDelLector(p, etapa));
     return lectura.texto;
   }
+}
+
+/**
+ * ¿Vale la pena la segunda división de franjas, o alcanza con la primera?
+ *
+ * La segunda cuesta otras tres o cuatro pasadas de OCR, que en un iPhone son
+ * minutos. Se saltea sólo cuando la primera ya recuperó **más** filas de las que
+ * el detector de disposición vio en la página entera.
+ *
+ * "Más" y no "las mismas", y la diferencia importa. Si la lectura por franjas
+ * devuelve exactamente tantas filas como vio el detector, puede ser que estén
+ * todas... o que las franjas se estén perdiendo las mismas de abajo que se
+ * perdió la página completa, que es el caso conocido de esta factura: el
+ * detector ve 17 de 23 justamente porque a las últimas se les corta la
+ * descripción. Empatar no prueba nada; superarlo sí prueba que las franjas están
+ * recuperando lo que la página entera no vio.
+ *
+ * Ante la duda se paga la segunda división: perder un renglón cuesta mucho más
+ * que un minuto de lectura.
+ */
+export function alcanzaConUnaDivision(filasLeidas: number, filasEsperadas: number): boolean {
+  if (filasEsperadas <= 0) return false;
+  return filasLeidas > filasEsperadas;
+}
+
+/**
+ * Cuántas filas distintas de tabla se reconocen en un texto ya leído.
+ *
+ * Es a propósito tosca: una fila es una línea con al menos tres grupos de
+ * dígitos —cantidad, precio e importe— y algo de texto delante. No intenta
+ * interpretar nada, y no podría: quién es cada columna lo decide el analizador
+ * del proveedor, en el servidor, y duplicar ese criterio acá sería tener la
+ * misma regla escrita en dos lados.
+ *
+ * Sirve para dos cosas que no necesitan precisión. Una es decidir si vale la
+ * pena pagar otra tanda de OCR: si ya se recuperaron todas las filas que el
+ * detector vio en la imagen, no hay nada que ganar. La otra es informar cuántas
+ * filas se llegaron a ver, que en el servidor se contrasta contra cuántas se
+ * pudieron interpretar. Si se queda corta, se lee de más; nunca se guarda algo
+ * de menos por su culpa.
+ *
+ * Las líneas repetidas entre franjas se cuentan una sola vez, comparándolas por
+ * su parte alfabética, que es la que se mantiene estable entre pasadas.
+ */
+export function contarFilasLegibles(texto: string): number {
+  const vistas = new Set<string>();
+  for (const cruda of texto.split('\n')) {
+    const linea = cruda.trim();
+    if (linea.length < 12) continue;
+    const numeros = linea.match(/\d[\d.,]*/g) ?? [];
+    if (numeros.length < 3) continue;
+    const letras = linea.replace(/[^A-Za-zÁÉÍÓÚÜÑáéíóúüñ]/g, '').toUpperCase();
+    if (letras.length < 6) continue;
+    vistas.add(letras.slice(0, 14));
+  }
+  return vistas.size;
 }
 
 export const ETAPA_TEXTO: Record<EtapaLectura, string> = {

@@ -371,6 +371,34 @@ devolver **un** renglón donde hay veintitrés y que ese renglón cerrara solo. 
 ninguna cuenta que no diera. Por eso ahora el lector cuenta las filas que ve en la imagen
 antes de interpretar nada, y si se interpretan bastantes menos, es error y no se guarda.
 
+### Lo que enseñó el mismo comprobante en un iPhone de verdad
+
+Las pruebas corren con Chromium emulando un iPhone. Sobre **Safari en un teléfono real**,
+el mismo Tesseract y la misma foto devuelven un texto distinto —no peor, distinto— y
+aparecieron tres fallas que la corrida de Chromium no ejercita nunca:
+
+1. **El pie sin etiquetas.** El recorte trajo los cuatro importes de abajo, cada uno en su
+   línea y sin una palabra al lado, y el neto gravado quedó afuera; en la página completa
+   salió deformado ("63,830.46737" donde el papel dice $3.830.467,37). Ahora el neto se
+   deduce de los otros cuatro, **pero sólo se acepta si sus dígitos aparecen en alguna
+   cifra que el OCR haya leído**. Deducirlo y usarlo sin más sería hacer trampa: la
+   igualdad "neto + IVA + percepciones = total" se cumpliría por construcción y no
+   verificaría nada. Sin ese rastro, no se completa y el comprobante queda para releer.
+
+2. **Dos lecturas del mismo renglón, y las dos cerrando.** Una pasada leyó SARDO BLOQUE
+   como 475 kg a $13.295,25 con subtotal $6.315.243 —perdió la coma en los tres números a
+   la vez— y otra como 4,75 kg con subtotal $63.152,43. La primera *cuadra contra sus
+   propios números*, así que "cierra la aritmética" no alcanza para elegir. Lo único que
+   las separa es que un renglón de seis millones no entra en una factura de tres millones
+   y medio: **ningún renglón puede valer más que el neto gravado del comprobante**. Por eso
+   ahora el pie se interpreta antes que la tabla, y esa cota entra en la elección.
+
+3. **"Filas vistas" contaba una sola pasada.** Decía 17 vistas y 23 interpretadas, y daba
+   el control por bueno. Ahora es el mayor entre lo que vio el detector de disposición
+   sobre la página entera y lo que recuperó la lectura por franjas: 23 y 23. Se toma el
+   mayor y no el de las franjas porque el del detector es el que no depende de haber leído
+   bien, y es el que delata una lectura que devolvió un renglón donde hay veintitrés.
+
 ### Números argentinos
 
 El parser resuelve como el mismo importe `2.196.120,52`, `2 196 120,52`, `$ 2.196.120,52`
@@ -465,7 +493,7 @@ en un asiento de auditoría propio, `comprobante.centavos_conciliados`.
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (229)
+npm test              # unitarias e integración (243)
 npm run test:unit     # sólo unitarias
 npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (72)
 npm run test:all      # todo

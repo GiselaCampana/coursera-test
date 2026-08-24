@@ -87,11 +87,27 @@ export const analizadorErrecalde: AnalizadorComprobante = {
     const header = analizarEncabezado(
       `${textos.encabezado ?? ''}\n${textos.completo}`,
     );
-    const { items, avisos } = analizarArticulos(textos.articulos || textos.completo);
-    observaciones.push(...avisos);
-
-    const { summary, avisos: avisosPie } = analizarPie(textos.resumen || textos.completo);
+    /*
+     * El pie primero, y a propósito.
+     *
+     * El neto y el total impresos son la única cota que tenemos para descartar
+     * una lectura imposible de un renglón. Sobre esta factura, una pasada leyó
+     * SARDO BLOQUE como 475 kg a $13.295,25 —perdió la coma de "4,75"— y esa
+     * lectura *cierra sola*: 475 × 13.295,25 da los $6.315.243 que también leyó
+     * mal. Contra sus propios números es impecable; lo único que la delata es
+     * que un renglón de seis millones no cabe en una factura de tres millones y
+     * medio. Sin el pie, esa lectura es indistinguible de la buena.
+     */
+    const { summary, avisos: avisosPie } = analizarPie(
+      textos.resumen || textos.completo,
+      textos.completo,
+    );
     observaciones.push(...avisosPie);
+
+    const { items, avisos } = analizarArticulos(textos.articulos || textos.completo, {
+      netoImpreso: parseArNumber(summary.netTotal ?? '') ?? null,
+    });
+    observaciones.push(...avisos);
 
     if (items.length === 0) {
       observaciones.push('No se reconoció ningún renglón en la tabla de artículos.');
@@ -260,19 +276,28 @@ function sonElMismoRenglon(a: FilaErrecalde, b: FilaErrecalde): boolean {
   if (codigosCompatibles(a.codigo, b.codigo)) coincidencias++;
   if (descripcionesCompatibles(a.descripcion, b.descripcion)) coincidencias++;
   if (a.subtotal.eq(b.subtotal)) coincidencias++;
-  return coincidencias >= 2;
-}
+  if (coincidencias >= 2) return true;
 
-/** Entre dos lecturas del mismo renglón, ¿cuál conviene guardar? */
-function esMejorLectura(nueva: FilaErrecalde, guardada: FilaErrecalde): boolean {
-  // Que cierre contra su subtotal es la mejor prueba de que se leyó bien.
-  const cierraNueva = filaCierra(nueva);
-  const cierraGuardada = filaCierra(guardada);
-  if (cierraNueva !== cierraGuardada) return cierraNueva;
-  // A igualdad, la que trae más información.
-  const puntaje = (f: FilaErrecalde) =>
-    (f.codigo ? 2 : 0) + (f.precio ? 2 : 0) + (f.unidades !== null ? 1 : 0) + Math.min(f.descripcion.length, 40) / 40;
-  return puntaje(nueva) > puntaje(guardada);
+  /*
+   * Una señal sola alcanza cuando la otra lectura está rota.
+   *
+   * Cuando una pasada pierde la coma decimal, los tres números del renglón
+   * cambian a la vez —cantidad, precio y subtotal—, así que la coincidencia por
+   * subtotal desaparece y quedan las dos lecturas como si fueran renglones
+   * distintos. El resultado es peor que un duplicado: entran las dos, la suma
+   * contra el neto se desarma y no hay forma de saber cuál sobra.
+   *
+   * Así que si las descripciones coinciden y exactamente una de las dos cierra
+   * su propia aritmética, se las trata como el mismo renglón. Se pide la
+   * descripción y no el código a propósito: en esta factura conviven ART-00177
+   * (CAYFAR LATA BATATA) y ART-00178 (CAYFAR LATA CHOCOLATE), dos artículos
+   * distintos con códigos consecutivos que un dígito mal leído confunde, pero
+   * cuyas descripciones no se parecen en nada.
+   */
+  if (descripcionesCompatibles(a.descripcion, b.descripcion) && filaCierra(a) !== filaCierra(b)) {
+    return true;
+  }
+  return false;
 }
 
 /** ¿Cierra el renglón contra su propio subtotal impreso? */
@@ -285,9 +310,91 @@ function filaCierra(fila: FilaErrecalde): boolean {
   return esperado.minus(fila.subtotal).abs().lte(tolerancia);
 }
 
-function analizarArticulos(texto: string): { items: OcrItem[]; avisos: string[] } {
+/** Lo que el pie ya dio y sirve para acotar lo que un renglón puede valer. */
+interface LimitesDelPie {
+  netoImpreso: Decimal | null;
+}
+
+/**
+ * ¿Este subtotal es posible en este comprobante?
+ *
+ * Ningún renglón puede valer más que el neto gravado de la factura entera. Es
+ * una cota tosca y por eso mismo confiable: no depende de interpretar bien nada
+ * del renglón, sólo de que el pie se haya leído. Se deja un 2 % de aire para no
+ * castigar una factura de un solo artículo cuyo redondeo lo deje justo encima.
+ */
+function subtotalPosible(fila: FilaErrecalde, limites: LimitesDelPie): boolean {
+  if (!limites.netoImpreso || limites.netoImpreso.lte(0)) return true;
+  return fila.subtotal.abs().lte(limites.netoImpreso.abs().times(1.02));
+}
+
+/**
+ * Entre todas las lecturas de un mismo renglón, cuál se guarda.
+ *
+ * El orden de las razones importa, y sale de un caso real: sobre esta factura
+ * una pasada leyó SARDO BLOQUE como 475 kg a $13.295,25 con subtotal
+ * $6.315.243, y otra como 4,75 kg a $13.295,25 con subtotal $63.152,43. Las dos
+ * cierran contra sus propios números —la primera perdió la coma en los tres
+ * lugares a la vez—, así que "cierra la aritmética" no alcanza para elegir. Lo
+ * que las separa es que un renglón de seis millones no entra en una factura de
+ * tres millones y medio.
+ */
+function elegirLectura(candidatas: FilaErrecalde[], limites: LimitesDelPie): FilaErrecalde {
+  const puntuar = (fila: FilaErrecalde): number => {
+    let puntos = 0;
+    // 1. Que el importe quepa en el comprobante. Es lo primero porque una
+    //    lectura imposible no se arregla con ninguna otra virtud.
+    if (subtotalPosible(fila, limites)) puntos += 1000;
+    // 2. Que cantidad × precio dé el subtotal impreso.
+    if (filaCierra(fila)) puntos += 100;
+    // 3. Cuántas pasadas coincidieron en el código y en la descripción. Un dato
+    //    que se leyó igual tres veces es mejor que uno que se leyó una sola.
+    puntos += 10 * candidatas.filter((otra) => codigosCompatibles(otra.codigo, fila.codigo)).length;
+    puntos +=
+      10 * candidatas.filter((otra) => descripcionesCompatibles(otra.descripcion, fila.descripcion)).length;
+    // 4. Y a igualdad, la lectura más completa.
+    puntos +=
+      (fila.codigo ? 2 : 0) +
+      (fila.precio ? 2 : 0) +
+      (fila.unidades !== null ? 1 : 0) +
+      Math.min(fila.descripcion.length, 40) / 40;
+    return puntos;
+  };
+
+  let mejor = candidatas[0];
+  let mejorPuntaje = puntuar(mejor);
+  for (const candidata of candidatas.slice(1)) {
+    const puntaje = puntuar(candidata);
+    if (puntaje > mejorPuntaje) {
+      mejor = candidata;
+      mejorPuntaje = puntaje;
+    }
+  }
+  return mejor;
+}
+
+function analizarArticulos(
+  texto: string,
+  limites: LimitesDelPie = { netoImpreso: null },
+): { items: OcrItem[]; avisos: string[] } {
   const avisos: string[] = [];
-  const filas: FilaErrecalde[] = [];
+
+  /*
+   * El mismo renglón, leído más de una vez.
+   *
+   * La tabla se lee varias veces con cortes distintos —franjas que se solapan,
+   * y dos divisiones diferentes— porque el análisis de disposición de Tesseract
+   * es sensible a dónde cae el corte: la fila que sale partida con una división
+   * sale entera con la otra. Eso hace que muchos renglones lleguen repetidos.
+   *
+   * Se guardan **todas** las lecturas de cada renglón y recién al final se
+   * elige. Antes se decidía de a pares, a medida que llegaban, y eso perdía
+   * información: para saber cuál de dos lecturas conviene hay que poder mirar
+   * también las otras tres del mismo renglón y el pie del comprobante, y
+   * ninguna de esas dos cosas está disponible en el momento en que llega la
+   * segunda.
+   */
+  const grupos: FilaErrecalde[][] = [];
 
   for (const cruda of texto.split('\n')) {
     const linea = cruda.trim();
@@ -297,36 +404,24 @@ function analizarArticulos(texto: string): { items: OcrItem[]; avisos: string[] 
     const fila = analizarFila(linea);
     if (!fila) continue;
 
-    /*
-     * El mismo renglón, leído más de una vez.
-     *
-     * La tabla se lee varias veces con cortes distintos —franjas que se solapan,
-     * y dos divisiones diferentes— porque el análisis de disposición de
-     * Tesseract es sensible a dónde cae el corte: la fila que sale partida con
-     * una división sale entera con la otra. Eso hace que muchos renglones
-     * lleguen repetidos, y hay que quedarse con una sola lectura de cada uno.
-     *
-     * El código de artículo es la identidad: en una factura no se repite, así
-     * que dos lecturas con el mismo código son el mismo renglón del papel, aun
-     * cuando difieran en los números. Entre las dos gana la que cierra contra su
-     * propio subtotal impreso, y si ninguna cierra, la más completa.
-     *
-     * Deduplicar por código *y* subtotal no alcanzaba, justamente porque las dos
-     * lecturas que hay que unificar son las que diffieren en algún número.
-     */
-    const gemela = filas.findIndex((f) => sonElMismoRenglon(f, fila));
-    if (gemela >= 0) {
-      if (esMejorLectura(fila, filas[gemela])) filas[gemela] = fila;
-      continue;
-    }
-
-    filas.push(fila);
+    const grupo = grupos.find((g) => g.some((otra) => sonElMismoRenglon(otra, fila)));
+    if (grupo) grupo.push(fila);
+    else grupos.push([fila]);
   }
+
+  const filas = grupos.map((grupo) => elegirLectura(grupo, limites));
 
   const items: OcrItem[] = filas.map((fila, indice) => {
     const numero = indice + 1;
 
-    if (!fila.precio) {
+    if (!subtotalPosible(fila, limites)) {
+      // Se avisa aunque haya sido la mejor de su grupo: que fuera la mejor no la
+      // vuelve posible, y este renglón solo desarma la suma contra el neto.
+      avisos.push(
+        `Renglón ${numero} (${fila.descripcion}): el subtotal ${fila.subtotal.toFixed(2)} es ` +
+          `mayor que el neto gravado impreso del comprobante. Hay que releerlo.`,
+      );
+    } else if (!fila.precio) {
       avisos.push(`Renglón ${numero} (${fila.descripcion}): no se pudo leer el precio unitario.`);
     } else if (!filaCierra(fila)) {
       const esperado = fila.cantidad.times(fila.precio);
@@ -700,7 +795,10 @@ const ETIQUETAS_PIE: { campo: 'netTotal' | 'total'; patron: RegExp }[] = [
   { campo: 'total', patron: /^total\b/i },
 ];
 
-function analizarPie(texto: string): { summary: OcrSummary; avisos: string[] } {
+function analizarPie(
+  texto: string,
+  textoCompleto = '',
+): { summary: OcrSummary; avisos: string[] } {
   const summary: OcrSummary = {
     grossSubtotal: null,
     discountTotal: null,
@@ -768,7 +866,7 @@ function analizarPie(texto: string): { summary: OcrSummary; avisos: string[] } {
   const faltaTodo = !summary.netTotal && summary.ivaLines!.length === 0 && !summary.total;
   if (faltaTodo && sueltos.length >= 3) {
     const cola = sueltos.slice(-5);
-    const asignado = asignarPorPosicion(cola);
+    const asignado = asignarPorPosicion(cola) ?? reconstruirPie(cola, textoCompleto);
     if (asignado) {
       summary.netTotal = asignado.neto.toString();
       summary.ivaLines!.push({ label: 'IVA', rate: '0.21', amount: asignado.iva.toString() });
@@ -829,6 +927,61 @@ function asignarPorPosicion(valores: Decimal[]): {
 
   const suma = percepciones.reduce((acumulado, v) => acumulado.plus(v), neto.plus(iva));
   if (suma.minus(total).abs().gt(1)) return null;
+  return { neto, iva, percepciones, total };
+}
+
+/** Los dígitos de un número, sin separadores ni signos. */
+function digitosDe(valor: string): string {
+  return valor.replace(/\D/g, '');
+}
+
+/**
+ * Recupera el pie cuando el recorte perdió el neto gravado.
+ *
+ * Es lo que pasa en el teléfono con esta factura: el recorte del pie trae los
+ * cuatro importes de abajo —IVA, las dos percepciones y el TOTAL— pero el neto
+ * queda justo arriba del corte, y en la página completa sale deformado
+ * ("63,830.46737" donde el papel dice $3.830.467,37), tan roto que ninguna regla
+ * de separadores lo puede interpretar.
+ *
+ * El neto se deduce de los otros cuatro: total − IVA − percepciones. Pero
+ * deducirlo así y usarlo sería hacer trampa, porque entonces "neto + IVA +
+ * percepciones = total" se cumple por construcción y no verifica nada.
+ *
+ * Por eso el valor deducido sólo se acepta si aparece **corroborado por otra
+ * lectura independiente**: sus dígitos tienen que estar, en ese orden, dentro de
+ * alguna cifra que el OCR haya leído en la página. Los separadores pueden estar
+ * mal y puede sobrar basura alrededor —de ahí el "63" de más—, pero la sucesión
+ * de dígitos del papel tiene que estar. Si no aparece en ningún lado, no se
+ * completa nada y el comprobante queda para releer.
+ */
+function reconstruirPie(
+  valores: Decimal[],
+  textoCompleto: string,
+): { neto: Decimal; iva: Decimal; percepciones: Decimal[]; total: Decimal } | null {
+  // Hacen falta el total, el IVA y al menos una percepción para deducir el neto.
+  if (valores.length < 3 || valores.length > 4) return null;
+
+  const total = valores[valores.length - 1];
+  const iva = valores[0];
+  const percepciones = valores.slice(1, -1);
+  const neto = percepciones.reduce((acumulado, v) => acumulado.minus(v), total.minus(iva));
+
+  // Un neto deducido tiene que ser positivo y el mayor de los sumandos: si no,
+  // los importes no estaban en el orden que se supuso.
+  if (neto.lte(0) || neto.lte(iva)) return null;
+
+  // El IVA de esta factura es del 21 %: sirve como segundo control barato.
+  const ivaEsperado = neto.times('0.21');
+  if (iva.minus(ivaEsperado).abs().gt(ivaEsperado.times('0.02').plus(1))) return null;
+
+  // Y la corroboración: los dígitos del neto deducido, en alguna cifra leída.
+  const buscados = digitosDe(neto.toFixed(2));
+  const hayRastro = [...textoCompleto.matchAll(/[\d.,]{6,}/g)].some((coincidencia) =>
+    digitosDe(coincidencia[0]).includes(buscados),
+  );
+  if (!hayRastro) return null;
+
   return { neto, iva, percepciones, total };
 }
 
