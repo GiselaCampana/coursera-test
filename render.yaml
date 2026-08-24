@@ -43,7 +43,17 @@ services:
     # El build copia además los archivos del lector a public/ocr/.
     buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run db:seed && npm run build
     startCommand: npm run start
-    healthCheckPath: /ingresar
+    # Un endpoint propio, público, que no toca cookies, sesión, base ni ninguna
+    # pantalla: contesta 200 si el proceso está vivo, que es lo único que este
+    # chequeo tiene que averiguar.
+    #
+    # Antes apuntaba a /ingresar. Aunque esa pantalla es pública, sigue siendo
+    # una pantalla —pasa por React, lee cookies, puede redirigir—, así que
+    # cualquier cambio ahí se volvía sin querer un requisito para que el
+    # despliegue terminara. Tampoco consulta la base: si lo hiciera, un rato de
+    # Supabase caído no dejaría la aplicación degradada sino reiniciándose en
+    # loop, porque Render mata lo que no pasa el chequeo.
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production

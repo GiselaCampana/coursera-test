@@ -1,6 +1,7 @@
 import 'server-only';
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { cache } from 'react';
 import { prisma } from '@/lib/db';
 import { ForbiddenError, UnauthorizedError } from '@/lib/errors';
@@ -114,9 +115,39 @@ export const getCurrentUser = cache(async (): Promise<AuthUser | null> => {
   };
 });
 
+/**
+ * Exige sesión y **falla** si no la hay.
+ *
+ * Es lo correcto para una API o una server action: quien llama es un programa y
+ * el 401 es la respuesta. Para una pantalla no: ver `requireUserOrRedirect`.
+ */
 export async function requireUser(): Promise<AuthUser> {
   const user = await getCurrentUser();
   if (!user) throw new UnauthorizedError();
+  return user;
+}
+
+/**
+ * Exige sesión y **manda a ingresar** si no la hay. Para pantallas.
+ *
+ * El layout de `(app)` ya redirige a quien no tenga sesión, pero eso no alcanza:
+ * en el App Router el layout y la página se renderizan al mismo tiempo, no uno
+ * después del otro. Así que una visita sin sesión llegaba igual a la página, que
+ * llamaba a `requireUser()` y tiraba un UnauthorizedError mientras el layout
+ * redirigía. El usuario terminaba en /ingresar —el redirect gana— pero cada
+ * visita anónima dejaba una excepción en el log del servidor.
+ *
+ * No es sólo ruido: en un despliegue esas excepciones son lo primero que se mira
+ * cuando algo no arranca, y mandan a buscar un problema de autenticación que no
+ * existe. Una pantalla protegida sin sesión tiene que terminar en /ingresar y en
+ * nada más.
+ *
+ * `redirect()` interrumpe el renderizado con su propia señal, así que lo que
+ * sigue no se ejecuta y el tipo de retorno no miente.
+ */
+export async function requireUserOrRedirect(): Promise<AuthUser> {
+  const user = await getCurrentUser();
+  if (!user) redirect('/ingresar');
   return user;
 }
 
