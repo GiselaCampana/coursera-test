@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getDashboard } from '@/lib/services/reports';
 import { formatARS, formatQty } from '@/lib/money';
@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: 'Inicio' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaInicio() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   const data = await getDashboard(user);
 
   return (

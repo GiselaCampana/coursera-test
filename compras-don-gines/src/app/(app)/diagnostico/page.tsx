@@ -1,5 +1,5 @@
 import type { Metadata } from 'next';
-import { requireUser } from '@/lib/auth/session';
+import { requireUserOrRedirect } from '@/lib/auth/session';
 import { env } from '@/lib/env';
 import { versionEnEjecucion } from '@/lib/version';
 import { PanelDiagnostico } from './PanelDiagnostico';
@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic';
  * el teléfono, en el local, con la factura que está dando problemas.
  */
 export default async function PaginaDiagnostico() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   const version = versionEnEjecucion();
   return (
     <PanelDiagnostico

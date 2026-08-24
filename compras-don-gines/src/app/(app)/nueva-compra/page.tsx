@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { arTodayISO } from '@/lib/datetime';
@@ -11,7 +11,7 @@ export const metadata: Metadata = { title: 'Nueva compra' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaNuevaCompra() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.COMPROBANTES_CARGAR)) redirect('/');
 
   const [branches, suppliers, products] = await Promise.all([

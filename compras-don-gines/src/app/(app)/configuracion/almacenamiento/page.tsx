@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { estadoAlmacenamiento, formatearBytes } from '@/lib/services/almacenamiento';
 import { resumenParaArchivar } from '@/lib/services/archivado';
@@ -18,7 +18,7 @@ function haceUnAnoISO(): string {
 }
 
 export default async function PaginaAlmacenamiento() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.ALMACENAMIENTO_GESTIONAR)) redirect('/configuracion');
 
   const corte = haceUnAnoISO();

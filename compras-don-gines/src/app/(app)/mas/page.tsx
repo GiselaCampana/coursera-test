@@ -1,13 +1,13 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { requireUser, hasAnyPermission, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasAnyPermission, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { salir } from '@/app/ingresar/acciones';
 
 export const metadata: Metadata = { title: 'Más' };
 
 export default async function PaginaMas() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
 
   const secciones = [
     {
