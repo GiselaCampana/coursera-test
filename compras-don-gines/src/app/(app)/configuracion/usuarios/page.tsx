@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { formatDateTimeAr } from '@/lib/datetime';
@@ -12,7 +12,7 @@ export const metadata: Metadata = { title: 'Usuarios' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaUsuarios() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.USUARIOS_GESTIONAR)) redirect('/configuracion');
 
   const [usuarios, roles, sucursales] = await Promise.all([

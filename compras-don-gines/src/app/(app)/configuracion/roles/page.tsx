@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { ALL_PERMISSIONS, PERMISSIONS, PERMISSION_LABEL } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { FormularioConfig, Casilla } from '@/components/FormularioConfig';
@@ -35,7 +35,7 @@ function Permisos({ prefijo, seleccionados }: { prefijo: string; seleccionados?:
 }
 
 export default async function PaginaRoles() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.ROLES_GESTIONAR)) redirect('/configuracion');
 
   const roles = await prisma.role.findMany({
