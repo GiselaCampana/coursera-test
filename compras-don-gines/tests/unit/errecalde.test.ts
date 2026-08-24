@@ -165,7 +165,7 @@ describe('el comprobante entero pasa los autocontroles', () => {
   });
 });
 
-describe('rescate del renglón que no cierra por centavos', () => {
+describe('el analizador no corrige importes', () => {
   /**
    * Arma una tabla de Errecalde con los subtotales que se le pasen.
    * El texto imita el que sale de la foto, con el ancla "0% 21%".
@@ -179,54 +179,26 @@ describe('rescate del renglón que no cierra por centavos', () => {
       .join('\n');
   }
 
-  it('despeja el subtotal del único renglón mal leído y lo verifica', () => {
-    // Es lo que pasa de verdad: el OCR lee "$22.587,00" donde dice
-    // "$22.587,34". Los centavos no están en la imagen, así que releer no los
-    // trae. Pero el neto impreso los determina, y cantidad × precio lo confirma.
-    const texto = tabla([
-      { desc: 'ARTICULO PRIMERO', cant: '10', precio: '1.000,00', sub: '10.000,00' },
-      { desc: 'ARTICULO SEGUNDO', cant: '10', precio: '2.258,73', sub: '22.587,00' },
-    ]);
-    const leido = analizadorErrecalde.analizar({
-      completo: texto,
-      articulos: texto,
-      resumen: 'Neto Gravado   $32.587,34\nIVA   $6.843,34\nTOTAL   $39.430,68',
-    });
-
-    expect(leido.items).toHaveLength(2);
-    expect(new Decimal(leido.items[1].grossSubtotal!).toFixed(2)).toBe('22587.34');
-    expect(leido.observaciones.join(' ')).toContain('lo que falta para el neto gravado impreso');
+  const texto = tabla([
+    { desc: 'ARTICULO PRIMERO', cant: '10', precio: '1.000,00', sub: '10.000,00' },
+    { desc: 'ARTICULO SEGUNDO', cant: '10', precio: '2.258,73', sub: '22.587,00' },
+  ]);
+  const leido = analizadorErrecalde.analizar({
+    completo: texto,
+    articulos: texto,
+    resumen: 'Neto Gravado   $32.587,30\nIVA   $6.843,33\nTOTAL   $39.430,63',
   });
 
-  it('no toca nada cuando hay dos renglones en falta', () => {
-    // Con dos incógnitas y una sola ecuación, cualquier reparto sería adivinar.
-    const texto = tabla([
-      { desc: 'ARTICULO PRIMERO', cant: '10', precio: '1.000,00', sub: '9.000,00' },
-      { desc: 'ARTICULO SEGUNDO', cant: '10', precio: '2.258,73', sub: '22.587,00' },
-    ]);
-    const leido = analizadorErrecalde.analizar({
-      completo: texto,
-      articulos: texto,
-      resumen: 'Neto Gravado   $32.587,34\nIVA   $6.843,34\nTOTAL   $39.430,68',
-    });
+  it('deja el importe tal como lo leyó, sin arreglarlo', () => {
+    // El analizador dice qué leyó y qué no cierra, nada más. Corregir centavos
+    // mal leídos es tarea de la conciliación (ver conciliacion.test.ts), que
+    // vale para cualquier proveedor y exige sus propias condiciones. Tener la
+    // misma regla en los dos lados terminaría con dos criterios distintos.
     expect(new Decimal(leido.items[1].grossSubtotal!).toFixed(2)).toBe('22587.00');
-    expect(leido.observaciones.join(' ')).toContain('faltan o sobran renglones');
   });
 
-  it('no toca nada cuando el valor despejado no cierra contra cantidad × precio', () => {
-    // Acá la diferencia contra el neto no viene de un centavo mal leído sino de
-    // un renglón que falta. Despejar taparía el faltante con un número inventado.
-    const texto = tabla([
-      { desc: 'ARTICULO PRIMERO', cant: '10', precio: '1.000,00', sub: '10.000,00' },
-      { desc: 'ARTICULO SEGUNDO', cant: '10', precio: '2.258,73', sub: '20.000,00' },
-    ]);
-    const leido = analizadorErrecalde.analizar({
-      completo: texto,
-      articulos: texto,
-      resumen: 'Neto Gravado   $500.000,00\nIVA   $105.000,00\nTOTAL   $605.000,00',
-    });
-    expect(new Decimal(leido.items[1].grossSubtotal!).toFixed(2)).toBe('20000.00');
-    expect(leido.observaciones.join(' ')).not.toContain('lo que falta para el neto');
+  it('avisa que ese renglón no cierra', () => {
+    expect(leido.observaciones.join(' ')).toMatch(/Renglón 2 .*Hay que releerlo/);
   });
 });
 

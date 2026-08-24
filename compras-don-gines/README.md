@@ -91,6 +91,7 @@ src/
     domain/
       costing.ts          Cálculo por artículo y prorrateo de impuestos
       validation.ts       Los autocontroles del comprobante
+      conciliacion.ts     Conciliación de centavos mal leídos, con sus condiciones
       payments.ts         Plazos, vencimientos y estados de pago
       pricing.ts          Precios de venta
       matching.ts         Reconocimiento de productos
@@ -337,14 +338,48 @@ Dos casos que el sistema detecta explícitamente:
   menor que el detalle, la aplicación avisa que probablemente se leyeron los importes de
   una línea en lugar del resumen, y señala con qué renglón coinciden.
 
+### Conciliación automática de centavos por OCR
+
+Sobre una foto, los dígitos de los centavos son los más chicos de la tabla y están contra
+el borde derecho de la columna: el OCR lee `$22.587,00` donde el papel dice `$22.587,34`.
+Frenar por eso obliga a corregir a mano un renglón por foto; aflojar la tolerancia de los
+renglones en general dejaría pasar un dígito mal leído en los pesos, que sí mueve plata.
+
+La regla no afloja nada: corrige el renglón usando **su propia** cantidad × precio, y sólo
+si se dan **todas** estas condiciones (`src/lib/domain/conciliacion.ts`):
+
+| | Condición |
+|---|---|
+| Pie completo | Neto, IVA, percepciones y total leídos, y `neto + IVA + percepciones = total` |
+| Pie coherente | Con descuento por comprobante, `subtotal − descuento = neto` |
+| Renglones completos | Coinciden con los que declara el comprobante y con las filas vistas en la imagen |
+| Sólo centavos | Cada diferencia es menor a $1 **y la parte entera del importe coincide** |
+| Renglón identificado | Tiene cantidad, precio y código de artículo legibles |
+| Pocos | Hasta 3 renglones, y las diferencias juntas suman menos de $1 |
+| Sin compensar | Todas las diferencias van en la misma dirección y suman exactamente lo que le falta al detalle |
+
+La última es la que impide el abuso: dos renglones que se desvían treinta centavos en
+direcciones opuestas dan un detalle que suma exacto y "de afuera" parece perfecto.
+Comparar la suma de las diferencias con la suma de sus valores absolutos detecta esa
+cancelación y rechaza la conciliación entera.
+
+Si algo no se cumple, no se aplica nada y el comprobante frena como antes, con el motivo
+escrito.
+
+Cuando se aplica, el semáforo queda **verde** —el comprobante está controlado— con una
+advertencia discreta: *«Se conciliaron automáticamente $0,51 por diferencias de centavos de
+OCR»*. Y queda el rastro completo: el importe leído, el conciliado, la diferencia y el
+renglón afectado se guardan en el informe de control del comprobante (junto a su imagen) y
+en un asiento de auditoría propio, `comprobante.centavos_conciliados`.
+
 ---
 
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (144)
+npm test              # unitarias e integración (203)
 npm run test:unit     # sólo unitarias
-npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (70)
+npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (63)
 npm run test:all      # todo
 ```
 

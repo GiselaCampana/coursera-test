@@ -1,4 +1,5 @@
 import type { CheckResult } from '@/lib/domain/validation';
+import type { Conciliacion } from '@/lib/domain/conciliacion';
 
 export interface Opcion {
   id: string;
@@ -54,6 +55,8 @@ export interface InformeControl {
   checks: CheckResult[];
   errorCount: number;
   warningCount: number;
+  /** Centavos que el servidor concilió, para poder avisarlo en la pantalla. */
+  reconciliation?: Conciliacion | null;
   computed: {
     itemCount: number;
     grossSubtotal: string;

@@ -344,6 +344,116 @@ describe('relectura automática', () => {
   });
 });
 
+describe('conciliación automática de centavos por OCR', () => {
+  /**
+   * El primer renglón con los centavos del importe comidos: el papel dice
+   * 258.195,70 y el OCR lee 258.195,00. Setenta centavos sobre dos millones.
+   */
+  const CENTAVOS_COMIDOS = LOS_CALVOS_ARTICULOS_OCR.replace('258.195,7O', '258.195,OO');
+
+  it('la concilia, guarda el comprobante en verde y deja el rastro completo', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: CENTAVOS_COMIDOS,
+    });
+
+    // Verde y guardable: los centavos no frenan el comprobante.
+    expect(lectura.report.errorCount).toBe(0);
+    expect(lectura.report.canSave).toBe(true);
+
+    // Y el rastro: importe leído, importe conciliado, diferencia y renglón.
+    const conciliacion = lectura.report.reconciliation;
+    expect(conciliacion).not.toBeNull();
+    expect(conciliacion!.totalAbsoluto).toBe('0.70');
+    expect(conciliacion!.renglones).toHaveLength(1);
+    expect(conciliacion!.renglones[0]).toMatchObject({
+      lineNumber: 1,
+      supplierCode: '1001',
+      leido: '258195.00',
+      conciliado: '258195.70',
+      diferencia: '0.70',
+    });
+
+    // El renglón quedó guardado con el importe conciliado.
+    const items = await prisma.documentItem.findMany({
+      where: { documentId: documento.id },
+      orderBy: { lineNumber: 'asc' },
+    });
+    expect(items[0].grossSubtotal.toFixed(2)).toBe('258195.70');
+
+    // El informe se persiste con el comprobante, así que la conciliación se
+    // puede consultar después junto a la imagen.
+    const guardado = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    const informe = guardado.checkReport as unknown as { reconciliation?: { totalAbsoluto: string } };
+    expect(informe.reconciliation?.totalAbsoluto).toBe('0.70');
+    expect(await prisma.documentFile.count({ where: { documentId: documento.id } })).toBe(1);
+
+    // Y su propio asiento de auditoría, buscable por acción.
+    const auditoria = await prisma.auditLog.findFirst({
+      where: { entityId: documento.id, action: 'comprobante.centavos_conciliados' },
+    });
+    expect(auditoria).not.toBeNull();
+    expect(auditoria!.reason).toMatch(/Se conciliaron autom/);
+    const detalle = auditoria!.after as unknown as {
+      totalConciliado: string;
+      renglones: { leido: string; conciliado: string; diferencia: string }[];
+    };
+    expect(detalle.totalConciliado).toBe('0.70');
+    expect(detalle.renglones[0].leido).toBe('258195.00');
+    expect(detalle.renglones[0].conciliado).toBe('258195.70');
+  });
+
+  it('una diferencia de un peso sigue frenando el comprobante', async () => {
+    // 258.195,70 leído como 258.194,70: un peso justo. El tope es duro, y
+    // además cambia la parte entera, que es la señal de que no son centavos.
+    const unPeso = LOS_CALVOS_ARTICULOS_OCR.replace('258.195,7O', '258.194,7O');
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: unPeso,
+    });
+
+    expect(lectura.report.reconciliation ?? null).toBeNull();
+    expect(lectura.report.canSave).toBe(false);
+    expect(lectura.report.state).toBe('DIFERENCIA');
+
+    const guardado = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    expect(guardado.status).toBe('REQUIERE_REVISION');
+    expect(
+      await prisma.auditLog.count({
+        where: { entityId: documento.id, action: 'comprobante.centavos_conciliados' },
+      }),
+    ).toBe(0);
+  });
+
+  it('una cantidad mal leída no se disfraza de diferencia de centavos', async () => {
+    // 16,10 kg leído como 16,00: el importe impreso deja de cerrar por más de
+    // un peso, así que no hay nada que conciliar y el comprobante frena.
+    const cantidadMal = LOS_CALVOS_ARTICULOS_OCR.replace('l6,1O   16.O37,OO', 'l6,OO   16.O37,OO');
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: cantidadMal,
+    });
+
+    expect(lectura.report.reconciliation ?? null).toBeNull();
+    expect(lectura.report.canSave).toBe(false);
+  });
+
+  it('no se concilia nada cuando el comprobante ya cierra', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id);
+    expect(lectura.report.canSave).toBe(true);
+    expect(lectura.report.reconciliation ?? null).toBeNull();
+  });
+});
+
 describe('los números escritos como en el papel', () => {
   it('guarda un comprobante cuyo resumen viene en formato argentino', async () => {
     // Es lo que manda la pantalla de revisión: los campos se muestran y se

@@ -9,6 +9,7 @@ import {
   type MoneyInput,
 } from '@/lib/money';
 import { summarizeItems, type CostedItem } from '@/lib/domain/costing';
+import type { Conciliacion } from '@/lib/domain/conciliacion';
 
 export type CheckSeverity = 'OK' | 'WARN' | 'ERROR';
 export type CheckState = 'OK' | 'RECONCILIADO' | 'DIFERENCIA' | 'PENDIENTE';
@@ -57,6 +58,13 @@ export interface ValidationInput {
    * justamente lo que hay que detectar.
    */
   filasEnLaImagen?: number | null;
+  /**
+   * Centavos que se conciliaron antes de validar, si se conciliaron.
+   *
+   * Llega ya resuelta desde `conciliarCentavos`: acá sólo se deja constancia en
+   * el informe. No cambia ningún control ni el estado del semáforo.
+   */
+  reconciliation?: Conciliacion | null;
 }
 
 export interface ValidationReport {
@@ -77,6 +85,14 @@ export interface ValidationReport {
   };
   errorCount: number;
   warningCount: number;
+  /**
+   * Centavos conciliados automáticamente, con el detalle de qué se cambió.
+   *
+   * Queda guardado con el comprobante —el informe se persiste entero— así que
+   * el importe que se leyó de la foto, el que quedó y la diferencia se pueden
+   * consultar después junto a la imagen del comprobante.
+   */
+  reconciliation?: Conciliacion | null;
 }
 
 const present = (v: MoneyInput): boolean =>
@@ -487,6 +503,35 @@ export function validateDocument(input: ValidationInput): ValidationReport {
   // --- 8. ¿Los "totales" son en realidad los de un renglón? --------------
   checks.push(detectLineTotalsMistakenForDocumentTotals(items, printed, sums.netAmount));
 
+  /*
+   * Centavos conciliados: se informa, no se penaliza.
+   *
+   * Va como OK y no como WARN a propósito. La conciliación sólo se aplica
+   * cuando el renglón ya coincidía con el papel hasta los pesos, el pie cierra
+   * entre sí y el detalle corregido cae sobre el neto impreso: con todo eso
+   * dado, el comprobante *está* controlado, y ponerlo en amarillo sería pedirle
+   * al operador que revise algo que ya se verificó. Lo que sí corresponde es
+   * que quede escrito qué se cambió, y para eso está este renglón del informe.
+   */
+  const conciliacion = input.reconciliation ?? null;
+  if (conciliacion) {
+    checks.push({
+      code: 'CENTAVOS_CONCILIADOS',
+      label: 'Centavos conciliados automáticamente',
+      severity: 'OK',
+      difference: conciliacion.totalAbsoluto,
+      message:
+        `${conciliacion.mensaje} ` +
+        conciliacion.renglones
+          .map(
+            (r) =>
+              `Renglón ${r.lineNumber} (${r.description}): se leyó ${formatARS(r.leido)} y quedó ` +
+              `${formatARS(r.conciliado)}.`,
+          )
+          .join(' '),
+    });
+  }
+
   // --- Estado final ------------------------------------------------------
   const errorCount = checks.filter((c) => c.severity === 'ERROR').length;
   const warningCount = checks.filter((c) => c.severity === 'WARN').length;
@@ -502,6 +547,7 @@ export function validateDocument(input: ValidationInput): ValidationReport {
     checks,
     errorCount,
     warningCount,
+    reconciliation: conciliacion,
     computed: {
       itemCount: sums.count,
       grossSubtotal: sums.grossSubtotal.toFixed(2),

@@ -97,19 +97,15 @@ export const analizadorErrecalde: AnalizadorComprobante = {
       observaciones.push('No se reconoció ningún renglón en la tabla de artículos.');
     }
 
-    // Con el neto impreso a la vista se puede rescatar el renglón único que no
-    // cierra por centavos, antes de dar por perdida toda la lectura.
-    const rescate = recuperarRenglonUnico(items, summary);
-    if (rescate) {
-      // El aviso de que ese renglón no cerraba ya no corresponde: decir "hay
-      // que releerlo" al lado de "se recuperó así" deja al usuario sin saber
-      // cuál de las dos cosas pasó.
-      const obsolete = observaciones.findIndex((o) =>
-        o.startsWith(`Renglón ${rescate.lineNumber} `),
-      );
-      if (obsolete >= 0) observaciones.splice(obsolete, 1);
-      observaciones.push(rescate.aviso);
-    }
+    /*
+     * Acá no se corrige ningún importe.
+     *
+     * Los renglones cuyos centavos el OCR leyó mal los resuelve la conciliación
+     * de centavos (`@/lib/domain/conciliacion`), que corre después y vale para
+     * cualquier proveedor. Este analizador se limita a decir qué leyó y qué no
+     * cierra: mezclar las dos cosas dejaría la misma regla escrita en dos
+     * lugares, con dos criterios que se van separando.
+     */
 
     // El control que de verdad cierra el comprobante: la suma de los subtotales
     // impresos contra el neto gravado impreso. Son dos lecturas independientes
@@ -141,71 +137,6 @@ export const analizadorErrecalde: AnalizadorComprobante = {
     return { header, items, summary, observaciones };
   },
 };
-
-/**
- * Rescata el subtotal del único renglón que no cierra, usando el neto impreso.
- *
- * Pasa con los centavos: el OCR lee "$22.587,00" donde el papel dice
- * "$22.587,34". Los dígitos que faltan no están en ningún lado de la imagen,
- * así que ninguna relectura de ese renglón los va a traer.
- *
- * Pero el comprobante trae el dato dos veces. Si todos los demás renglones
- * cierran contra su propio subtotal, y la suma de todos tiene que dar el neto
- * gravado impreso, entonces el subtotal del renglón que falta queda
- * **determinado**: es la diferencia. Y encima se puede comprobar, porque ese
- * valor tiene que coincidir además con cantidad × precio de ese mismo renglón,
- * que son otras dos columnas leídas por separado.
- *
- * O sea que el número no se inventa: se despeja de una igualdad y se verifica
- * contra otra independiente. Se hace sólo cuando hay **un** renglón en falta
- * —con dos, el sistema tiene infinitas soluciones y cualquier reparto sería
- * adivinar— y queda anotado en las observaciones, para que se vea de dónde
- * salió.
- */
-function recuperarRenglonUnico(
-  items: OcrItem[],
-  summary: OcrSummary,
-): { lineNumber: number; aviso: string } | null {
-  const neto = summary.netTotal ? parseArNumber(summary.netTotal) : null;
-  if (!neto || items.length < 2) return null;
-
-  const conValor = items.map((item) => ({
-    item,
-    cantidad: item.quantity ? parseArNumber(item.quantity) : null,
-    precio: item.unitNetPrice ? parseArNumber(item.unitNetPrice) : null,
-    subtotal: item.grossSubtotal ? parseArNumber(item.grossSubtotal) : null,
-  }));
-  if (conValor.some((f) => !f.cantidad || !f.precio || !f.subtotal)) return null;
-
-  const tolerancia = (cantidad: Decimal) => cantidad.abs().times(0.005).plus(0.02);
-  const noCierran = conValor.filter(
-    (f) => f.cantidad!.times(f.precio!).minus(f.subtotal!).abs().gt(tolerancia(f.cantidad!)),
-  );
-  if (noCierran.length !== 1) return null;
-
-  const huerfano = noCierran[0];
-  const sumaDeLosDemas = conValor
-    .filter((f) => f !== huerfano)
-    .reduce((total, f) => total.plus(f.subtotal!), new Decimal(0));
-  const implicado = neto.minus(sumaDeLosDemas);
-  if (implicado.lte(0)) return null;
-
-  // La comprobación independiente: el valor despejado tiene que cerrar también
-  // contra cantidad × precio de ese renglón. Si no, no se toca nada.
-  const esperado = huerfano.cantidad!.times(huerfano.precio!);
-  if (esperado.minus(implicado).abs().gt(tolerancia(huerfano.cantidad!))) return null;
-
-  const antes = huerfano.subtotal!;
-  huerfano.item.grossSubtotal = implicado.toString();
-
-  return {
-    lineNumber: huerfano.item.lineNumber,
-    aviso:
-      `Renglón ${huerfano.item.lineNumber} (${huerfano.item.description}): el subtotal se leyó ` +
-      `${antes.toFixed(2)} y no cerraba. Se tomó ${implicado.toFixed(2)}, que es lo que falta ` +
-      'para el neto gravado impreso y coincide con cantidad × precio del renglón.',
-  };
-}
 
 function analizarEncabezado(texto: string): OcrHeader {
   const header: OcrHeader = {

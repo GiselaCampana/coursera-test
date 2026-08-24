@@ -48,6 +48,7 @@ export function Semaforo({ report }: { report: ValidationReport | null }) {
             Hizo falta más de una lectura, pero los artículos, el neto, los impuestos y el total
             cierran. Conviene repasar el detalle antes de guardar.
           </span>
+          <NotaDeConciliacion report={report} />
         </div>
       </div>
     );
@@ -59,9 +60,27 @@ export function Semaforo({ report }: { report: ValidationReport | null }) {
       <div className="semaforo-cuerpo">
         <strong>Comprobante controlado</strong>
         <span>Los artículos, el neto, los impuestos y el total coinciden con lo impreso.</span>
+        <NotaDeConciliacion report={report} />
       </div>
     </div>
   );
+}
+
+/**
+ * "Se conciliaron automáticamente $0,51 por diferencias de centavos de OCR".
+ *
+ * Va en cualquier estado en que el comprobante se pueda guardar, no sólo en el
+ * verde: que además haya hecho falta releer no quita que un importe no sea
+ * exactamente el que se leyó de la foto, y eso se dice siempre.
+ *
+ * En chico y debajo del estado porque el comprobante *está* controlado —la
+ * corrección sólo se aplica cuando el renglón ya coincidía hasta los pesos y
+ * las diferencias empujan hacia lo que le falta al detalle—, pero quien mira la
+ * pantalla tiene derecho a enterarse sin ir a buscarlo.
+ */
+function NotaDeConciliacion({ report }: { report: ValidationReport }) {
+  if (!report.reconciliation) return null;
+  return <span className="semaforo-nota">{report.reconciliation.mensaje}</span>;
 }
 
 export function ListaControles({ checks }: { checks: CheckResult[] }) {

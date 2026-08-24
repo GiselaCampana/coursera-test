@@ -449,6 +449,19 @@ a {
   min-width: 0;
 }
 
+/*
+ * Nota al pie del semáforo verde.
+ *
+ * Para lo que está bien pero conviene decir igual, como los centavos
+ * conciliados. Se ve, pero no compite con el estado.
+ */
+.semaforo-nota {
+  display: block;
+  margin-top: 6px;
+  font-size: 0.8rem;
+  opacity: 0.8;
+}
+
 /* --- Lista de controles -------------------------------------------------- */
 
 .controles {

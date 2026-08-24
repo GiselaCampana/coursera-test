@@ -87,48 +87,60 @@ test.describe('lectura de una foto real de Errecalde', () => {
     await expect(page.locator('#total')).toHaveValue(/4\.816\.812,73|4816812,73/);
 
     // Y el detalle reconstruido a partir de los 23 renglones cae sobre el neto
-    // impreso, con el margen de centavos que deja la lectura de una foto.
+    // impreso, con los centavos ya conciliados.
     const detalle = page.locator('.card', { hasText: 'Lo que da el detalle' });
     // Sin el signo pesos adelante: el formato es-AR separa con un espacio
     // especial que una expresión regular no normaliza.
-    await expect(detalle).toContainText(/3\.830\.46[5-9],\d\d/);
+    await expect(detalle).toContainText(/3\.830\.467,\d\d/);
 
     expect(externos, `El navegador salió a: ${externos.join(', ')}`).toHaveLength(0);
     await sinScrollHorizontal(page);
   });
 
-  test('marca lo que no pudo leer al centavo en vez de darlo por bueno', async ({
-    page,
-  }, testInfo) => {
+  test('no frena por centavos de OCR, y avisa los que concilió', async ({ page }, testInfo) => {
     soloEnIphone(test, testInfo.project.name);
     await leer(page, await fotoErrecalde());
 
     /*
-     * Sobre esta foto quedan uno o dos renglones cuyos centavos el OCR no lee
-     * bien: los dígitos de los centavos, en el borde derecho de la tabla, salen
-     * "00" donde el papel dice "34". Son centavos sobre una factura de casi
-     * cuatro millones.
+     * Sobre esta foto quedan uno o dos renglones cuyos centavos el OCR no lee:
+     * los dígitos más chicos de la tabla, contra el borde derecho de la
+     * columna, salen "00" donde el papel dice "34".
      *
-     * Lo que se comprueba acá es que la aplicación **no los da por buenos**. Un
-     * comprobante que no se pudo verificar renglón por renglón no se guarda como
-     * controlado, aunque la diferencia sea de medio peso: el operador confirma
-     * ese renglón mirando el papel y recién ahí se guarda. Preferimos eso a que
-     * el sistema complete un número que no llegó a leer.
+     * La conciliación de centavos los corrige con la cantidad y el precio del
+     * propio renglón, y sólo porque acá se dan todas sus condiciones: el pie
+     * cierra consigo mismo, están los 23 renglones, los pesos de cada importe
+     * coinciden y las correcciones empujan hacia lo que al detalle le falta para
+     * el subtotal impreso, sin pasarse.
+     *
+     * Así que el comprobante se puede guardar, pero lo dice.
      */
-    const noCierra = page.locator('.card', { hasText: 'Qué no cierra' });
-    if (await noCierra.count()) {
-      // Si algo quedó marcado, tiene que ser un renglón puntual y no el
-      // comprobante entero, y el guardado tiene que estar frenado.
-      await expect(noCierra).toContainText(/renglón \d+/i);
-      await expect(page.locator('.semaforo-ok')).toHaveCount(0);
-    }
+    // Nada de rojo y el guardado habilitado: los centavos ya no frenan.
+    await expect(page.locator('.semaforo-error')).toHaveCount(0);
+    await expect(page.locator('.card', { hasText: 'Qué no cierra' })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Continuar al pago' })).toBeEnabled();
 
-    // En cualquier caso, la diferencia contra el papel es de centavos: si fuera
-    // grande, lo que falló no son los centavos sino la lectura de la tabla.
+    /*
+     * El semáforo puede quedar verde o amarillo, y las dos cosas están bien: si
+     * además hizo falta releer la foto, el amarillo lo dice y eso no tiene que
+     * ver con los centavos. Lo que no puede pasar es que la conciliación quede
+     * escondida, así que la advertencia se pide en el estado que sea.
+     */
+    const semaforo = page.locator('.semaforo-ok, .semaforo-aviso');
+    await expect(semaforo).toBeVisible();
+    await expect(semaforo).toContainText(/Se conciliaron autom[áa]ticamente/);
+    await expect(semaforo).toContainText(/centavos de OCR/);
+
+    // Y en la lista de controles queda el detalle de qué se cambió.
+    const control = page.locator('.controles li', { hasText: 'Centavos conciliados' });
+    await expect(control).toContainText(/Rengl[óo]n \d+/);
+    await expect(control).toContainText(/se leyó .* y quedó/);
+
+    // Y el detalle cae sobre el neto impreso, dentro del peso: lo que queda son
+    // los centavos de redondeo del propio proveedor, no un error de lectura.
     const detalle = page.locator('.card', { hasText: 'Lo que da el detalle' });
     // Sin el signo pesos adelante: el formato es-AR separa con un espacio
     // especial que una expresión regular no normaliza.
-    await expect(detalle).toContainText(/3\.830\.46[5-9],\d\d/);
+    await expect(detalle).toContainText(/3\.830\.467,\d\d/);
   });
 
   test('distingue los artículos por kilo de los que van por unidad', async ({ page }, testInfo) => {

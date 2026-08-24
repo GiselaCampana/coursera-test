@@ -179,9 +179,26 @@ export function PasoRevision({
         printed,
         supplierRules: reglas,
         attempts: comprobante.lecturas.length,
+        /*
+         * La conciliación de centavos viene del servidor y se arrastra tal cual.
+         *
+         * Esta pantalla recalcula los controles en vivo mientras se editan los
+         * renglones, pero la conciliación no se puede recalcular acá: es el
+         * servidor el que decide si se dieron sus condiciones, y el importe que
+         * *se leyó de la foto* ya no está en la pantalla —lo que se ve es el
+         * conciliado—. Sin arrastrarla, el aviso desaparecía en cuanto la
+         * pantalla recalculaba, que es siempre.
+         */
+        reconciliation: comprobante.informe?.reconciliation ?? null,
       }),
     };
-  }, [articulos, resumen, comprobante.condiciones, comprobante.lecturas.length]);
+  }, [
+    articulos,
+    resumen,
+    comprobante.condiciones,
+    comprobante.lecturas.length,
+    comprobante.informe,
+  ]);
 
   // Al cambiar el proveedor o la fecha se recalcula la fecha prevista de pago.
   useEffect(() => {

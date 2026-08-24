@@ -12,6 +12,7 @@ import {
   type SupplierTaxExpectation,
   type ValidationReport,
 } from '@/lib/domain/validation';
+import { conciliarCentavos, type Conciliacion } from '@/lib/domain/conciliacion';
 import { mergeHeaders, toPrintedSummary, toRawItems } from '@/lib/ocr/normalize';
 import { elegirAnalizador } from '@/lib/ocr/parsers';
 import type { AnalisisComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
@@ -100,6 +101,7 @@ interface CandidatoEvaluado extends Candidato {
   costeados: CostedItem[];
   informe: ValidationReport;
   puntaje: number;
+  conciliacion: Conciliacion | null;
 }
 
 export async function registrarLectura(
@@ -234,6 +236,7 @@ export async function registrarLectura(
     });
 
     const observaciones = [...new Set([...(lectura.observaciones ?? []), ...mejor.observaciones])];
+    if (mejor.conciliacion) observaciones.push(mejor.conciliacion.mensaje);
 
     await recordAudit({
       userId: user.id,
@@ -249,6 +252,31 @@ export async function registrarLectura(
         estrategia: mejor.etiqueta,
       },
     });
+
+    /*
+     * La conciliación de centavos va en su propio asiento de auditoría.
+     *
+     * Podría ir dentro del anterior, pero es lo único de toda la lectura que
+     * *cambia un importe* respecto de lo que se leyó del papel. Merece un
+     * renglón propio en la auditoría, buscable por su acción, con el importe
+     * que se leyó, el que quedó y la diferencia de cada renglón afectado. El
+     * comprobante y su imagen se llegan desde `entityId`.
+     */
+    if (mejor.conciliacion) {
+      await recordAudit({
+        userId: user.id,
+        action: AUDIT_ACTIONS.CENTAVOS_CONCILIADOS,
+        entity: 'Document',
+        entityId: documentId,
+        reason: mejor.conciliacion.mensaje,
+        after: {
+          totalConciliado: mejor.conciliacion.totalAbsoluto,
+          renglones: mejor.conciliacion.renglones,
+          netoImpreso: mejor.printed.netTotal ?? null,
+          totalImpreso: mejor.printed.total ?? null,
+        },
+      });
+    }
 
     const puedeReleer = !mejor.informe.canSave && intentos.length < env.ocrMaxAttempts;
 
@@ -363,7 +391,23 @@ function elegirMejor(
 ): CandidatoEvaluado {
   const evaluados = candidatos.map((candidato): CandidatoEvaluado => {
     const printed = toPrintedSummary(candidato.summary);
-    const costeados = costItems(candidato.items, {
+
+    /*
+     * Antes de costear, la conciliación de centavos.
+     *
+     * Va acá y no en el analizador del proveedor a propósito: es una regla del
+     * negocio, no del formato de un comprobante, y tiene que valer igual para
+     * cualquier proveedor. Devuelve los renglones sin tocar salvo que se den
+     * todas sus condiciones, así que llamarla siempre no cambia nada en los
+     * comprobantes que ya cerraban.
+     */
+    const conciliado = conciliarCentavos({
+      items: candidato.items,
+      printed,
+      filasEnLaImagen: candidato.filasEnLaImagen,
+    });
+
+    const costeados = costItems(conciliado.items, {
       netTotal: printed.netTotal ?? '0',
       ivaTotal: printed.ivaTotal ?? '0',
       perceptionsTotal: printed.perceptionsTotal ?? '0',
@@ -374,6 +418,7 @@ function elegirMejor(
       supplierRules: reglas,
       attempts: intentos,
       filasEnLaImagen: candidato.filasEnLaImagen,
+      reconciliation: conciliado.conciliacion,
     });
 
     const diferencia = printed.netTotal
@@ -395,10 +440,21 @@ function elegirMejor(
       informe.errorCount * 1_000_000 +
       sinVerificar * 5_000 +
       informe.warningCount * 1_000 +
+      // Un candidato que necesitó conciliar centavos es apenas peor que uno que
+      // cerró sin tocar nada: a igualdad de todo lo demás, gana el que se leyó
+      // entero. Pesa poco, porque conciliar centavos es una diferencia menor.
+      (conciliado.conciliacion ? 50 : 0) +
       Math.min(relativa, 1) * 900 -
       Math.min(candidato.items.length, 200);
 
-    return { ...candidato, printed, costeados, informe, puntaje };
+    return {
+      ...candidato,
+      printed,
+      costeados,
+      informe,
+      puntaje,
+      conciliacion: conciliado.conciliacion,
+    };
   });
 
   evaluados.sort((a, b) => a.puntaje - b.puntaje);
