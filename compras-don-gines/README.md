@@ -305,6 +305,30 @@ Y cada intento guarda el commit que lo interpretó. Si los números que se está
 calculó una versión anterior a la que está corriendo, la pantalla lo dice y ofrece volver a
 leer, en vez de dejar que un resultado guardado pase por nuevo.
 
+### Sesión: fallar o mandar a ingresar
+
+Hay dos ayudantes, y usar el equivocado tiene consecuencias:
+
+- `requireUser()` **tira** `UnauthorizedError` si no hay sesión. Es lo correcto en
+  una API o una server action: quien llama es un programa y el 401 es la respuesta.
+- `requireUserOrRedirect()` **manda a `/ingresar`**. Es lo que va en una pantalla.
+
+El layout de `(app)` ya redirige a quien no tenga sesión, pero eso no alcanza: en el App
+Router el layout y la página se renderizan **al mismo tiempo**, no uno después del otro. Con
+`requireUser()` en la página, una visita anónima terminaba igual en `/ingresar` —el redirect
+gana— pero dejaba una excepción en el log del servidor en cada visita.
+
+Eso no es ruido inofensivo. Durante un despliegue que no termina de arrancar, el log es lo
+primero que se mira, y un `UnauthorizedError: 401` ahí manda derecho a buscar un problema de
+autenticación que no existe. Pasó, y costó un rato.
+
+Vale la pena decir cómo se prueba, porque el caso enseña algo: **una prueba que sólo mire
+códigos de estado no lo detecta**. La respuesta era un 307 correcto con el defecto puesto y
+sin él. Lo que lo detecta es levantar un servidor con la salida capturada, visitarlo sin
+cookies y leer lo que escribió (`tests/e2e/acceso-logs.spec.ts`). Verifiqué que esa prueba
+falla si se vuelve a poner `requireUser()` en una pantalla, que es la única forma de saber
+que una prueba sirve.
+
 ### Qué versión está corriendo
 
 **Más → Diagnóstico de lectura** abre con el commit corto que está sirviendo el servidor, la
@@ -441,9 +465,9 @@ en un asiento de auditoría propio, `comprobante.centavos_conciliados`.
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (203)
+npm test              # unitarias e integración (229)
 npm run test:unit     # sólo unitarias
-npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (63)
+npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (72)
 npm run test:all      # todo
 ```
 
