@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { requireUser, branchScopeFilter } from '@/lib/auth/session';
+import { requireUserOrRedirect, branchScopeFilter } from '@/lib/auth/session';
 import { prisma, type Prisma } from '@/lib/db';
 import { formatARS } from '@/lib/money';
 import { formatDateAr, parseArDate } from '@/lib/datetime';
@@ -29,7 +29,7 @@ interface Props {
 }
 
 export default async function PaginaComprobantes({ searchParams }: Props) {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   const filtros = await searchParams;
 
   const where: Prisma.DocumentWhereInput = { ...branchScopeFilter(user) };

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { getPurchaseReport } from '@/lib/services/reports';
@@ -23,7 +23,7 @@ interface Props {
 }
 
 export default async function PaginaCompras({ searchParams }: Props) {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.REPORTES_VER)) redirect('/');
 
   const filtros = await searchParams;
