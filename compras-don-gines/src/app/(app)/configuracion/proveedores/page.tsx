@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { requireUser, hasPermission } from '@/lib/auth/session';
+import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { arTodayISO, formatDateAr } from '@/lib/datetime';
@@ -18,7 +18,7 @@ export const metadata: Metadata = { title: 'Proveedores' };
 export const dynamic = 'force-dynamic';
 
 export default async function PaginaProveedores() {
-  const user = await requireUser();
+  const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PROVEEDORES_GESTIONAR)) redirect('/configuracion');
 
   const hoy = arTodayISO();
