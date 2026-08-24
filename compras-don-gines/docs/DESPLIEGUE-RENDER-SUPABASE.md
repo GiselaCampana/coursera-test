@@ -209,6 +209,35 @@ cambió ninguna contraseña»*, el administrador ya estaba. **Cambiar
 de alta, no un modo de resetearla. Para eso está la pantalla de cambio, o
 *Configuración → Usuarios* con otro administrador.
 
+## Comprobar qué versión quedó desplegada
+
+Cada vez que se sube un cambio y hay que confirmar que llegó:
+
+```bash
+curl -s https://compras-don-gines.onrender.com/api/version
+```
+
+Devuelve el commit que el servicio está sirviendo en ese momento. No pide sesión,
+así que también se puede abrir esa dirección en el teléfono. Dentro de la
+aplicación, el mismo dato está en **Más → Diagnóstico de lectura**, arriba de
+todo, junto con la rama y desde cuándo está en línea.
+
+Vale la pena hacerlo antes de dar por buena o por mala cualquier corrección. Sin
+este dato, "la corrección no funciona", "el despliegue todavía no llegó" y "esto
+que estoy mirando lo calculó una versión anterior" se ven idénticos en pantalla, y
+se pueden perder horas persiguiendo el problema equivocado.
+
+Si el commit no es el esperado: en el panel de Render, **Events** muestra si el
+despliegue arrancó y **Logs** si el build falló. El servicio se despliega solo al
+recibir un push en la rama que quedó configurada en el blueprint; un push a otra
+rama no dispara nada.
+
+Y si el commit es el correcto pero un comprobante sigue mostrando números viejos,
+es porque son viejos: están guardados de una lectura anterior. La pantalla de
+revisión lo avisa cuando la versión que leyó no es la que está corriendo, y el
+botón **"Volver a leer esta imagen"** lo reprocesa desde la foto guardada con el
+código actual.
+
 ## Paso 5 — Primer ingreso
 
 Abrir la URL de Render. **La primera vez puede tardar hasta un minuto**: el

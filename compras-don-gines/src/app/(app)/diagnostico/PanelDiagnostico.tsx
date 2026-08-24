@@ -5,6 +5,7 @@ import { ACCEPT_ATTRIBUTE } from '@/lib/formatos';
 import { formatearPeso, prepararArchivo } from '@/lib/cliente/imagenes';
 import { toUserMessage } from '@/lib/errors';
 import { pedir } from '@/lib/cliente/red';
+import { formatDateTimeAr } from '@/lib/datetime';
 import { ListaControles } from '@/components/Estado';
 import type { CheckResult } from '@/lib/domain/validation';
 
@@ -54,9 +55,11 @@ interface Resultado {
 export function PanelDiagnostico({
   maximoIntentos,
   usuario,
+  version,
 }: {
   maximoIntentos: number;
   usuario: string;
+  version: { commitCorto: string; rama: string | null; iniciado: string };
 }) {
   const [trabajando, setTrabajando] = useState(false);
   const [etapa, setEtapa] = useState<string | null>(null);
@@ -173,6 +176,28 @@ export function PanelDiagnostico({
         tarda el OCR y qué dice cada control. <strong>No se guarda nada</strong>: ni el
         comprobante, ni la imagen, ni espacio de almacenamiento.
       </p>
+
+      {/*
+        Qué versión está corriendo.
+        Va arriba de todo y antes de cualquier prueba, porque es el dato que
+        cambia el significado de todos los demás: un resultado raro de una
+        versión anterior a la corrección no dice nada sobre la corrección. Desde
+        el teléfono no hay otra forma de saberlo —el plan gratuito de Render no
+        da consola—, así que tiene que estar en la pantalla.
+      */}
+      <div className="card">
+        <h2>Versión en ejecución</h2>
+        <dl style={{ margin: 0 }}>
+          <Dato etiqueta="Commit" valor={version.commitCorto} />
+          {version.rama ? <Dato etiqueta="Rama" valor={version.rama} /> : null}
+          <Dato etiqueta="En línea desde" valor={formatDateTimeAr(version.iniciado)} />
+        </dl>
+        <p className="ayuda mb0">
+          Es el commit que Render está sirviendo ahora mismo. Si no coincide con el que se
+          esperaba, el despliegue no llegó y lo que se vea acá abajo corresponde a la versión
+          anterior.
+        </p>
+      </div>
 
       {error ? (
         <p className="mensaje mensaje-error" role="alert">

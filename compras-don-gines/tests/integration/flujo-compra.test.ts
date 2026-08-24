@@ -10,6 +10,7 @@ import {
   type ConfirmDocumentInput,
 } from '@/lib/services/documents';
 import { registrarLectura } from '@/lib/services/lectura';
+import { versionEnEjecucion } from '@/lib/version';
 import { confirmPayment } from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
@@ -319,6 +320,60 @@ describe('relectura automática', () => {
     });
     expect(Number(guardado.items[0].grossSubtotal.toString())).toBeCloseTo(25195.7, 2);
     expect(guardado.checkState).toBe('DIFERENCIA');
+  });
+
+  it('volver a leer empieza de cero: no compite contra los intentos de la vez anterior', async () => {
+    /*
+     * El caso que esto ataja, que costó caro: alguien lee un comprobante, no
+     * cierra, se releen las zonas y quedan guardados los intentos 1 y 2. Más
+     * tarde —al día siguiente, o después de un despliegue con el analizador
+     * corregido— vuelve a leer el mismo comprobante desde la imagen guardada.
+     *
+     * Antes sólo se pisaba el intento con el mismo número, así que el intento 2
+     * de la vez anterior sobrevivía y seguía compitiendo. Si le ganaba al nuevo,
+     * la pantalla mostraba el resultado viejo y no había nada que lo delatara:
+     * parecía que la corrección no había servido de nada.
+     *
+     * Una lectura nueva —intento 1— tiene que borrar todo lo anterior.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+
+    // Una lectura vieja de dos vueltas, la segunda con la tabla bien leída.
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+    await leerComprobante(escenario.operadorDevoto, documento.id, { intento: 2 });
+    expect(await prisma.ocrAttempt.count({ where: { documentId: documento.id } })).toBe(2);
+
+    // Ahora se vuelve a leer desde la imagen, y esta vez la tabla sale mal.
+    const nueva = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      articulos: ARTICULOS_MAL_LEIDOS,
+    });
+
+    // Queda un solo intento: el de recién.
+    const intentos = await prisma.ocrAttempt.findMany({ where: { documentId: documento.id } });
+    expect(intentos).toHaveLength(1);
+    expect(intentos[0].attemptNumber).toBe(1);
+    expect(nueva.intentos).toBe(1);
+
+    // Y el resultado es el de esta lectura, no el bueno de la anterior: si el
+    // texto que se acaba de leer no cierra, el comprobante no cierra.
+    expect(nueva.report.canSave).toBe(false);
+    expect(nueva.report.state).toBe('DIFERENCIA');
+  });
+
+  it('anota con qué versión del código se interpretó cada intento', async () => {
+    // Es lo que permite decir, mirando un comprobante ya leído, si sus números
+    // los calculó la versión que está corriendo o una anterior al despliegue.
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
+
+    const intento = await prisma.ocrAttempt.findFirstOrThrow({
+      where: { documentId: documento.id },
+    });
+    expect(intento.buildSha).toBe(versionEnEjecucion().commit);
   });
 
   it('guarda el rastro de cada intento: estrategia, lector y texto reconocido', async () => {

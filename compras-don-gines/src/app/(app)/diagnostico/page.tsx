@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { requireUser } from '@/lib/auth/session';
 import { env } from '@/lib/env';
+import { versionEnEjecucion } from '@/lib/version';
 import { PanelDiagnostico } from './PanelDiagnostico';
 
 export const metadata: Metadata = { title: 'Diagnóstico de lectura' };
@@ -16,5 +17,16 @@ export const dynamic = 'force-dynamic';
  */
 export default async function PaginaDiagnostico() {
   const user = await requireUser();
-  return <PanelDiagnostico maximoIntentos={env.ocrMaxAttempts} usuario={user.name} />;
+  const version = versionEnEjecucion();
+  return (
+    <PanelDiagnostico
+      maximoIntentos={env.ocrMaxAttempts}
+      usuario={user.name}
+      version={{
+        commitCorto: version.commitCorto,
+        rama: version.rama,
+        iniciado: version.iniciado,
+      }}
+    />
+  );
 }

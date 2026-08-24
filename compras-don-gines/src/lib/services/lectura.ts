@@ -23,6 +23,7 @@ import { elegirAnalizador } from '@/lib/ocr/parsers';
 import type { AnalisisComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
 import type { OcrHeader, OcrSummary } from '@/lib/ocr/types';
 import { env } from '@/lib/env';
+import { versionEnEjecucion } from '@/lib/version';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
 import {
@@ -134,8 +135,31 @@ export async function registrarLectura(
     // --- 1. Se guarda el intento -----------------------------------------
     const intento = Math.max(1, Math.floor(lectura.intento || 1));
     const textoReconocido = lectura.paginas.map((p) => p.textoCompleto ?? '').join('\n\n');
+    const build = versionEnEjecucion();
 
-    await prisma.ocrAttempt.deleteMany({ where: { documentId, attemptNumber: intento } });
+    /*
+     * Un intento 1 abre una lectura nueva y borra TODO lo anterior.
+     *
+     * Los intentos de una misma lectura se acumulan a propósito: el segundo relee
+     * las zonas que no cerraron y después compiten entre sí, y esa competencia es
+     * la que hace que una relectura focalizada sirva de algo.
+     *
+     * Lo que no puede pasar es que compitan con los intentos de una lectura
+     * *anterior*. Cuando alguien vuelve a leer el mismo comprobante —porque salió
+     * mal, o porque mientras tanto se desplegó una versión nueva— los textos
+     * viejos seguían guardados con su número de intento, y sólo se pisaba el que
+     * coincidía. Un intento 2 o 3 de la vez anterior sobrevivía y podía ganarle
+     * al nuevo, así que el comprobante quedaba mostrando un resultado que no
+     * salía de la lectura que la persona acababa de hacer. Empezar de cero es lo
+     * único que garantiza que lo que se ve es lo que se leyó recién.
+     */
+    if (intento === 1) {
+      await prisma.ocrAttempt.deleteMany({ where: { documentId } });
+    } else {
+      await prisma.ocrAttempt.deleteMany({
+        where: { documentId, attemptNumber: { gte: intento } },
+      });
+    }
     await prisma.ocrAttempt.create({
       data: {
         documentId,
@@ -157,6 +181,7 @@ export async function registrarLectura(
         fieldConfidences: {
           paginas: lectura.paginas.map((p) => ({ numero: p.numero, confianza: p.confianza ?? null })),
         } as unknown as Prisma.InputJsonValue,
+        buildSha: build.commit,
       },
     });
 
@@ -255,6 +280,9 @@ export async function registrarLectura(
         analizador: mejor.analizador,
         lector: lectura.proveedor,
         estrategia: mejor.etiqueta,
+        // Qué versión del código interpretó el texto. Sin esto, un resultado
+        // raro no se puede atribuir a una versión ni descartar de una.
+        build: build.commitCorto,
       },
     });
 

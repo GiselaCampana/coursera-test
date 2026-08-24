@@ -175,27 +175,7 @@ export function NuevaCompra({
     marcarEtapa('PREPARANDO_LECTOR');
 
     try {
-      // El lector pesa varios megabytes: se carga sólo cuando hace falta, no en
-      // el arranque de la aplicación.
-      const { SesionLectura } = await import('@/lib/cliente/ocr/lector');
-
-      // El nombre de la etapa ya lo pone ETAPA_TEXTO; el detalle sólo hace
-      // falta cuando el comprobante tiene más de una página.
-      const sesion = new SesionLectura((avance) => {
-        marcarEtapa(
-          avance.etapa,
-          avance.totalPaginas && avance.totalPaginas > 1
-            ? `Página ${avance.pagina} de ${avance.totalPaginas}`
-            : null,
-          avance.avance,
-        );
-      });
-
-      // 1. Preparar las imágenes: enderezar, corregir perspectiva y limpiar.
-      marcarEtapa('PREPARANDO_IMAGENES');
-      await sesion.preparar(archivos.map((a) => ({ archivo: a.archivo, nombre: a.nombre })));
-
-      // 2. Abrir el comprobante y subir las páginas para guardarlas.
+      // 1. Abrir el comprobante y subir las páginas para guardarlas.
       marcarEtapa('SUBIENDO');
       const alta = await pedir('/api/comprobantes', {
         method: 'POST',
@@ -224,34 +204,21 @@ export function NuevaCompra({
         );
       }
 
-      // 3. Leer y controlar, con relectura focalizada si no cierra.
-      let intento = 1;
-      let motivo: string | undefined;
-
-      for (;;) {
-        if (intento > 1) marcarEtapa('RELEYENDO', motivo ?? null);
-        const lectura = await sesion.leer(intento, motivo);
-
-        marcarEtapa('VERIFICANDO_TOTALES');
-        const respuesta = await pedir(`/api/comprobantes/${documentId}/lectura`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(lectura),
-          alEsperar: setDespertando,
-        });
-        const control = await respuesta.json();
-        if (!respuesta.ok) throw new AppError(control.error ?? 'No pudimos controlar el comprobante.');
-
-        if (Array.isArray(control.observaciones) && control.observaciones.length > 0) {
-          setAvisos((prev) => [...new Set([...prev, ...control.observaciones])]);
-        }
-
-        if (control.puedeGuardar || !control.releer || intento >= maximoIntentos) break;
-        motivo = control.releer.motivo;
-        intento += 1;
+      // 2. Leer y controlar, con relectura focalizada si no cierra. El circuito
+      //    es compartido con "volver a leer": una sola implementación.
+      const { leerYControlar } = await import('@/lib/cliente/ocr/circuito');
+      const salida = await leerYControlar({
+        documentId,
+        fuentes: archivos.map((a) => ({ archivo: a.archivo, nombre: a.nombre })),
+        maximoIntentos,
+        alAvanzar: (a) => marcarEtapa(a.etapa, a.detalle, a.avance),
+        alEsperar: setDespertando,
+      });
+      if (salida.observaciones.length > 0) {
+        setAvisos((prev) => [...new Set([...prev, ...salida.observaciones])]);
       }
 
-      // 4. Traer el comprobante ya calculado para revisarlo.
+      // 3. Traer el comprobante ya calculado para revisarlo.
       const detalle = await consultar(`/api/comprobantes/${documentId}`, { alEsperar: setDespertando });
       const datosDetalle = await detalle.json();
       if (!detalle.ok) {
@@ -276,6 +243,63 @@ export function NuevaCompra({
     setPaso(1);
   };
 
+  /**
+   * Vuelve a leer el comprobante desde las imágenes que ya están guardadas.
+   *
+   * Parte del archivo original —el mismo que quedó en el comprobante— y lo pasa
+   * por el circuito completo otra vez: preparación de imagen, Tesseract,
+   * analizador del proveedor y autocontroles, todos en su versión actual. Del
+   * lado del servidor, un intento 1 borra los intentos anteriores, los renglones
+   * y los impuestos guardados antes de escribir nada, así que no queda ni un
+   * dato del análisis viejo. Es la diferencia entre volver a leer y volver a
+   * mostrar lo mismo.
+   */
+  const releerComprobante = async () => {
+    if (!comprobante) return;
+    if (comprobante.paginas.length === 0) {
+      setError('Este comprobante no tiene imágenes guardadas para volver a leer.');
+      return;
+    }
+
+    setTrabajando(true);
+    setError(null);
+    setAvisos([]);
+    setEtapasHechas([]);
+    setPaso(1);
+    setComprobante(null);
+    marcarEtapa('PREPARANDO_LECTOR');
+
+    try {
+      const { bajarPaginas, leerYControlar } = await import('@/lib/cliente/ocr/circuito');
+      const fuentes = await bajarPaginas(comprobante.paginas);
+
+      const salida = await leerYControlar({
+        documentId: comprobante.id,
+        fuentes,
+        maximoIntentos,
+        alAvanzar: (a) => marcarEtapa(a.etapa, a.detalle, a.avance),
+        alEsperar: setDespertando,
+      });
+      if (salida.observaciones.length > 0) setAvisos(salida.observaciones);
+
+      const detalle = await consultar(`/api/comprobantes/${comprobante.id}`, {
+        alEsperar: setDespertando,
+      });
+      const datosDetalle = await detalle.json();
+      if (!detalle.ok) {
+        throw new AppError(datosDetalle.error ?? 'No pudimos abrir el comprobante leído.');
+      }
+      setComprobante(datosDetalle as ComprobanteRevision);
+      setPaso(2);
+    } catch (e) {
+      setError(toUserMessage(e));
+      setProgreso({ etapa: 'ERROR' });
+    } finally {
+      setTrabajando(false);
+      setDespertando(null);
+    }
+  };
+
   // --- Pasos 2 y 3 -------------------------------------------------------
   if (paso >= 2 && comprobante) {
     return (
@@ -288,6 +312,7 @@ export function NuevaCompra({
         paso={paso}
         onPaso={setPaso}
         onVolver={volverAlPaso1}
+        onReleer={releerComprobante}
         onGuardado={(id) => router.push(`/comprobantes/${id}?guardado=1`)}
         onActualizar={setComprobante}
       />

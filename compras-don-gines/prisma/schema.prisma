@@ -448,6 +448,9 @@ model OcrAttempt {
   /// { campo: confianza }
   fieldConfidences Json?
   error         String?
+  /// Commit del código que produjo esta lectura, para saber si un resultado
+  /// guardado viene de una versión anterior a un despliegue.
+  buildSha      String?
   createdAt     DateTime @default(now())
 
   @@index([documentId, attemptNumber])

@@ -175,6 +175,16 @@ Todas están documentadas en [`.env.example`](.env.example). Las que importan:
 |---|---|---|
 | `OCR_MAX_ATTEMPTS` | `3` | Vueltas de relectura focalizada cuando el detalle no cierra. |
 
+### Identificación de la versión
+
+Ninguna hace falta en Render: la plataforma define `RENDER_GIT_COMMIT` y `RENDER_GIT_BRANCH`
+sola en cada despliegue. Se declaran por si se despliega en otro lado.
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `APP_COMMIT` | — | SHA del commit desplegado, si la plataforma no lo informa. |
+| `APP_BRANCH` | — | Rama desplegada, para el mismo caso. |
+
 ### Supabase
 
 | Variable | Por defecto | Para qué |
@@ -274,6 +284,39 @@ no hace falta ninguna clave y no hay costo por comprobante.
 
 En ningún momento se completa un número para hacer cerrar la cuenta. Lo que no se pudo
 leer queda vacío y el semáforo lo marca.
+
+### Volver a leer es volver a leer
+
+Desde la pantalla de revisión, **"Volver a leer esta imagen"** rehace el circuito completo
+partiendo de la foto que ya está guardada en el comprobante: se la baja de nuevo, se la
+vuelve a preparar, se la vuelve a pasar por Tesseract y se la vuelve a interpretar con el
+analizador y los autocontroles **de la versión que está corriendo ahora**. No se reutiliza
+ni un dato del análisis anterior: del lado del servidor, una lectura nueva borra los
+intentos, los renglones y los impuestos guardados antes de escribir nada.
+
+Eso último no era así y costó caro. Los intentos de una misma lectura se acumulan a
+propósito —la relectura focalizada compite contra la primera vuelta, y de esa competencia
+sale el mejor resultado—, pero antes sólo se pisaba el intento con el mismo número. Un
+intento 2 de una lectura *anterior* sobrevivía y seguía compitiendo contra la nueva, así
+que un comprobante leído antes de un despliegue podía seguir mostrando los números viejos
+sin que nada en la pantalla lo delatara. Ahora un intento 1 abre una lectura limpia.
+
+Y cada intento guarda el commit que lo interpretó. Si los números que se están mirando los
+calculó una versión anterior a la que está corriendo, la pantalla lo dice y ofrece volver a
+leer, en vez de dejar que un resultado guardado pase por nuevo.
+
+### Qué versión está corriendo
+
+**Más → Diagnóstico de lectura** abre con el commit corto que está sirviendo el servidor, la
+rama y desde cuándo está en línea. La misma información sale por `GET /api/version`, sin
+sesión, para poder preguntárselo desde un `curl` o desde el teléfono.
+
+No es un adorno: el plan gratuito de Render no da consola, así que sin este dato "la
+corrección no funciona", "el despliegue no llegó" y "esto que estoy mirando es de antes" se
+ven exactamente igual en la pantalla. El commit se toma de `RENDER_GIT_COMMIT`, que pone la
+plataforma con lo que efectivamente desplegó; si no está, de `APP_COMMIT`, y en desarrollo
+de `git`. Si ninguna contesta dice "desconocido": nunca inventa un número, porque un SHA
+equivocado haría descartar la hipótesis correcta.
 
 ### Lo que enseñó la primera foto de verdad
 

@@ -4,6 +4,7 @@ import { getDocumentForReview } from '@/lib/services/documents';
 import { getStorage } from '@/lib/storage';
 import { handle } from '@/lib/api';
 import { toISODate } from '@/lib/datetime';
+import { versionEnEjecucion } from '@/lib/version';
 
 /** Datos completos del comprobante para la pantalla de revisión. */
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -97,8 +98,21 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         asociacion: item.matchMethod,
       })),
       paginas,
+      /*
+       * Qué versión está corriendo ahora y con cuál se leyó cada intento.
+       *
+       * Cuando las dos no coinciden, lo que está en pantalla salió de un código
+       * anterior al despliegue: la pantalla lo dice y ofrece volver a leer, en
+       * vez de dejar que el resultado viejo pase por nuevo.
+       */
+      version: {
+        commitCorto: versionEnEjecucion().commitCorto,
+        commit: versionEnEjecucion().commit,
+      },
       lecturas: document.ocrAttempts.map((a) => ({
         numero: a.attemptNumber,
+        build: a.buildSha,
+        buildCorto: a.buildSha ? a.buildSha.slice(0, 7) : null,
         etapa: a.stage,
         estrategia: a.strategy,
         proveedor: a.provider,

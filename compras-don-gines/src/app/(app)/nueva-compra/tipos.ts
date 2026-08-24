@@ -108,8 +108,13 @@ export interface ComprobanteRevision {
   };
   articulos: ArticuloRevision[];
   paginas: PaginaComprobante[];
+  /** La versión del código que está corriendo ahora. */
+  version: { commit: string | null; commitCorto: string } | null;
   lecturas: {
     numero: number;
+    /** Commit que interpretó este intento, para detectar una lectura vieja. */
+    build: string | null;
+    buildCorto: string | null;
     etapa: string;
     estrategia: string | null;
     proveedor: string;

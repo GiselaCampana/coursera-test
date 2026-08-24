@@ -20,6 +20,8 @@ interface Props {
   paso: 1 | 2 | 3;
   onPaso: (paso: 1 | 2 | 3) => void;
   onVolver: () => void;
+  /** Vuelve a leer desde las imágenes guardadas, con el analizador actual. */
+  onReleer: () => void;
   onGuardado: (documentId: string) => void;
   onActualizar: (comprobante: ComprobanteRevision) => void;
 }
@@ -72,6 +74,7 @@ export function PasoRevision({
   paso,
   onPaso,
   onVolver,
+  onReleer,
   onGuardado,
 }: Props) {
   const [proveedorId, setProveedorId] = useState(comprobante.proveedor?.id ?? '');
@@ -125,6 +128,23 @@ export function PasoRevision({
 
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /*
+   * ¿Lo que se está mostrando lo produjo la versión que está corriendo?
+   *
+   * Cada intento guarda el commit que lo interpretó. Si el más reciente no es el
+   * de ahora, el comprobante se leyó antes de un despliegue y lo que hay en
+   * pantalla salió de otro código. Cuando alguna de las dos puntas no se conoce
+   * —una lectura vieja, anterior a que se guardara el dato— no se dice nada:
+   * avisar de una diferencia que no se puede afirmar sería peor que callarse.
+   */
+  const lecturaDeOtraVersion = useMemo(() => {
+    const actual = comprobante.version?.commit;
+    if (!actual) return null;
+    const ultima = [...comprobante.lecturas].sort((a, b) => b.numero - a.numero)[0];
+    if (!ultima?.build || ultima.build === actual) return null;
+    return ultima;
+  }, [comprobante.version?.commit, comprobante.lecturas]);
 
   // --- Recálculo en vivo --------------------------------------------------
   // Se usan exactamente las mismas funciones que corre el backend al guardar,
@@ -497,6 +517,29 @@ export function PasoRevision({
         </p>
       ) : null}
 
+      {/*
+        Si lo que está en pantalla lo produjo una versión anterior del código,
+        hay que decirlo. Es el caso que hace perder horas: se despliega una
+        corrección, se abre un comprobante que ya estaba leído y los números
+        siguen siendo los de antes —porque son los de antes, guardados—, y no hay
+        nada en la pantalla que lo distinga de una corrección que no funcionó.
+      */}
+      {lecturaDeOtraVersion ? (
+        <div className="card">
+          <p className="mensaje mensaje-info mb0" role="status">
+            Estos números los calculó una versión anterior de la aplicación
+            {lecturaDeOtraVersion.buildCorto ? ` (${lecturaDeOtraVersion.buildCorto})` : ''}; ahora
+            está corriendo {comprobante.version?.commitCorto ?? 'otra'}. Volvé a leer el comprobante
+            para que se procese con la versión actual.
+          </p>
+          <div className="acciones">
+            <button type="button" className="boton" onClick={onReleer}>
+              Volver a leer esta imagen
+            </button>
+          </div>
+        </div>
+      ) : null}
+
       <Semaforo report={informe} />
 
       {!informe.canSave ? (
@@ -506,10 +549,17 @@ export function PasoRevision({
           </div>
           <ListaControles checks={informe.checks.filter((c) => c.severity !== 'OK')} />
           <div className="acciones">
+            <button type="button" className="boton" onClick={onReleer}>
+              Volver a leer esta imagen
+            </button>
             <button type="button" className="boton boton-secundario" onClick={onVolver}>
-              Volver a leer o reemplazar la imagen
+              Reemplazar la imagen
             </button>
           </div>
+          <p className="ayuda mb0">
+            &quot;Volver a leer&quot; arranca de cero desde la foto guardada y descarta la lectura
+            anterior por completo.
+          </p>
         </div>
       ) : null}
 

@@ -134,10 +134,10 @@ test.describe('nueva compra desde el teléfono', () => {
     // Nada de verde ni de "controlado".
     await expect(page.locator('.semaforo-ok')).toHaveCount(0);
 
-    // Y ofrece volver a leer o reemplazar la imagen.
-    await expect(
-      page.getByRole('button', { name: 'Volver a leer o reemplazar la imagen' }),
-    ).toBeVisible();
+    // Y ofrece las dos salidas, que no son la misma: volver a leer la foto que
+    // ya está guardada, o cambiarla por otra.
+    await expect(page.getByRole('button', { name: 'Volver a leer esta imagen' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Reemplazar la imagen' })).toBeVisible();
 
     // En el paso del pago, el botón de guardar queda deshabilitado.
     await page.getByRole('button', { name: 'Continuar al pago' }).click();
