@@ -18,6 +18,11 @@ import { computePaymentStatus } from '@/lib/domain/payments';
 import { toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
 import {
+  SAFARI_ARTICULOS,
+  SAFARI_COMPLETO,
+  SAFARI_RESUMEN,
+} from '../fixtures/errecalde-safari';
+import {
   LOS_CALVOS_TEXT,
   LOS_CALVOS_ITEMS,
   LOS_CALVOS_PRINTED,
@@ -987,5 +992,98 @@ describe('reporte de compras', () => {
     // Separador de punto y coma y decimales con coma, como espera Excel en español.
     expect(csv).toContain('";"');
     expect(csv).toContain('153,70');
+  });
+});
+
+describe('la fila que se pierden el detector y el analizador a la vez', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /**
+   * El recorte de la tabla, cortado antes de terminar.
+   *
+   * Es lo que pasó en el teléfono: la última fila —TOMATE EN BOTELLA— no salió
+   * del recorte de la tabla, y de la página completa quedó sólo un jirón sin
+   * código ni descripción. El detector de filas tampoco la contó, así que las
+   * dos medidas que el control compara se equivocaron **en el mismo sentido** y
+   * el comprobante quedaba en "22 interpretados / 22 filas vistas", en verde,
+   * con un artículo de menos y $32.683,24 sin cargar.
+   *
+   * Se construye sacándole esa fila al recorte del fixture real y dejando la
+   * página completa intacta, que es exactamente la forma de la falla.
+   */
+  const RECORTE_CORTADO = SAFARI_ARTICULOS.split('\n')
+    .filter((linea) => !linea.includes('TOMATE'))
+    .join('\n');
+
+  it('no da por completa una tabla a la que le falta una fila', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      encabezado: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    const control = lectura.report.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control).toBeDefined();
+    // Veintidós entendidos contra veintitrés vistos: el jirón cuenta como fila.
+    expect(control!.actual).toBe('22');
+    expect(control!.expected).toBe('23');
+    expect(control!.severity).toBe('ERROR');
+
+    // Y por lo tanto no se puede guardar como controlado.
+    expect(lectura.report.canSave).toBe(false);
+    expect(lectura.report.state).toBe('DIFERENCIA');
+  });
+
+  it('dice cuál es el tramo que no pudo leer, con su texto crudo', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      encabezado: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    /*
+     * No alcanza con frenar el comprobante: hay que poder ir a la foto y mirar
+     * qué fila es. Por eso la observación lleva el texto tal cual salió del OCR
+     * y el importe que tendría.
+     */
+    const aviso = lectura.observaciones.find((o) => o.includes('forma de renglón'));
+    expect(aviso).toBeDefined();
+    expect(aviso).toContain('$3268324');
+    expect(aviso).toContain('32683.24');
+  });
+
+  it('con la fila entera en el recorte, el mismo comprobante cierra en 23', async () => {
+    /*
+     * El contraejemplo, y la razón por la que este control se puede confiar: con
+     * el recorte completo no aparece ningún jirón, el control da 23 de 23 y el
+     * comprobante se puede guardar.
+     *
+     * Sin esta prueba, un detector de jirones demasiado entusiasta —que contara
+     * como fila cada pedazo suelto de la página completa— dejaría todos los
+     * comprobantes en rojo para siempre y nadie lo notaría.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      encabezado: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    const control = lectura.report.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control!.actual).toBe('23');
+    expect(control!.expected).toBe('23');
+    expect(control!.severity).toBe('OK');
+    expect(lectura.report.canSave).toBe(true);
   });
 });

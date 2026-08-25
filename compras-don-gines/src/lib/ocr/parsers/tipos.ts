@@ -21,6 +21,21 @@ export interface AnalisisComprobante {
   summary: OcrSummary | null;
   /** Lo que el analizador no pudo resolver. Nunca se completa inventando. */
   observaciones: string[];
+  /**
+   * Jirones con forma de renglón que quedaron sin identificar.
+   *
+   * Son tramos del texto que tienen la forma de una fila de la tabla —una
+   * cantidad, el par de porcentajes, un importe que cabe en el comprobante— pero
+   * a los que no se les pudo leer ni el código ni la descripción, y cuyo importe
+   * no coincide con el de ningún renglón ya interpretado.
+   *
+   * Existe por un modo de fallar que ningún otro control ve: cuando el detector
+   * de filas y el analizador **se pierden la misma fila**, el comprobante queda
+   * en "22 interpretados / 22 filas vistas" y el semáforo se pone en verde con
+   * un artículo de menos. Este número es una tercera señal, independiente de las
+   * otras dos, y lo que hace es impedir ese verde.
+   */
+  filasSinResolver?: number;
 }
 
 /**

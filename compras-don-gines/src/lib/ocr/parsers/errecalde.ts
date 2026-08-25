@@ -111,8 +111,58 @@ export const analizadorErrecalde: AnalizadorComprobante = {
      * cinco condiciones. No se mezclan campos de una y de otra a dedo: se
      * interpreta cada texto por separado y gana el que quede completo y cierre.
      */
-    const { summary, avisos: avisosPie } = mejorPie(textos);
-    observaciones.push(...avisosPie);
+    const pieLeido = mejorPie(textos);
+    observaciones.push(...pieLeido.avisos);
+
+    /*
+     * Antes de usar el neto como cota, comprobar que sea un neto.
+     *
+     * Toda la aritmética de los renglones se apoya en el neto gravado impreso:
+     * es lo que descarta la lectura de $6,3 M en una factura de $3,83 M. Si ese
+     * número se lee mal **por lo bajo**, la cota se da vuelta y descarta los
+     * renglones buenos: sobre esta foto, una corrida en la que el recorte del
+     * pie no llegó dejó un neto de $4, y con esa cota los veintidós renglones
+     * quedaron sin importe.
+     *
+     * La comprobación no es una heurística, es una cuenta: el neto de un
+     * comprobante es la suma de sus renglones, así que no puede ser menor que
+     * el mayor de ellos, y menos todavía que la mediana. Se usa la mediana y no
+     * el máximo porque es la que no se mueve cuando uno o dos renglones se
+     * leyeron mal.
+     *
+     * Y por eso mismo hace falta un mínimo de renglones. Con dos o tres, un
+     * renglón mal leído *es* la mediana, la cuenta se da vuelta y termina
+     * descartando el pie bueno por culpa del renglón malo, que es justo al revés
+     * de lo que hay que hacer. A partir de cinco harían falta tres lecturas
+     * rotas para arrastrarla, y eso ya no es un renglón mal leído: es una tabla
+     * que no se leyó.
+     *
+     * Si el neto no llega a eso, no es el neto: el pie se descarta entero y el
+     * comprobante queda para revisión, en vez de arrastrar un número imposible
+     * hasta el costo de cada artículo.
+     */
+    const MINIMO_PARA_JUZGAR_EL_PIE = 5;
+    const sinCota = analizarArticulos(
+      textos.articulos || textos.completo,
+      textos.articulos ? textos.completo : '',
+      { netoImpreso: null },
+    );
+    const netoDelPie = parseArNumber(pieLeido.summary.netTotal ?? '');
+    const medianaDeLosRenglones =
+      sinCota.items.length >= MINIMO_PARA_JUZGAR_EL_PIE ? medianaDeSubtotales(sinCota.items) : null;
+    const pieCreible =
+      !netoDelPie ||
+      !medianaDeLosRenglones ||
+      netoDelPie.gte(medianaDeLosRenglones);
+
+    const summary = pieCreible ? pieLeido.summary : pieVacio();
+    if (!pieCreible && netoDelPie && medianaDeLosRenglones) {
+      observaciones.push(
+        `El neto gravado se leyó como ${netoDelPie.toFixed(2)} y el renglón mediano de la tabla ` +
+          `es de ${medianaDeLosRenglones.toFixed(2)}: un neto no puede ser menor que uno de sus ` +
+          'renglones. El pie no se leyó bien y queda para revisión.',
+      );
+    }
 
     /*
      * La tabla también se arma con las dos lecturas.
@@ -128,7 +178,7 @@ export const analizadorErrecalde: AnalizadorComprobante = {
      * código —"RRA MELIN 106kg $1230809"— que son la misma fila cortada y que
      * entrarían como artículos nuevos.
      */
-    const { items, avisos } = analizarArticulos(
+    const { items, avisos, filasSinResolver } = analizarArticulos(
       textos.articulos || textos.completo,
       textos.articulos ? textos.completo : '',
       { netoImpreso: parseArNumber(summary.netTotal ?? '') ?? null },
@@ -176,7 +226,7 @@ export const analizadorErrecalde: AnalizadorComprobante = {
       }
     }
 
-    return { header, items, summary, observaciones };
+    return { header, items, summary, observaciones, filasSinResolver };
   },
 };
 
@@ -575,11 +625,11 @@ function consenso(valores: (string | null)[]): string | null {
   return ordenadas[0][0];
 }
 
-function analizarArticulos(
+export function analizarArticulos(
   texto: string,
   textoSecundario = '',
   limites: LimitesDelPie = { netoImpreso: null },
-): { items: OcrItem[]; avisos: string[] } {
+): { items: OcrItem[]; avisos: string[]; filasSinResolver: number } {
   const avisos: string[] = [];
 
   /*
@@ -685,7 +735,100 @@ function analizarArticulos(
     };
   });
 
-  return { items, avisos };
+  /*
+   * Y por último, lo que quedó en el texto con forma de fila y sin resolver.
+   *
+   * Va después de elegir los renglones a propósito: recién con las filas ya
+   * interpretadas se puede saber si un jirón es una fila nueva o el pedazo de
+   * una que ya está.
+   */
+  const jirones = jironesSinResolver([texto, textoSecundario], filas, limites.netoImpreso);
+  for (const jiron of jirones) {
+    avisos.push(
+      `Quedó un tramo con forma de renglón que no se pudo identificar: "${jiron.linea.trim()}". ` +
+        `El importe sería ${jiron.subtotales.map((s) => s.toFixed(2)).join(' o ')}, pero no se le ` +
+        'pudo leer el código ni la descripción. Falta un artículo: hay que releer la tabla.',
+    );
+  }
+
+  return { items, avisos, filasSinResolver: jirones.length };
+}
+
+/**
+ * Tramos con forma de fila que no se pudieron identificar.
+ *
+ * `analizarFila` descarta en silencio toda línea a la que no le puede leer una
+ * descripción, y con razón: cuando la tabla se lee varias veces, la lectura que
+ * perdió el nombre siempre tiene al lado otra que lo conservó, y admitirla
+ * duplicaría el artículo.
+ *
+ * El problema es qué pasa cuando **no** hay otra al lado. Sobre esta foto el
+ * recorte de la tabla se cortó antes de terminar y TOMATE EN BOTELLA no salió
+ * por ningún lado; de la página completa quedó sólo este jirón, justo antes del
+ * pie:
+ *
+ *     2             0% — 21% $3268324
+ *
+ * Una cantidad, el par de porcentajes y un importe que cabe en el comprobante.
+ * No alcanza para armar el renglón —el precio no está en ninguna parte de esa
+ * lectura— pero sí para afirmar que **ahí había una fila**. Sin esto, el
+ * detector de filas y el analizador se pierden los dos la misma fila y el
+ * comprobante cierra en "22 de 22" con un artículo de menos.
+ *
+ * Se cuenta un jirón sólo si su importe no es el de ningún renglón ya
+ * interpretado: si coincide, es otra lectura de una fila que ya está.
+ */
+export function jironesSinResolver(
+  fuentes: string[],
+  interpretadas: FilaErrecalde[],
+  netoImpreso: Decimal | null,
+): { linea: string; subtotales: Decimal[] }[] {
+  const jirones: { linea: string; subtotales: Decimal[] }[] = [];
+
+  /* Dos importes son el mismo renglón si difieren en menos de un peso: el OCR
+   * se come un dígito de los centavos con frecuencia ($187.236,7 por
+   * $187.236,17) y eso no convierte la fila en otra. */
+  const esElMismoImporte = (a: Decimal, b: Decimal): boolean =>
+    a.minus(b).abs().lte(Decimal.max(b.abs().times(0.0001), 1));
+
+  const yaEstá = (candidatos: Decimal[]): boolean =>
+    candidatos.some(
+      (c) =>
+        interpretadas.some((f) => esElMismoImporte(c, f.subtotal)) ||
+        jirones.some((j) => j.subtotales.some((s) => esElMismoImporte(c, s))),
+    );
+
+  for (const fuente of fuentes) {
+    if (!fuente || fuente.trim() === '') continue;
+    for (const cruda of fuente.split('\n')) {
+      const linea = cruda.trim();
+      if (linea.length < 8) continue;
+      if (NO_ES_ARTICULO.test(linea)) continue;
+      // Si se pudo leer entera, no es un jirón: es un renglón.
+      if (analizarFila(linea, netoImpreso)) continue;
+
+      const ancla = ANCLA_DTO_IVA.exec(linea);
+      if (!ancla) continue;
+
+      const derecha = linea.slice(ancla.index + ancla[0].length);
+      const subtotales: Decimal[] = [];
+      for (const texto of importesCrudosDelSubtotal(derecha)) {
+        for (const valor of variantesDeImporte(texto)) {
+          if (valor.lte(0)) continue;
+          // Un importe que no cabe en el comprobante no prueba que haya una
+          // fila: prueba que ese número se leyó mal.
+          if (netoImpreso && netoImpreso.gt(0) && valor.gt(netoImpreso.times(1.02))) continue;
+          if (!subtotales.some((v) => v.eq(valor))) subtotales.push(valor);
+        }
+      }
+      if (subtotales.length === 0) continue;
+      if (yaEstá(subtotales)) continue;
+
+      jirones.push({ linea, subtotales });
+    }
+  }
+
+  return jirones;
 }
 
 /**
@@ -762,7 +905,24 @@ export function analizarFila(linea: string, netoImpreso: Decimal | null = null):
   const cantidadCruda = numeros.length >= 2 ? numeros[numeros.length - 2] : null;
   if (!cantidadCruda) return null;
 
-  const conciliado = conciliar(cantidadCruda.texto, precioCrudo.texto, subtotalesCrudos, netoImpreso);
+  /*
+   * Lo que el OCR dejó pegado delante de la cantidad.
+   *
+   * El barrido numérico arranca en el primer dígito, así que de "A75kg" se lleva
+   * "75" y la "A" se pierde. Esa "A" es la única prueba de que delante del 75
+   * había un trazo más, y sin ella no se puede deducir que la cantidad era 4,75:
+   * habría que inventar un dígito. Se pasa aparte para que la deducción de
+   * escala pueda apoyarse en ella.
+   */
+  const basuraPegadaALaCantidad = resto.slice(0, cantidadCruda.indice).match(/(\S+)$/)?.[1] ?? '';
+
+  const conciliado = conciliar(
+    cantidadCruda.texto,
+    precioCrudo.texto,
+    subtotalesCrudos,
+    netoImpreso,
+    basuraPegadaALaCantidad,
+  );
   if (!conciliado) return null;
   const { cantidad, precio, subtotal, impreso: subtotalImpreso } = conciliado;
 
@@ -861,11 +1021,38 @@ function importesCrudosDelSubtotal(texto: string): string[] {
  * los subtotales contra el neto gravado impreso, que es independiente de todo
  * esto.
  */
+/**
+ * ¿Los dígitos de esta cantidad son una lectura posible de lo que salió del OCR?
+ *
+ * Se usa para aceptar una cantidad **deducida** del precio y el subtotal. La
+ * regla es que el OCR pudo haber perdido dígitos del principio, pero no
+ * inventado ninguno: los dígitos que sí leyó tienen que ser el final de los
+ * dígitos de la cantidad deducida.
+ *
+ * Sobre SARDO BLOQUE la columna salió "A75kg". Los dígitos leídos son "75" y la
+ * cantidad deducida es 4,75, cuyos dígitos son "475": "475" termina en "75", así
+ * que falta exactamente un dígito adelante. Y adelante hay algo: esa "A" es el
+ * trazo del "4" que Tesseract no supo leer. Sin ese rastro no se acepta nada,
+ * que es lo que separa deducir de inventar.
+ */
+function cantidadCompatible(cantidad: Decimal, crudo: string, basuraPegada: string): boolean {
+  const leidos = soloDigitos(crudo);
+  const deducidos = cantidad.toString().replace(/\D/g, '');
+  if (leidos === '' || deducidos === '') return false;
+  if (deducidos === leidos) return true;
+  if (!deducidos.endsWith(leidos)) return false;
+
+  // Cada dígito que falta adelante necesita un carácter del OCR que lo respalde.
+  const faltantes = deducidos.length - leidos.length;
+  return faltantes <= basuraPegada.replace(/\s/g, '').length;
+}
+
 function conciliar(
   cantidadTexto: string,
   precioTexto: string,
   subtotalTextos: string[],
   netoImpreso: Decimal | null = null,
+  basuraPegadaALaCantidad = '',
 ): { cantidad: Decimal; precio: Decimal | null; subtotal: Decimal; impreso: boolean } | null {
   const cantidades = variantesDeCantidad(cantidadTexto);
   const precios = variantesDeImporte(precioTexto);
@@ -930,10 +1117,77 @@ function conciliar(
     return { cantidad, precio, subtotal, impreso: true };
   }
 
-  // Nada cerró: se devuelve la lectura literal y el control se encarga.
+  /*
+   * --- Nada cerró: deducir la cantidad del precio y el subtotal -----------
+   *
+   * Es el caso de SARDO BLOQUE cuando la foto trae una sola lectura del
+   * renglón: "L 3 A75kg $13.29525 0% 21% $6315243". De ahí salen cantidad 75,
+   * precio $13,30 y subtotal $6.315.243, que no cierra por seis órdenes de
+   * magnitud y encima no cabe en una factura de $3,83 M.
+   *
+   * Los otros dos números sí se pueden acotar: de los subtotales sólo
+   * $63.152,43 entra en el comprobante, y de los precios $13.295,25 es el único
+   * que lo divide en una cantidad con dos decimales. Esa división da 4,75, y
+   * "475" termina en el "75" que el OCR leyó, con una "A" delante donde iba el
+   * 4. Los tres números se sostienen entre sí y contra el pie.
+   *
+   * Se exige que la solución sea **única**: si dos precios distintos deducen dos
+   * cantidades distintas y las dos son compatibles con lo leído, no hay forma de
+   * saber cuál es, y el renglón queda sin resolver en vez de elegirse al azar.
+   */
+  const deducidas: { cantidad: Decimal; precio: Decimal; subtotal: Decimal }[] = [];
+  for (const precio of precios) {
+    if (precio.lte(0)) continue;
+    for (const subtotal of subtotales) {
+      if (subtotal.lte(0)) continue;
+      if (!netoImpreso || netoImpreso.lte(0)) continue; // sin cota no se deduce nada
+      if (subtotal.gt(netoImpreso.times(1.02))) continue;
+
+      /*
+       * La división se redondea a dos decimales antes de comprobar nada.
+       *
+       * El subtotal impreso ya viene redondeado —4,75 × 13.295,25 da
+       * 63.152,4375 y el papel dice $63.152,43—, así que dividir nunca devuelve
+       * una cantidad exacta. Lo que se busca es la cantidad de dos decimales
+       * que, multiplicada por el precio, vuelve a dar el subtotal impreso dentro
+       * del mismo margen que usa el resto del analizador.
+       */
+      const cantidad = subtotal.div(precio).toDecimalPlaces(2);
+      if (!cantidad.isFinite() || cantidad.lte(0)) continue;
+      const tolerancia = cantidad.abs().times(0.005).plus(0.02);
+      if (cantidad.times(precio).minus(subtotal).abs().gt(tolerancia)) continue;
+      if (!cantidadCompatible(cantidad, cantidadTexto, basuraPegadaALaCantidad)) continue;
+      if (deducidas.some((d) => d.cantidad.eq(cantidad) && d.subtotal.eq(subtotal))) continue;
+      deducidas.push({ cantidad, precio, subtotal });
+    }
+  }
+  if (deducidas.length === 1) {
+    const { cantidad, precio, subtotal } = deducidas[0];
+    return { cantidad, precio, subtotal, impreso: true };
+  }
+
+  /*
+   * Ni cerró ni se pudo deducir: se devuelve la lectura literal, pero **nunca**
+   * un subtotal que no cabe en el comprobante.
+   *
+   * Un renglón de $6,3 M en una factura de $3,83 M es imposible, y da igual que
+   * sea lo único que se leyó: dejarlo pasar contamina la suma del detalle, y con
+   * ella todos los controles que se apoyan en esa suma. Si ningún subtotal leído
+   * entra en el comprobante, se descarta el importe impreso y el renglón queda
+   * marcado como no contrastado contra el papel, que es la verdad.
+   */
   const cantidad = cantidades.find((c) => c.gt(0));
   if (!cantidad) return null;
-  return { cantidad, precio: precios[0] ?? null, subtotal: subtotales[0], impreso: true };
+  const precio = precios[0] ?? null;
+  const posibles =
+    netoImpreso && netoImpreso.gt(0)
+      ? subtotales.filter((s) => s.lte(netoImpreso.times(1.02)))
+      : subtotales;
+  if (posibles.length === 0) {
+    if (!precio) return null;
+    return { cantidad, precio, subtotal: cantidad.times(precio), impreso: false };
+  }
+  return { cantidad, precio, subtotal: posibles[0], impreso: true };
 }
 
 /**
@@ -1532,6 +1786,22 @@ function hayRastroDe(valor: Decimal, texto: string): boolean {
 }
 
 /** Un resumen vacío, con las listas listas para llenar. */
+/**
+ * El subtotal del renglón del medio, para poder juzgar el neto del pie.
+ *
+ * Se usa la mediana porque no se mueve cuando uno o dos renglones se leyeron
+ * con la coma corrida: sobre esta factura hay lecturas de $20 M y de $45, y la
+ * mediana sigue siendo la de un renglón normal.
+ */
+function medianaDeSubtotales(items: OcrItem[]): Decimal | null {
+  const valores = items
+    .map((i) => (i.grossSubtotal ? parseArNumber(i.grossSubtotal) : null))
+    .filter((v): v is Decimal => v !== null && v.gt(0))
+    .sort((a, b) => a.comparedTo(b));
+  if (valores.length === 0) return null;
+  return valores[Math.floor(valores.length / 2)];
+}
+
 function pieVacio(): OcrSummary {
   return {
     grossSubtotal: null,

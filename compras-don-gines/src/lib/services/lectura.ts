@@ -358,6 +358,27 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
     const analisis = analizador.analizar(textos);
     if (analisis.items.length === 0 && !analisis.summary?.total) continue;
 
+    /*
+     * Tres fuentes para saber cuántas filas había, y gana la más alta.
+     *
+     * `filasEnLaImagen` la cuenta el lector mirando la foto, antes de
+     * interpretar nada. `analisis.items.length` es lo que el analizador
+     * entendió. Y `filasSinResolver` son los tramos que tienen forma de fila y
+     * quedaron sin identificar.
+     *
+     * Las dos primeras se pueden equivocar **juntas y en el mismo sentido**: si
+     * el recorte de la tabla se cortó antes de terminar, el detector no ve la
+     * última fila y el analizador tampoco la lee, el control da "22 de 22" y el
+     * comprobante se guarda en verde con un artículo de menos. Fue exactamente
+     * lo que pasó con TOMATE EN BOTELLA. La tercera fuente no depende de
+     * ninguna de las dos, y por eso es la que rompe ese empate.
+     */
+    const sinResolver = analisis.filasSinResolver ?? 0;
+    const filasDeEsteCandidato = Math.max(
+      filasEnLaImagen ?? 0,
+      analisis.items.length + sinResolver,
+    );
+
     candidatos.push({
       etiqueta: `intento ${numeroDeIntento} · ${modo} · ${analizador.nombre}`,
       header: analisis.header,
@@ -365,7 +386,7 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
       items: toRawItems(analisis.items),
       analizador: analizador.codigo,
       observaciones: analisis.observaciones,
-      filasEnLaImagen,
+      filasEnLaImagen: filasDeEsteCandidato > 0 ? filasDeEsteCandidato : filasEnLaImagen,
     });
   }
   return candidatos;
