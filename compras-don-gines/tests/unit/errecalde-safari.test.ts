@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Decimal, parseArNumber } from '@/lib/money';
-import { analizadorErrecalde } from '@/lib/ocr/parsers/errecalde';
+import { analizadorErrecalde, analizarFila } from '@/lib/ocr/parsers/errecalde';
 
 /**
  * Los defectos que sólo aparecieron en Safari, sobre un iPhone de verdad.
@@ -280,17 +280,35 @@ describe('cuándo NO se asigna el pie por posición', () => {
     sinLeer(leerPie(['$804.398,16', '$114.914,02', '$4.816.812,73']));
   });
 
-  it('con más importes de los que tiene el pie', () => {
-    sinLeer(
-      leerPie([
-        '$1.000,00',
-        '$3.830.467,37',
-        '$804.398,16',
-        '$114.914,02',
-        '$67.033,18',
-        '$4.816.812,73',
-      ]),
-    );
+  it('con un importe de más, encuentra igual los cinco que se verifican', () => {
+    /*
+     * Este caso cambió de significado, y vale dejarlo anotado.
+     *
+     * Mientras el pie se armaba suponiendo el orden impreso, un importe de más
+     * corría todo y había que rechazar el bloque entero. Desde que los campos se
+     * combinan entre pasadas, la cantidad de candidatos deja de ser una señal:
+     * juntando el recorte y la página completa siempre hay más de cinco.
+     *
+     * Lo que sostiene la lectura ya no es cuántos números hay sino que los cinco
+     * elegidos se verifiquen entre sí. Acá los cinco correctos están, cierran y
+     * el IVA es el 21 % del neto, así que el $1.000 suelto es ruido y se ignora.
+     */
+    const analisis = leerPie([
+      '$1.000,00',
+      '$3.830.467,37',
+      '$804.398,16',
+      '$114.914,02',
+      '$67.033,18',
+      '$4.816.812,73',
+    ]);
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
+    expect(analisis.summary?.total).toBe('4816812.73');
+  });
+
+  it('con importes de más que no arman ningún pie válido, no lee nada', () => {
+    // El reverso del anterior: si entre todos los candidatos no hay cinco que
+    // cierren y respeten el 21 %, no se completa nada.
+    sinLeer(leerPie(['$1.000,00', '$2.500,00', '$7.700,00', '$12.340,00', '$99.999,00']));
   });
 
   it('cuando el último importe no es el mayor: entonces no es el total', () => {
@@ -301,12 +319,27 @@ describe('cuándo NO se asigna el pie por posición', () => {
     );
   });
 
-  it('cuando las percepciones son más grandes que el IVA', () => {
-    // En este formato las percepciones son chicas al lado del IVA. Un bloque
-    // donde eso se da vuelta no tiene la forma de este pie.
-    sinLeer(
-      leerPie(['$3.830.467,37', '$67.033,18', '$804.398,16', '$114.914,02', '$4.816.812,73']),
-    );
+  it('con los cinco importes correctos pero desordenados, los reacomoda', () => {
+    /*
+     * Otro que cambió de significado. El filtro de forma miraba el orden en que
+     * venían: si la segunda cifra era más chica que la tercera, el bloque no
+     * parecía este pie y se rechazaba.
+     *
+     * La combinación por campos no mira el orden, mira las relaciones. Estos son
+     * los cinco importes correctos con las percepciones adelante del IVA, y como
+     * hay una única asignación que cierra y respeta el 21 %, se encuentra.
+     * Rechazarlos por venir en otro orden sería tirar una lectura correcta.
+     */
+    const analisis = leerPie([
+      '$3.830.467,37',
+      '$67.033,18',
+      '$804.398,16',
+      '$114.914,02',
+      '$4.816.812,73',
+    ]);
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
+    expect(analisis.summary?.ivaTotal).toBe('804398.16');
+    expect(analisis.summary?.total).toBe('4816812.73');
   });
 
   it('cuando los cinco no cierran entre sí', () => {
@@ -350,5 +383,141 @@ describe('la asignación por posición es sólo de Errecalde', () => {
 
     const analisis = analizador.analizar(textos);
     expect(analisis.summary?.netTotal).toBeNull();
+  });
+});
+
+describe('cuando el OCR pierde los separadores', () => {
+  /*
+   * Sobre esta corrida de Safari, tres renglones salieron con los separadores
+   * comidos. Los dígitos están todos y en orden; lo que se perdió es dónde iba
+   * la coma, y en un caso el importe salió partido en dos.
+   *
+   * Las lecturas posibles se generan y se prueban contra dos cosas que no
+   * dependen de ellas: que cantidad × precio dé el subtotal, y que el subtotal
+   * quepa en el neto gravado del comprobante.
+   */
+  const NETO = new Decimal('3830467.37');
+
+  const casos: { nombre: string; linea: string; cantidad: string; precio: string; subtotal: string }[] = [
+    {
+      nombre: 'ROQUEFORT AZUL: la cantidad y los dos importes sin coma',
+      linea: 'ART-00721 ROQUEFORT AZUL LA QUESERA 8 1921kg 1045208 0% 21% 20078437',
+      cantidad: '19.21',
+      precio: '10452.08',
+      subtotal: '200784.37',
+    },
+    {
+      nombre: 'RICOTA AL VACIO: el subtotal partido en dos tokens',
+      linea: 'ART-00714 RICOTA AL VACIO SILVIA 4 14.4 kg $3.170,54 0% 21% $45 65574',
+      cantidad: '14.4',
+      precio: '3170.54',
+      subtotal: '45655.74',
+    },
+    {
+      nombre: 'SARDO BLOQUE: la coma perdida en los tres números a la vez',
+      linea: 'ART-00758 SARDO BLOQUE MELINCUE 3 475 kg $13.295,25 0% 21% $6.315.243',
+      cantidad: '4.75',
+      precio: '13295.25',
+      subtotal: '63152.43',
+    },
+  ];
+
+  for (const caso of casos) {
+    it(caso.nombre, () => {
+      const fila = analizarFila(caso.linea, NETO);
+      expect(fila, 'no se pudo interpretar la fila').not.toBeNull();
+      expect(fila!.cantidad.toString()).toBe(caso.cantidad);
+      expect(fila!.precio?.toFixed(2)).toBe(new Decimal(caso.precio).toFixed(2));
+      expect(fila!.subtotal.toFixed(2)).toBe(new Decimal(caso.subtotal).toFixed(2));
+    });
+  }
+
+  it('sin el neto del comprobante, la lectura mal escalada de ROQUEFORT gana sola', () => {
+    /*
+     * Ésta es la que muestra por qué la cota hace falta acá adentro y no sólo
+     * al final. La tolerancia de cantidad × precio crece con la cantidad: para
+     * 19,21 kg son doce centavos, para 1921 son casi diez pesos. La lectura que
+     * multiplicó todo por cien se compra un margen cien veces más grande y
+     * cierra sola dentro de él.
+     *
+     * Sin el neto no hay con qué descartarla; con el neto, un renglón de veinte
+     * millones no entra en una factura de tres millones y medio.
+     */
+    const sinCota = analizarFila(casos[0].linea, null);
+    expect(sinCota!.subtotal.toFixed(2)).not.toBe('200784.37');
+  });
+});
+
+describe('el pie repartido entre dos pasadas', () => {
+  /*
+   * Lo que devolvió Safari, y que ninguna pasada resuelve sola:
+   *
+   *   recorte del pie   NetoGravado / $804.398,1 / $114.914,02 / $67.033,18 / $4.816.812,73
+   *   página completa   63,830.46737 / $804.398,16 / $114.914,02 / $67.033,18
+   *
+   * El total bueno está sólo en el recorte. El IVA bueno está sólo en la página
+   * completa: en el recorte salió cortado, sin el último dígito ($804.398,1).
+   * Las percepciones están bien en las dos. Y el neto no está bien en ninguna:
+   * en el recorte quedó la etiqueta sin número, y en la página completa el
+   * número está deformado.
+   *
+   * Con una sola fuente no se llega. Con las dos, sí.
+   */
+  const RECORTE = [
+    'NetoGravado',
+    '$804.398,1',
+    '$114.914,02',
+    '$67.033,18',
+    '$4.816.812,73',
+  ].join('\n');
+
+  const COMPLETA = [
+    'DISTRIBUCION ERRECALDE S.A.  CUIT 30-71780890-4',
+    'Factura-Remito A 00008-00002647',
+    '63,830.46737',
+    '$804.398,16',
+    '$114.914,02',
+    '$67.033,18',
+  ].join('\n');
+
+  const analisis = analizadorErrecalde.analizar({
+    completo: COMPLETA,
+    resumen: RECORTE,
+    articulos: '',
+  });
+
+  it('arma los cinco campos combinando las dos lecturas', () => {
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
+    expect(analisis.summary?.ivaTotal).toBe('804398.16');
+    expect(analisis.summary?.total).toBe('4816812.73');
+    expect(analisis.summary?.perceptionLines?.map((p) => p.amount)).toEqual([
+      '114914.02',
+      '67033.18',
+    ]);
+  });
+
+  it('el resultado cierra exactamente', () => {
+    const neto = parseArNumber(analisis.summary!.netTotal!)!;
+    const iva = parseArNumber(analisis.summary!.ivaTotal!)!;
+    const percepciones = parseArNumber(analisis.summary!.perceptionsTotal!)!;
+    expect(neto.plus(iva).plus(percepciones).toFixed(2)).toBe('4816812.73');
+  });
+
+  it('el IVA cortado del recorte no gana sobre el entero de la página completa', () => {
+    // $804.398,1 y $804.398,16 se parecen mucho, pero sólo uno hace cerrar el
+    // pie. Que la diferencia sea de seis centavos no lo vuelve aceptable: el
+    // criterio es cuál cierra, no cuál está más cerca.
+    expect(analisis.summary?.ivaTotal).not.toBe('804398.1');
+  });
+
+  it('la evidencia del neto se busca en todo lo leído, no sólo en la fuente elegida', () => {
+    /*
+     * El rastro de "383046737" está en la página completa, dentro de
+     * "63,830.46737", que como importe argentino es basura: tiene coma de miles
+     * y cinco decimales. Sirve como evidencia y no como valor, que es
+     * exactamente la distinción que hace falta. Si la búsqueda de evidencia se
+     * limitara a la fuente con la que se armó el pie, este caso no cerraría.
+     */
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
   });
 });

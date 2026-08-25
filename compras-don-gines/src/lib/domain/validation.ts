@@ -181,15 +181,21 @@ function lineProductTolerance(item: { quantity: Decimal }): Decimal {
  */
 const UMBRAL_TABLA_RECONOCIBLE = 8;
 
-/**
- * Qué proporción de las filas vistas hay que llegar a interpretar.
+/*
+ * Antes acá había una proporción mínima: alcanzaba con interpretar el 70 % de
+ * las filas vistas para dar el control por bueno. La idea era no hacer ruido
+ * cuando el conteo del lector se pasara de largo.
  *
- * No se exige el 100 %: el lector cuenta filas sobre la página completa y
- * también se equivoca, de más y de menos. Con el 70 % se detecta una lectura
- * rota —1 de 23 da 4 %— sin frenar una que perdió un renglón, que el control de
- * los totales agarra igual.
+ * El problema es qué deja pasar. Sobre esta factura la pantalla decía
+ * "se interpretaron 20 renglones y en la imagen se ven 22 filas" con un tilde
+ * verde al lado: 20/22 es el 91 %, así que el control estaba conforme mientras
+ * faltaban tres artículos. Un control que aprueba una lectura incompleta es
+ * peor que no tenerlo, porque además tranquiliza.
+ *
+ * Ahora se exige haber interpretado al menos tantas filas como las que se
+ * vieron. Si el conteo se pasa de largo, el costo es una revisión de más; si se
+ * afloja, el costo es mercadería que se paga sin haberla contado.
  */
-const PROPORCION_MINIMA_DE_FILAS = 0.7;
 
 export function validateDocument(input: ValidationInput): ValidationReport {
   const { items, printed, supplierRules } = input;
@@ -251,19 +257,19 @@ export function validateDocument(input: ValidationInput): ValidationReport {
   const filasVistas = input.filasEnLaImagen ?? null;
   if (filasVistas !== null && filasVistas >= UMBRAL_TABLA_RECONOCIBLE) {
     const faltan = filasVistas - items.length;
-    const proporcion = items.length / filasVistas;
+    const completo = items.length >= filasVistas;
     checks.push({
       code: 'ART_RENGLONES_COMPLETOS',
       label: 'Renglones leídos contra filas de la tabla',
-      severity: proporcion >= PROPORCION_MINIMA_DE_FILAS ? 'OK' : 'ERROR',
+      severity: completo ? 'OK' : 'ERROR',
       expected: String(filasVistas),
       actual: String(items.length),
-      message:
-        proporcion >= PROPORCION_MINIMA_DE_FILAS
-          ? `Se interpretaron ${items.length} renglones y en la imagen se ven ${filasVistas} filas.`
-          : `En la imagen se ven ${filasVistas} filas de la tabla y sólo se interpretaron ` +
-            `${items.length}: faltan alrededor de ${faltan}. La lectura está incompleta y no ` +
-            'sirve aunque los renglones leídos cierren entre sí.',
+      difference: String(-faltan),
+      message: completo
+        ? `Se interpretaron ${items.length} renglones y en la imagen se ven ${filasVistas} filas.`
+        : `En la imagen se ven ${filasVistas} filas de la tabla y se interpretaron ` +
+          `${items.length}: ${faltan === 1 ? 'falta 1 artículo' : `faltan ${faltan} artículos`}. ` +
+          'La lectura está incompleta y no sirve aunque los renglones leídos cierren entre sí.',
     });
   }
 

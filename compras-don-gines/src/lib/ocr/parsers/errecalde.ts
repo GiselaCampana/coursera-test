@@ -98,10 +98,20 @@ export const analizadorErrecalde: AnalizadorComprobante = {
      * que un renglón de seis millones no cabe en una factura de tres millones y
      * medio. Sin el pie, esa lectura es indistinguible de la buena.
      */
-    const { summary, avisos: avisosPie } = analizarPie(
-      textos.resumen || textos.completo,
-      textos.completo,
-    );
+    /*
+     * El pie se arma con **las dos** lecturas, no con la mejor de las dos.
+     *
+     * En la corrida de Safari ninguna pasada lo tenía entero. El recorte del pie
+     * trajo el total bien ($4.816.812,73) pero el IVA cortado ($804.398,1, sin
+     * el último dígito); la página completa trajo el IVA entero ($804.398,16)
+     * pero no el total, y el neto deformado. Cada una sola falla; juntas están
+     * los cinco campos.
+     *
+     * Así que se prueban las dos fuentes y se elige el resultado que pase las
+     * cinco condiciones. No se mezclan campos de una y de otra a dedo: se
+     * interpreta cada texto por separado y gana el que quede completo y cierre.
+     */
+    const { summary, avisos: avisosPie } = mejorPie(textos);
     observaciones.push(...avisosPie);
 
     const { items, avisos } = analizarArticulos(textos.articulos || textos.completo, {
@@ -226,14 +236,49 @@ function normalizarDescripcion(texto: string): string {
     .replace(/[^A-Z0-9]/g, '');
 }
 
-/** ¿Dos códigos que podrían ser el mismo, con un dígito mal leído? */
+/**
+ * ¿Dos códigos que podrían ser el mismo, con algún dígito mal leído?
+ *
+ * Safari cambia dígitos del código entre pasadas con bastante frecuencia:
+ * ART-00487 / ART-60487, ART-02174 / ART-62174. Se admiten hasta dos
+ * diferencias, no una, porque con una sola quedaban afuera casos así.
+ *
+ * Ampliarlo tiene un riesgo y conviene tenerlo presente: en esta misma factura
+ * conviven ART-00177 (CAYFAR LATA BATATA) y ART-00178 (CAYFAR LATA CHOCOLATE),
+ * dos artículos distintos con códigos casi iguales. Por eso el código nunca
+ * decide solo: hace falta que además coincida la descripción, que es lo que de
+ * verdad los distingue.
+ */
 function codigosCompatibles(a: string | null, b: string | null): boolean {
   if (!a || !b || a.length !== b.length) return false;
   let distintos = 0;
   for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i] && ++distintos > 1) return false;
+    if (a[i] !== b[i] && ++distintos > 2) return false;
   }
   return true;
+}
+
+/**
+ * Cuán parecidas son dos descripciones, de 0 a 1.
+ *
+ * Cuenta las posiciones que coinciden sobre la parte común. Es tosco pero
+ * alcanza para lo que hace falta: una descripción leída dos veces por el mismo
+ * OCR se parece mucho a sí misma —cambia una letra, se corta el final— y dos
+ * artículos distintos del mismo rubro no llegan ni cerca, porque las palabras
+ * son otras desde el principio.
+ */
+function parecidoDeDescripcion(a: string, b: string): number {
+  const na = normalizarDescripcion(a);
+  const nb = normalizarDescripcion(b);
+  if (na.length === 0 || nb.length === 0) return 0;
+  const [corta, larga] = na.length <= nb.length ? [na, nb] : [nb, na];
+  let iguales = 0;
+  for (let i = 0; i < corta.length; i++) {
+    if (corta[i] === larga[i]) iguales++;
+  }
+  // Se mide contra la más larga: que una sea el principio de la otra no la
+  // vuelve idéntica, sólo compatible, y de eso se ocupa `descripcionesCompatibles`.
+  return iguales / larga.length;
 }
 
 /** ¿Dos descripciones que podrían ser la misma, una más recortada que la otra? */
@@ -271,6 +316,21 @@ function sonElMismoRenglon(a: FilaErrecalde, b: FilaErrecalde): boolean {
   const na = normalizarDescripcion(a.descripcion);
   const nb = normalizarDescripcion(b.descripcion);
   if (na.length >= 12 && na === nb) return true;
+
+  /*
+   * La descripción casi idéntica alcanza sola, aunque el código difiera.
+   *
+   * Safari cambia dígitos del código entre pasadas —ART-00487 / ART-60487,
+   * ART-02174 / ART-62174— así que exigirle al código que coincida parte en dos
+   * renglones que son el mismo. La descripción, en cambio, se lee estable: puede
+   * perder una letra o cortarse el final, pero no se convierte en otra palabra.
+   *
+   * El umbral es alto a propósito. CAYFAR LATA BATATA y CAYFAR LATA CHOCOLATE
+   * comparten el 60 % de sus caracteres y son artículos distintos; dos lecturas
+   * de la misma descripción pasan del 85 %. Cuál es el código correcto se decide
+   * después, por consenso entre las lecturas del grupo.
+   */
+  if (parecidoDeDescripcion(a.descripcion, b.descripcion) >= 0.85) return true;
 
   let coincidencias = 0;
   if (codigosCompatibles(a.codigo, b.codigo)) coincidencias++;
@@ -401,7 +461,7 @@ function analizarArticulos(
     if (linea.length < 8) continue;
     if (NO_ES_ARTICULO.test(linea)) continue;
 
-    const fila = analizarFila(linea);
+    const fila = analizarFila(linea, limites.netoImpreso);
     if (!fila) continue;
 
     const grupo = grupos.find((g) => g.some((otra) => sonElMismoRenglon(otra, fila)));
@@ -461,15 +521,15 @@ function analizarArticulos(
  * descripción y las tres columnas numéricas, que se toman de atrás para
  * adelante: precio, cantidad y unidades.
  */
-export function analizarFila(linea: string): FilaErrecalde | null {
+export function analizarFila(linea: string, netoImpreso: Decimal | null = null): FilaErrecalde | null {
   const ancla = ANCLA_DTO_IVA.exec(linea);
   if (!ancla) return null;
 
   const izquierda = linea.slice(0, ancla.index);
   const derecha = linea.slice(ancla.index + ancla[0].length);
 
-  const subtotalCrudo = primerImporteCrudo(derecha);
-  if (subtotalCrudo === null) return null;
+  const subtotalesCrudos = importesCrudosDelSubtotal(derecha);
+  if (subtotalesCrudos.length === 0) return null;
 
   const descuento = parseRate(repararDigitos(ancla[1].replace('%', '')));
   const iva = parseRate(repararDigitos(ancla[2].replace('%', '')));
@@ -506,7 +566,7 @@ export function analizarFila(linea: string): FilaErrecalde | null {
   const cantidadCruda = numeros.length >= 2 ? numeros[numeros.length - 2] : null;
   if (!cantidadCruda) return null;
 
-  const conciliado = conciliar(cantidadCruda.texto, precioCrudo.texto, subtotalCrudo);
+  const conciliado = conciliar(cantidadCruda.texto, precioCrudo.texto, subtotalesCrudos, netoImpreso);
   if (!conciliado) return null;
   const { cantidad, precio, subtotal } = conciliado;
 
@@ -565,12 +625,26 @@ export function analizarFila(linea: string): FilaErrecalde | null {
   };
 }
 
-/** Texto del primer importe de un tramo de línea, sin interpretar todavía. */
-function primerImporteCrudo(texto: string): string | null {
-  IMPORTE.lastIndex = 0;
-  const encontrado = IMPORTE.exec(texto);
-  if (!encontrado) return null;
-  return /\d/.test(encontrado[1]) ? encontrado[1] : null;
+/**
+ * Texto del subtotal, que es lo que hay a la derecha del ancla "0% 21%".
+ *
+ * Se devuelven dos lecturas del mismo tramo: el primer número suelto, y todos
+ * los números del tramo pegados.
+ *
+ * La segunda existe porque el OCR parte el importe. Sobre RICOTA AL VACIO el
+ * subtotal salió "$45 65574": tomando el primer número el renglón vale
+ * cuarenta y cinco pesos, y pegando los dos vale $45.655,74, que es lo que dice
+ * el papel y lo que confirma 14,4 × 3.170,54. Cuál de las dos es la buena no se
+ * decide acá —se decide en `conciliar`, que prueba las dos contra cantidad ×
+ * precio—; acá sólo se deja de perder la que estaba partida.
+ */
+function importesCrudosDelSubtotal(texto: string): string[] {
+  const trozos = [...texto.matchAll(IMPORTE)]
+    .map((m) => m[1])
+    .filter((t) => /\d/.test(t));
+  if (trozos.length === 0) return [];
+  if (trozos.length === 1) return [trozos[0]];
+  return [trozos[0], trozos.join('')];
 }
 
 /**
@@ -593,24 +667,62 @@ function primerImporteCrudo(texto: string): string | null {
 function conciliar(
   cantidadTexto: string,
   precioTexto: string,
-  subtotalTexto: string,
+  subtotalTextos: string[],
+  netoImpreso: Decimal | null = null,
 ): { cantidad: Decimal; precio: Decimal | null; subtotal: Decimal } | null {
   const cantidades = variantesDeCantidad(cantidadTexto);
   const precios = variantesDeImporte(precioTexto);
-  const subtotales = variantesDeImporte(subtotalTexto);
+  const subtotales: Decimal[] = [];
+  for (const texto of subtotalTextos) {
+    for (const valor of variantesDeImporte(texto)) {
+      if (!subtotales.some((v) => v.eq(valor))) subtotales.push(valor);
+    }
+  }
 
   if (cantidades.length === 0 || subtotales.length === 0) return null;
+
+  /*
+   * Se juntan **todas** las combinaciones que cierran y recién después se
+   * elige. Antes se devolvía la primera, y ahí estaba el error.
+   *
+   * La tolerancia crece con la cantidad, porque el precio unitario viene
+   * redondeado a dos decimales y ese medio centavo se multiplica. Para 19,21 kg
+   * el margen es de 12 centavos; para 1921 son casi diez pesos. Así que la
+   * lectura mal escalada —la que multiplicó la cantidad por cien— se compra un
+   * margen cien veces más grande, y con él cierra sola: sobre ROQUEFORT AZUL,
+   * 1921 × 10.452,08 da 20.078.445,68 contra un subtotal leído de 20.078.437,
+   * ocho pesos de diferencia dentro de un margen de nueve.
+   *
+   * Recorriendo de la más grande a la más chica, esa combinación aparecía
+   * primero y ganaba. Ahora compiten todas y gana la de menor error relativo,
+   * después de descartar las que no caben en el comprobante.
+   */
+  const combinaciones: { cantidad: Decimal; precio: Decimal; subtotal: Decimal; error: Decimal }[] = [];
 
   for (const cantidad of cantidades) {
     if (cantidad.lte(0)) continue;
     for (const precio of precios) {
+      if (precio.lte(0)) continue;
       for (const subtotal of subtotales) {
+        if (subtotal.lte(0)) continue;
+        // Ningún renglón puede valer más que el neto gravado de la factura.
+        if (netoImpreso && netoImpreso.gt(0) && subtotal.gt(netoImpreso.times(1.02))) continue;
+
         const tolerancia = cantidad.abs().times(0.005).plus(0.02);
-        if (cantidad.times(precio).minus(subtotal).abs().lte(tolerancia)) {
-          return { cantidad, precio, subtotal };
+        const diferencia = cantidad.times(precio).minus(subtotal).abs();
+        if (diferencia.lte(tolerancia)) {
+          // El error relativo, que no depende de la escala: es lo que permite
+          // comparar una combinación de 19 kg con una de 1921.
+          combinaciones.push({ cantidad, precio, subtotal, error: diferencia.div(subtotal) });
         }
       }
     }
+  }
+
+  if (combinaciones.length > 0) {
+    combinaciones.sort((a, b) => a.error.comparedTo(b.error));
+    const { cantidad, precio, subtotal } = combinaciones[0];
+    return { cantidad, precio, subtotal };
   }
 
   // Nada cerró: se devuelve la lectura literal y el control se encarga.
@@ -919,6 +1031,218 @@ function analizarPie(
   }
 
   return { summary, avisos };
+}
+
+/**
+ * Interpreta el pie con cada lectura disponible y se queda con la mejor.
+ *
+ * Las fuentes son el recorte del pie y la página completa, y también las dos
+ * concatenadas: cuando cada una tiene la mitad de los campos con etiqueta,
+ * juntarlas deja que el paso de etiquetas encuentre los cinco sin tener que
+ * suponer ningún orden.
+ *
+ * "Mejor" es un pie completo que cierre. Entre dos que cierren, el que tenga más
+ * campos leídos con su etiqueta al lado, porque ésos no dependen de haber
+ * supuesto nada.
+ */
+function mejorPie(textos: TextosComprobante): { summary: OcrSummary; avisos: string[] } {
+  const recorte = textos.resumen ?? '';
+  const completo = textos.completo ?? '';
+
+  const fuentes: string[] = [];
+  for (const fuente of [recorte, completo, `${recorte}\n${completo}`]) {
+    if (fuente.trim() !== '' && !fuentes.includes(fuente)) fuentes.push(fuente);
+  }
+  if (fuentes.length === 0) return analizarPie('', '');
+
+  const todoLoLeido = `${recorte}\n${completo}`;
+  let mejor: { summary: OcrSummary; avisos: string[] } | null = null;
+  let mejorPuntaje = -1;
+
+  for (const fuente of fuentes) {
+    // La evidencia de un valor deducido se busca siempre en todo lo leído, no
+    // sólo en la fuente que se está probando: el rastro del neto deformado está
+    // en la página completa aunque el pie se esté armando con el recorte.
+    const resultado = analizarPie(fuente, todoLoLeido);
+    const puntaje = puntuarPie(resultado.summary);
+    if (puntaje > mejorPuntaje) {
+      mejor = resultado;
+      mejorPuntaje = puntaje;
+    }
+  }
+
+  /*
+   * Si ninguna fuente por sí sola dio un pie que cierre, se combinan los campos.
+   *
+   * Es el caso de Safari: el total bueno está sólo en el recorte, el IVA bueno
+   * está sólo en la página completa —en el recorte salió cortado, $804.398,1 sin
+   * el último dígito— y el neto no está bien en ninguna. Cada fuente falla, y
+   * concatenarlas tampoco alcanza, porque entonces hay ocho importes sueltos y
+   * ningún orden que suponer.
+   *
+   * Lo que sí se puede es tomar los importes de todas las lecturas como
+   * candidatos de cada campo y buscar la combinación que cumpla las cinco
+   * condiciones. No es aflojar nada: es buscar entre números que el OCR
+   * efectivamente leyó, y aceptarlos sólo si entre ellos se verifican.
+   */
+  if (mejorPuntaje < 100) {
+    const combinado = combinarCamposDelPie(fuentes, todoLoLeido);
+    if (combinado && puntuarPie(combinado.summary) > mejorPuntaje) return combinado;
+  }
+
+  return mejor!;
+}
+
+/**
+ * Arma el pie tomando cada campo de la lectura que lo tenga bien.
+ *
+ * Junta todos los importes que aparecieron en cualquier pasada y busca entre
+ * ellos la combinación neto / IVA / percepciones / total que pase las cinco
+ * condiciones. La búsqueda es chica —son unos pocos importes— y está acotada por
+ * relaciones que no dependen de la combinación elegida, que es lo que la vuelve
+ * una verificación y no un acomodo:
+ *
+ *  - el total tiene que ser el mayor de los cinco;
+ *  - neto + IVA + percepciones tiene que dar el total;
+ *  - el IVA tiene que ser el 21 % del neto;
+ *  - el neto es mayor que el IVA, y el IVA mayor que cada percepción;
+ *  - y el neto, si no se leyó y hubo que deducirlo, necesita que sus dígitos
+ *    aparezcan en alguna cifra del texto.
+ *
+ * Entre las combinaciones que pasan, gana la que tenga más valores leídos y
+ * menos deducidos: preferimos el número que estaba escrito al que salió de una
+ * resta.
+ */
+function combinarCamposDelPie(
+  fuentes: string[],
+  todoLoLeido: string,
+): { summary: OcrSummary; avisos: string[] } | null {
+  // Todos los importes que apareció alguna pasada, sin repetir.
+  const candidatos: Decimal[] = [];
+  for (const fuente of fuentes) {
+    for (const cruda of fuente.split('\n')) {
+      const linea = cruda.trim();
+      if (linea === '' || ANCLA_DTO_IVA.test(linea)) continue;
+      const importe = ultimoImporte(linea);
+      if (importe && importe.gt(0) && !candidatos.some((c) => c.eq(importe))) {
+        candidatos.push(importe);
+      }
+    }
+  }
+  if (candidatos.length < 3) return null;
+
+  let mejor: { neto: Decimal; iva: Decimal; percepciones: Decimal[]; total: Decimal; leidos: number } | null =
+    null;
+
+  for (const total of candidatos) {
+    // El total es el mayor: ningún otro campo del pie puede superarlo.
+    if (candidatos.some((c) => c.gt(total))) continue;
+
+    for (const iva of candidatos) {
+      if (iva.gte(total)) continue;
+
+      // Las percepciones: ninguna, una o dos, siempre menores que el IVA.
+      const posibles = candidatos.filter((c) => c.lt(iva));
+      const combinacionesDePercepciones: Decimal[][] = [[]];
+      for (const a of posibles) {
+        combinacionesDePercepciones.push([a]);
+        for (const b of posibles) {
+          if (b.eq(a)) continue;
+          combinacionesDePercepciones.push([a, b]);
+        }
+      }
+
+      for (const percepciones of combinacionesDePercepciones) {
+        const sumaPercepciones = percepciones.reduce((acc, v) => acc.plus(v), new Decimal(0));
+        const netoDeducido = total.minus(iva).minus(sumaPercepciones);
+        if (netoDeducido.lte(0) || netoDeducido.lte(iva)) continue;
+        if (!ivaCoherente(netoDeducido, iva)) continue;
+
+        // ¿El neto estaba leído, o hubo que deducirlo?
+        const netoLeido = candidatos.find((c) => c.minus(netoDeducido).abs().lte('0.01'));
+        const neto = netoLeido ?? netoDeducido;
+        if (!netoLeido && !hayRastroDe(neto, todoLoLeido)) continue;
+
+        const leidos = 2 + percepciones.length + (netoLeido ? 1 : 0);
+        if (!mejor || leidos > mejor.leidos) {
+          mejor = { neto, iva, percepciones, total, leidos };
+        }
+      }
+    }
+  }
+
+  if (!mejor) return null;
+
+  const summary = pieVacio();
+  summary.netTotal = mejor.neto.toString();
+  summary.ivaLines!.push({ label: 'IVA', rate: '0.21', amount: mejor.iva.toString() });
+  for (const [i, percepcion] of mejor.percepciones.entries()) {
+    summary.perceptionLines!.push({
+      label: i === 0 ? 'Percepción IVA RG 5329' : 'Percepción IIBB Buenos Aires',
+      rate: null,
+      amount: percepcion.toString(),
+    });
+  }
+  summary.total = mejor.total.toString();
+  summary.ivaTotal = sumar(summary.ivaLines);
+  summary.perceptionsTotal = sumar(summary.perceptionLines);
+
+  return { summary, avisos: [] };
+}
+
+/**
+ * ¿Los dígitos de este importe aparecen en alguna cifra que el OCR haya leído?
+ *
+ * Se busca sobre la sucesión de dígitos, sin separadores. "63,830.46737" no es
+ * un importe argentino válido —coma de miles y cinco decimales— y como número no
+ * se puede usar, pero contiene "383046737" en ese orden, que son los dígitos de
+ * $3.830.467,37. Vale como evidencia de que ese número estaba en el papel, que
+ * es para lo único que se lo usa.
+ */
+function hayRastroDe(valor: Decimal, texto: string): boolean {
+  const buscados = digitosDe(valor.toFixed(2));
+  return [...texto.matchAll(/[\d.,]{6,}/g)].some((c) => digitosDe(c[0]).includes(buscados));
+}
+
+/** Un resumen vacío, con las listas listas para llenar. */
+function pieVacio(): OcrSummary {
+  return {
+    grossSubtotal: null,
+    discountTotal: null,
+    netTotal: null,
+    ivaLines: [],
+    perceptionLines: [],
+    ivaTotal: null,
+    perceptionsTotal: null,
+    total: null,
+    lineCount: null,
+    netWeightKg: null,
+    totalUnits: null,
+    packageCount: null,
+  };
+}
+
+/** Cuán bueno es un pie leído: completo y que cierre vale más que nada. */
+function puntuarPie(summary: OcrSummary): number {
+  const neto = parseArNumber(summary.netTotal ?? '');
+  const total = parseArNumber(summary.total ?? '');
+  const iva = parseArNumber(summary.ivaTotal ?? '');
+  const percepciones = parseArNumber(summary.perceptionsTotal ?? '') ?? new Decimal(0);
+
+  let puntos = 0;
+  if (neto) puntos += 10;
+  if (total) puntos += 10;
+  if (iva) puntos += 10;
+  puntos += (summary.perceptionLines?.length ?? 0) * 5;
+
+  // Que cierre vale más que cualquier campo suelto.
+  if (neto && total && iva) {
+    const suma = neto.plus(iva).plus(percepciones);
+    if (suma.minus(total).abs().lte(1)) puntos += 100;
+    if (ivaCoherente(neto, iva)) puntos += 50;
+  }
+
+  return puntos;
 }
 
 /** La tasa de IVA de este proveedor, contra la que se contrasta el pie. */
