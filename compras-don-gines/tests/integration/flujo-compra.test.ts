@@ -22,7 +22,11 @@ import {
 } from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
-import { backfillProductLinks } from '@/lib/services/backfill-productos';
+import {
+  asociarRenglonHistorico,
+  backfillProductLinks,
+  segurasDe,
+} from '@/lib/services/backfill-productos';
 import { saveSupplierCode } from '@/lib/services/admin';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { arToday, toISODate, dateOnlyFromISO } from '@/lib/datetime';
@@ -1889,9 +1893,9 @@ describe('el reporte por producto encuentra lo que se compró', () => {
     // Primero, sólo el informe. No escribe nada.
     const informe = await backfillProductLinks(escenario.admin, {});
     expect(informe.aplicadas).toBe(0);
-    expect(informe.seguras.length).toBeGreaterThanOrEqual(2);
+    expect(segurasDe(informe).length).toBeGreaterThanOrEqual(2);
     expect(
-      informe.seguras.some((f) => f.description.includes('SARDO')),
+      segurasDe(informe).some((f) => f.description.includes('SARDO')),
       'el informe tendría que reconocer los Sardo',
     ).toBe(true);
 
@@ -1902,7 +1906,7 @@ describe('el reporte por producto encuentra lo que se compró', () => {
 
     // Y recién ahora se aplica.
     const aplicado = await backfillProductLinks(escenario.admin, { aplicar: true });
-    expect(aplicado.aplicadas).toBe(aplicado.seguras.length);
+    expect(aplicado.aplicadas).toBe(segurasDe(aplicado).length);
 
     const despues = await prisma.purchaseMovement.count({ where: { documentId } });
     expect(despues, 'el backfill no puede crear movimientos nuevos').toBe(antes);
@@ -2491,7 +2495,7 @@ describe('el código del proveedor y el PLU interno son dos cosas distintas', ()
 
     const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
 
-    expect(informe.porCodigoDeProveedor).toBeGreaterThanOrEqual(1);
+    expect(informe.porCodigo.length).toBeGreaterThanOrEqual(1);
     const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
       where: { documentId: historica },
     });
@@ -2501,5 +2505,254 @@ describe('el código del proveedor y el PLU interno son dos cosas distintas', ()
       productId: escenario.productos['1211'],
     });
     expect(reporte.rows).toHaveLength(2);
+  });
+});
+
+describe('el mantenimiento de asociaciones históricas', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /**
+   * La factura real de Errecalde, validada y con los renglones sin producto.
+   *
+   * Es el estado en que quedaron las compras confirmadas antes de que la
+   * asociación se resolviera del lado del servidor: la factura está bien, los
+   * importes están bien, y el reporte por artículo da cero.
+   */
+  async function facturaHistoricaSinAsociar(): Promise<string> {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    await prisma.documentItem.updateMany({
+      where: { documentId: documento.id },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+    await prisma.purchaseMovement.updateMany({
+      where: { documentId: documento.id },
+      data: { productId: null },
+    });
+    return documento.id;
+  }
+
+  it('la factura histórica deja de mostrar Sardo = 0, sin volver a cargarla', async () => {
+    /*
+     * La prueba de aceptación de todo esto. Antes del backfill el reporte de
+     * "Queso Sardo" da cero kilos y cero pesos sobre una compra que existe,
+     * está validada y está paga. Después, sin tocar la factura ni volver a
+     * leer la foto, aparece con sus kilos y su costo.
+     */
+    const documentId = await facturaHistoricaSinAsociar();
+    const bloque = escenario.productos['2001'];
+    const donAlfonso = escenario.productos['2002'];
+
+    const antesBloque = await getPurchaseReport(escenario.admin, { productId: bloque });
+    const antesDonAlfonso = await getPurchaseReport(escenario.admin, { productId: donAlfonso });
+    expect(antesBloque.rows).toHaveLength(0);
+    expect(antesBloque.totals.kilos).toBe('0.00');
+    expect(antesBloque.totals.costoTotal).toBe('0.00');
+    expect(antesDonAlfonso.rows).toHaveLength(0);
+
+    // Paso 1: analizar. No escribe nada.
+    const informe = await backfillProductLinks(escenario.admin, {});
+    expect(informe.aplicadas).toBe(0);
+    const sardosDelInforme = segurasDe(informe).filter((f) => f.description.includes('SARDO'));
+    expect(sardosDelInforme.length).toBeGreaterThanOrEqual(2);
+    // El informe dice a qué PLU iría cada uno, antes de aplicar nada.
+    expect(sardosDelInforme.map((f) => f.productCode).sort()).toEqual(['2001', '2002']);
+
+    const sinAplicar = await getPurchaseReport(escenario.admin, { productId: bloque });
+    expect(sinAplicar.rows).toHaveLength(0);
+
+    // Paso 2: aplicar.
+    await backfillProductLinks(escenario.admin, { aplicar: true });
+
+    const despuesBloque = await getPurchaseReport(escenario.admin, { productId: bloque });
+    const despuesDonAlfonso = await getPurchaseReport(escenario.admin, { productId: donAlfonso });
+
+    expect(despuesBloque.rows).toHaveLength(1);
+    expect(despuesBloque.totals.kilos).toBe('4.75');
+    expect(Number(despuesBloque.totals.costoTotal)).toBeGreaterThan(0);
+    expect(despuesDonAlfonso.rows).toHaveLength(1);
+    expect(despuesDonAlfonso.totals.kilos).toBe('28.90');
+    expect(Number(despuesDonAlfonso.totals.costoTotal)).toBeGreaterThan(0);
+
+    // Y la factura quedó intacta: los mismos 23 renglones y el mismo total.
+    const documento = await prisma.document.findUniqueOrThrow({
+      where: { id: documentId },
+      include: { items: true },
+    });
+    expect(documento.status).toBe('VALIDADO');
+    expect(documento.items).toHaveLength(23);
+    expect(documento.total!.toFixed(2)).toBe('4816812.73');
+
+    // El total general no se movió: reasignar no crea ni borra compras.
+    const todos = await getPurchaseReport(escenario.admin, {});
+    expect(todos.totals.costoTotal).toBe('4816812.73');
+    expect(todos.rows).toHaveLength(23);
+  });
+
+  it('el informe se puede acotar a un proveedor', async () => {
+    await facturaHistoricaSinAsociar();
+
+    const deErrecalde = await backfillProductLinks(escenario.admin, {
+      supplierId: escenario.proveedorErrecaldeId,
+    });
+    expect(segurasDe(deErrecalde).length).toBeGreaterThanOrEqual(2);
+
+    const deLosCalvos = await backfillProductLinks(escenario.admin, {
+      supplierId: escenario.proveedorId,
+    });
+    expect(segurasDe(deLosCalvos)).toHaveLength(0);
+    expect(deLosCalvos.ambiguas).toHaveLength(0);
+  });
+
+  it('una ambigua se resuelve a mano y queda aprendido el código', async () => {
+    /*
+     * El caso que el análisis no puede cerrar solo: una descripción que no se
+     * parece a nada. La persona elige el PLU y, al confirmar, queda escrito que
+     * ese código de ese proveedor es ese artículo — así la próxima factura se
+     * vincula sola y este trabajo se hace una sola vez.
+     */
+    const documentId = await facturaHistoricaSinAsociar();
+    const renglon = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, description: { contains: 'SARDO BLOQUE' } },
+    });
+    // Se le rompe la descripción para que ninguna comparación la salve.
+    await prisma.documentItem.update({
+      where: { id: renglon.id },
+      data: { description: 'XQZ 8871 ILEGIBLE' },
+    });
+
+    const informe = await backfillProductLinks(escenario.admin, {});
+    const dudosa = [...informe.ambiguas, ...informe.sinCoincidencia].find(
+      (f) => f.documentItemId === renglon.id,
+    );
+    expect(dudosa, 'el renglón ilegible tendría que quedar sin resolver').toBeDefined();
+
+    await asociarRenglonHistorico(escenario.admin, renglon.id, escenario.productos['2001'], {
+      aprenderCodigo: true,
+    });
+
+    // Quedó asociado, en el renglón y en el movimiento.
+    const despues = await prisma.documentItem.findUniqueOrThrow({ where: { id: renglon.id } });
+    expect(despues.productId).toBe(escenario.productos['2001']);
+    expect(despues.matchMethod).toBe('MANUAL');
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentItemId: renglon.id },
+    });
+    expect(movimiento.productId).toBe(escenario.productos['2001']);
+
+    // Y el código quedó aprendido para las próximas facturas.
+    const aprendido = await prisma.productAlias.findFirst({
+      where: {
+        supplierId: escenario.proveedorErrecaldeId,
+        supplierCode: renglon.supplierCode,
+      },
+    });
+    expect(aprendido?.productId).toBe(escenario.productos['2001']);
+  });
+
+  it('resolver a mano no pisa un código que ya es de otro producto', async () => {
+    /*
+     * El renglón se asocia igual —quien mira la factura sabe qué compró— pero
+     * el código no se toca: dárselo a este producto se lo sacaría al otro, y eso
+     * cambiaría en silencio la clasificación de todas las compras que dependen
+     * de él. Ese conflicto se resuelve en la ficha del producto, a la vista.
+     */
+    const documentId = await facturaHistoricaSinAsociar();
+    const renglon = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, description: { contains: 'SARDO BLOQUE' } },
+    });
+
+    // El código ya pertenece a otro artículo.
+    await prisma.productAlias.create({
+      data: {
+        productId: escenario.productos['2002'],
+        supplierId: escenario.proveedorErrecaldeId,
+        supplierCode: renglon.supplierCode,
+        alias: 'YA ESTABA TOMADO',
+        normalized: 'ya estaba tomado',
+        origin: 'MANUAL',
+      },
+    });
+
+    await asociarRenglonHistorico(escenario.admin, renglon.id, escenario.productos['2001'], {
+      aprenderCodigo: true,
+    });
+
+    const despues = await prisma.documentItem.findUniqueOrThrow({ where: { id: renglon.id } });
+    expect(despues.productId).toBe(escenario.productos['2001']);
+
+    // Pero el código sigue donde estaba.
+    const codigo = await prisma.productAlias.findFirstOrThrow({
+      where: {
+        supplierId: escenario.proveedorErrecaldeId,
+        supplierCode: renglon.supplierCode,
+      },
+    });
+    expect(codigo.productId).toBe(escenario.productos['2002']);
+  });
+
+  it('un renglón ya asociado no se puede reasignar por esta vía', async () => {
+    // Este mantenimiento completa lo que está vacío. Cambiar una asociación que
+    // ya existe es otra cosa y no se hace de refilón.
+    const documentId = await facturaHistoricaSinAsociar();
+    await backfillProductLinks(escenario.admin, { aplicar: true });
+
+    const asociado = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, productId: { not: null } },
+    });
+    await expect(
+      asociarRenglonHistorico(escenario.admin, asociado.id, escenario.productos['1211'], {}),
+    ).rejects.toThrow(/ya está asociado/i);
+  });
+
+  it('la auditoría dice quién, cuándo, cuántas y qué producto en cada renglón', async () => {
+    await facturaHistoricaSinAsociar();
+    const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
+
+    const asiento = await prisma.auditLog.findFirst({
+      where: { action: 'productos.reasignados', entity: 'Product' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(asiento).not.toBeNull();
+    expect(asiento!.userId).toBe(escenario.admin.id);
+    expect(asiento!.createdAt).toBeInstanceOf(Date);
+
+    const detalle = asiento!.after as unknown as {
+      aplicadas: number;
+      porCodigo: number;
+      porDescripcion: number;
+      ambiguas: number;
+      renglones: { renglon: string; plu: string; metodo: string }[];
+      pendientes: { renglon: string }[];
+    };
+    expect(detalle.aplicadas).toBe(informe.aplicadas);
+    expect(detalle.renglones).toHaveLength(informe.aplicadas);
+    // Cada renglón, con el PLU que se le puso: sin esto no se podría revisar
+    // ni revertir una asignación concreta.
+    for (const r of detalle.renglones) {
+      expect(r.plu).toBeTruthy();
+      expect(r.metodo).toBeTruthy();
+    }
+    expect(detalle.ambiguas).toBe(informe.ambiguas.length);
+    expect(detalle.pendientes).toHaveLength(informe.ambiguas.length);
+  });
+
+  it('sin permiso de gestionar productos no se puede analizar ni aplicar', async () => {
+    await expect(
+      backfillProductLinks(escenario.operadorDevoto, {}),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(
+      asociarRenglonHistorico(escenario.operadorDevoto, 'x', 'y', {}),
+    ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });

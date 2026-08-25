@@ -217,6 +217,12 @@ export default async function PaginaProductos({
     <>
       <h1>Productos y alias</h1>
 
+      <div className="acciones">
+        <a href="/configuracion/productos/asociaciones" className="boton boton-secundario">
+          Asociaciones históricas
+        </a>
+      </div>
+
       <form className="card card-compacta" method="get">
         <div className="campo">
           <label htmlFor="q">Buscar por PLU, nombre o código de proveedor</label>

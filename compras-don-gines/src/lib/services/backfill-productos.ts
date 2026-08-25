@@ -1,6 +1,6 @@
 import 'server-only';
 import { prisma } from '@/lib/db';
-import { ForbiddenError } from '@/lib/errors';
+import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { hasPermission, type AuthUser } from '@/lib/auth/session';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
@@ -38,32 +38,43 @@ export interface RenglonDelInforme {
   documentItemId: string;
   documentId: string;
   documentNumber: string;
+  supplierId: string | null;
   supplierName: string | null;
   description: string;
   supplierCode: string | null;
   productId: string | null;
+  /** El PLU interno, para poder mostrar "→ PLU 1211 · Cremoso Punta del Agua". */
+  productCode: string | null;
   productName: string | null;
   method: string;
   score: number | null;
   reason?: string;
+  /** Los candidatos cercanos, para ofrecerlos al resolver una ambigua a mano. */
+  sugerencias?: { productId: string; productCode: string; productName: string; score: number }[];
 }
 
 export interface InformeDeBackfill {
-  /** Se reconocieron sin lugar a dudas: son las que se aplican. */
-  seguras: RenglonDelInforme[];
   /**
-   * De las seguras, cuántas salieron del código del proveedor.
+   * Reconocidas por el código del proveedor: las de mayor confianza.
    *
-   * Se informa aparte porque son las de mayor confianza: no dependen de cómo
-   * haya salido la descripción del OCR.
+   * Van separadas de las demás porque no dependen de cómo haya salido la
+   * descripción del OCR. Si Errecalde ya dijo que su ART-00228 es el PLU 1211,
+   * la compra es de ese artículo por ilegible que esté el renglón.
    */
-  porCodigoDeProveedor: number;
+  porCodigo: RenglonDelInforme[];
+  /** Reconocidas por alias o descripción, sin empate y por encima del umbral. */
+  porDescripcion: RenglonDelInforme[];
   /** Más de un producto se parece por igual: las resuelve una persona. */
   ambiguas: RenglonDelInforme[];
   /** No se parecen a nada del catálogo. */
   sinCoincidencia: RenglonDelInforme[];
   /** Cuántas se escribieron. Cero cuando se pide sólo el informe. */
   aplicadas: number;
+}
+
+/** Las dos juntas: es lo que se aplica. */
+export function segurasDe(informe: InformeDeBackfill): RenglonDelInforme[] {
+  return [...informe.porCodigo, ...informe.porDescripcion];
 }
 
 /**
@@ -93,7 +104,7 @@ export async function backfillProductLinks(
     normalizedName: normalizeText(p.normalizedName),
     aliases: p.aliases,
   }));
-  const nombrePorId = new Map(productos.map((p) => [p.id, p.normalizedName]));
+  const porId = new Map(productos.map((p) => [p.id, p]));
 
   /*
    * Sólo comprobantes ya validados.
@@ -127,8 +138,8 @@ export async function backfillProductLinks(
   });
 
   const informe: InformeDeBackfill = {
-    seguras: [],
-    porCodigoDeProveedor: 0,
+    porCodigo: [],
+    porDescripcion: [],
     ambiguas: [],
     sinCoincidencia: [],
     aplicadas: 0,
@@ -144,24 +155,41 @@ export async function backfillProductLinks(
       candidatos,
     );
 
+    const elegido = resultado.productId ? porId.get(resultado.productId) : null;
+
     const fila: RenglonDelInforme = {
       documentItemId: renglon.id,
       documentId: renglon.document.id,
       documentNumber: renglon.document.fullNumber ?? 'sin número',
+      supplierId: renglon.document.supplierId,
       supplierName: renglon.document.supplier?.tradeName ?? null,
       description: renglon.description,
       supplierCode: renglon.supplierCode,
       productId: resultado.productId,
-      productName: resultado.productId ? (nombrePorId.get(resultado.productId) ?? null) : null,
+      productCode: elegido?.internalCode ?? null,
+      productName: elegido?.normalizedName ?? null,
       method: resultado.method,
       score: resultado.score,
       reason: resultado.reason,
+      sugerencias: (resultado.suggestions ?? [])
+        .map((sug) => {
+          const p = porId.get(sug.productId);
+          return p
+            ? {
+                productId: p.id,
+                productCode: p.internalCode,
+                productName: p.normalizedName,
+                score: sug.score,
+              }
+            : null;
+        })
+        .filter((s): s is NonNullable<typeof s> => s !== null),
     };
 
     if (resultado.productId) {
-      informe.seguras.push(fila);
-      if (resultado.method === 'SUPPLIER_CODE') informe.porCodigoDeProveedor += 1;
-    } else if ((resultado.suggestions?.length ?? 0) > 0) {
+      if (resultado.method === 'SUPPLIER_CODE') informe.porCodigo.push(fila);
+      else informe.porDescripcion.push(fila);
+    } else if ((fila.sugerencias?.length ?? 0) > 0) {
       // Se parece a algo, pero no lo suficiente o no de forma única.
       informe.ambiguas.push(fila);
     } else {
@@ -169,9 +197,13 @@ export async function backfillProductLinks(
     }
   }
 
-  if (!opciones.aplicar || informe.seguras.length === 0) return informe;
+  const seguras = segurasDe(informe);
+  if (!opciones.aplicar || seguras.length === 0) return informe;
 
-  for (const fila of informe.seguras) {
+  /* Qué se le puso a cada renglón: va al asiento de auditoría. */
+  const aplicadas: { renglon: string; comprobante: string; plu: string; metodo: string }[] = [];
+
+  for (const fila of seguras) {
     const renglon = renglones.find((r) => r.id === fila.documentItemId)!;
     const productId = fila.productId!;
 
@@ -196,6 +228,12 @@ export async function backfillProductLinks(
     });
 
     informe.aplicadas += 1;
+    aplicadas.push({
+      renglon: fila.documentItemId,
+      comprobante: fila.documentNumber,
+      plu: fila.productCode ?? fila.productId!,
+      metodo: fila.method,
+    });
   }
 
   await recordAudit({
@@ -205,11 +243,134 @@ export async function backfillProductLinks(
     entityId: opciones.supplierId ?? 'todos',
     after: {
       aplicadas: informe.aplicadas,
-      porCodigoDeProveedor: informe.porCodigoDeProveedor,
+      porCodigo: informe.porCodigo.length,
+      porDescripcion: informe.porDescripcion.length,
       ambiguas: informe.ambiguas.length,
       sinCoincidencia: informe.sinCoincidencia.length,
+      /*
+       * Qué producto se le puso a cada renglón.
+       *
+       * Sin este detalle el asiento diría "se aplicaron 47" y no habría forma de
+       * revisar ni de revertir una asignación concreta sin volver a correr el
+       * análisis, que para entonces ya daría otra cosa.
+       */
+      renglones: aplicadas,
+      /* Y cuáles quedaron para que las resuelva una persona. */
+      pendientes: informe.ambiguas.map((a) => ({
+        renglon: a.documentItemId,
+        comprobante: a.documentNumber,
+        descripcion: a.description,
+        codigo: a.supplierCode,
+      })),
     },
   });
 
   return informe;
+}
+
+/**
+ * Resuelve a mano un renglón histórico que el reconocimiento dejó dudoso.
+ *
+ * Es la salida de las ambiguas: el que mira la factura elige el PLU, y al
+ * confirmarlo la asociación queda escrita en el renglón y en su movimiento.
+ *
+ * Y, si el renglón traía un código de proveedor, **queda aprendida la relación
+ * proveedor + código → producto**. Es lo que hace que este trabajo se haga una
+ * sola vez: la próxima factura que traiga ese mismo código se vincula sola, y
+ * las compras históricas que lo compartan las levanta el análisis siguiente sin
+ * volver a preguntar.
+ */
+export async function asociarRenglonHistorico(
+  user: AuthUser,
+  documentItemId: string,
+  productId: string,
+  opciones: { aprenderCodigo?: boolean } = {},
+): Promise<void> {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede reasignar productos.');
+  }
+
+  const renglon = await prisma.documentItem.findUnique({
+    where: { id: documentItemId },
+    include: {
+      document: { select: { supplierId: true, fullNumber: true, status: true } },
+    },
+  });
+  if (!renglon) throw new NotFoundError('No encontramos ese renglón.');
+  if (renglon.productId) {
+    throw new ConflictError('Ese renglón ya está asociado a un producto.');
+  }
+
+  const producto = await prisma.product.findUnique({ where: { id: productId } });
+  if (!producto) throw new NotFoundError('No encontramos ese producto.');
+
+  const codigo = renglon.supplierCode?.trim() || null;
+  const supplierId = renglon.document.supplierId;
+
+  /*
+   * Si el código ya está tomado por otro producto, no se aprende nada.
+   *
+   * El renglón se asocia igual —el que mira la factura sabe qué compró— pero el
+   * código no se toca: dárselo a este producto se lo sacaría al otro, y eso
+   * cambiaría en silencio la clasificación de todas las compras que dependen de
+   * él. Ese conflicto se resuelve en la ficha del producto, a la vista.
+   */
+  let aprendido = false;
+  if (opciones.aprenderCodigo && codigo && supplierId) {
+    const tomado = await prisma.productAlias.findFirst({
+      where: { supplierId, supplierCode: codigo },
+    });
+    if (!tomado) {
+      const sinCodigo = await prisma.productAlias.findFirst({
+        where: { productId, supplierId, supplierCode: null },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (sinCodigo) {
+        await prisma.productAlias.update({
+          where: { id: sinCodigo.id },
+          data: { supplierCode: codigo, origin: 'MANUAL' },
+        });
+      } else {
+        await prisma.productAlias.create({
+          data: {
+            productId,
+            supplierId,
+            supplierCode: codigo,
+            alias: renglon.description,
+            normalized: normalizeText(renglon.description),
+            origin: 'MANUAL',
+          },
+        });
+      }
+      aprendido = true;
+    }
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.documentItem.update({
+      where: { id: documentItemId },
+      data: { productId, matchMethod: 'MANUAL' },
+    });
+    // Se actualiza el movimiento que ya existe: crear otro duplicaría la compra.
+    await tx.purchaseMovement.updateMany({
+      where: { documentItemId },
+      data: { productId },
+    });
+  });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_BACKFILL,
+    entity: 'DocumentItem',
+    entityId: documentItemId,
+    after: {
+      comprobante: renglon.document.fullNumber,
+      descripcion: renglon.description,
+      codigoDeProveedor: codigo,
+      plu: producto.internalCode,
+      producto: producto.normalizedName,
+      codigoAprendido: aprendido,
+      resueltoAMano: true,
+    },
+  });
 }
