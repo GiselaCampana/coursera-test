@@ -5,7 +5,17 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { branchScopeFilter, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { money, toDecimal } from '@/lib/money';
 import { arToday, parseArDate, toISODate } from '@/lib/datetime';
-import { computePaymentStatus, remainingAmount } from '@/lib/domain/payments';
+import {
+  computePaymentStatus,
+  describeTerm,
+  remainingAmount,
+  type PaymentStatus,
+  type TermType,
+} from '@/lib/domain/payments';
+import { Decimal } from '@/lib/money';
+
+/** Cero, para ir sumando importes del calendario. */
+const ZERO_PAGOS = new Decimal(0);
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 
 /**
@@ -323,4 +333,248 @@ export async function siguienteFacturaDe(
     orderBy: { issueDate: 'asc' },
     select: { id: true, fullNumber: true, issueDate: true },
   });
+}
+
+// ---------------------------------------------------------------------------
+// Agenda vista como calendario
+// ---------------------------------------------------------------------------
+
+export interface FiltrosDeAgenda {
+  supplierId?: string;
+  branchId?: string;
+  status?: string;
+  paymentMethod?: string;
+}
+
+export interface PagoDelCalendario {
+  scheduleId: string;
+  documentId: string;
+  documentNumber: string;
+  supplierName: string | null;
+  branchName: string;
+  /** Lo que falta pagar. Un pago parcial sigue en la agenda por el saldo. */
+  saldo: string;
+  plannedAmount: string;
+  paidAmount: string;
+  status: PaymentStatus;
+  paymentMethod: string;
+  condicion: string;
+  /** ¿La fecha es todavía una estimación? Sólo con "factura contra factura". */
+  provisoria: boolean;
+}
+
+export interface DiaDelCalendario {
+  /** "YYYY-MM-DD". */
+  fecha: string;
+  /** Suma de los saldos pendientes de ese día. */
+  aPagar: string;
+  /** Suma de lo ya pagado de los comprobantes que vencen ese día. */
+  pagado: string;
+  cantidad: number;
+  /** El estado más urgente del día, para poder marcarlo de un vistazo. */
+  estado: PaymentStatus | null;
+  hayProvisorias: boolean;
+  pagos: PagoDelCalendario[];
+}
+
+export interface CalendarioDePagos {
+  /** Mes que se está mirando, "YYYY-MM". */
+  mes: string;
+  dias: DiaDelCalendario[];
+  totales: {
+    previsto: string;
+    pagado: string;
+    pendiente: string;
+    vencido: string;
+    comprobantes: number;
+  };
+}
+
+/**
+ * La agenda de pagos de un mes, agrupada por día.
+ *
+ * Es la misma información que la lista, mirada de otra forma: los mismos
+ * comprobantes, los mismos importes y los mismos estados. Que salgan de una
+ * sola consulta y de las mismas funciones del dominio es lo que hace que las
+ * dos vistas no puedan discrepar; si el calendario tuviera su propia cuenta de
+ * lo pendiente, tarde o temprano diría algo distinto que la lista y no habría
+ * forma de saber cuál de las dos tiene razón.
+ *
+ * Los importes son **saldos**: un pago parcial sigue en la agenda por lo que
+ * falta, no por lo que se facturó.
+ */
+export async function getPaymentCalendar(
+  user: AuthUser,
+  mes: string,
+  filtros: FiltrosDeAgenda = {},
+): Promise<CalendarioDePagos> {
+  if (!hasPermission(user, PERMISSIONS.PAGOS_VER)) {
+    throw new ForbiddenError('Tu usuario no puede ver la agenda de pagos.');
+  }
+  await refreshPaymentStatuses();
+
+  const [anio, mesNumero] = mes.split('-').map(Number);
+  if (!anio || !mesNumero || mesNumero < 1 || mesNumero > 12) {
+    throw new ValidationError('El mes tiene que venir como "AAAA-MM".');
+  }
+  const desde = new Date(Date.UTC(anio, mesNumero - 1, 1));
+  const hasta = new Date(Date.UTC(anio, mesNumero, 1));
+
+  const schedules = await prisma.paymentSchedule.findMany({
+    where: {
+      dueDate: { gte: desde, lt: hasta },
+      ...(filtros.status ? { status: filtros.status as PaymentStatus } : {}),
+      ...(filtros.paymentMethod ? { plannedPaymentMethod: filtros.paymentMethod } : {}),
+      document: {
+        ...branchScopeFilter(user),
+        status: 'VALIDADO',
+        ...(filtros.supplierId ? { supplierId: filtros.supplierId } : {}),
+        ...(filtros.branchId ? { branchId: filtros.branchId } : {}),
+      },
+    },
+    include: {
+      document: {
+        select: {
+          id: true,
+          fullNumber: true,
+          appliedTermType: true,
+          appliedTermDays: true,
+          supplier: { select: { tradeName: true } },
+          branch: { select: { name: true } },
+        },
+      },
+    },
+    orderBy: [{ dueDate: 'asc' }],
+  });
+
+  const porDia = new Map<string, DiaDelCalendario>();
+  let previsto = ZERO_PAGOS;
+  let pagado = ZERO_PAGOS;
+  let vencido = ZERO_PAGOS;
+
+  for (const s of schedules) {
+    const fecha = toISODate(s.dueDate);
+    const saldo = remainingAmount({
+      plannedAmount: s.plannedAmount.toString(),
+      paidAmount: s.paidAmount.toString(),
+    });
+
+    const condicion = s.document.appliedTermType
+      ? describeTerm({
+          termType: s.document.appliedTermType as TermType,
+          days: s.document.appliedTermDays,
+        })
+      : 'Sin condición';
+
+    const pago: PagoDelCalendario = {
+      scheduleId: s.id,
+      documentId: s.document.id,
+      documentNumber: s.document.fullNumber ?? 'sin número',
+      supplierName: s.document.supplier?.tradeName ?? null,
+      branchName: s.document.branch.name,
+      saldo: saldo.toFixed(2),
+      plannedAmount: s.plannedAmount.toFixed(2),
+      paidAmount: s.paidAmount.toFixed(2),
+      status: s.status as PaymentStatus,
+      paymentMethod: s.plannedPaymentMethod,
+      condicion,
+      provisoria: s.dueDateProvisional,
+    };
+
+    const dia = porDia.get(fecha) ?? {
+      fecha,
+      aPagar: '0.00',
+      pagado: '0.00',
+      cantidad: 0,
+      estado: null,
+      hayProvisorias: false,
+      pagos: [],
+    };
+    dia.pagos.push(pago);
+    dia.cantidad += 1;
+    dia.aPagar = toDecimal(dia.aPagar).plus(saldo).toFixed(2);
+    dia.pagado = toDecimal(dia.pagado).plus(s.paidAmount.toString()).toFixed(2);
+    dia.hayProvisorias = dia.hayProvisorias || s.dueDateProvisional;
+    dia.estado = masUrgente(dia.estado, s.status as PaymentStatus);
+    porDia.set(fecha, dia);
+
+    previsto = previsto.plus(s.plannedAmount.toString());
+    pagado = pagado.plus(s.paidAmount.toString());
+    if (s.status === 'VENCIDO') vencido = vencido.plus(saldo);
+  }
+
+  return {
+    mes,
+    dias: [...porDia.values()].sort((a, b) => a.fecha.localeCompare(b.fecha)),
+    totales: {
+      previsto: previsto.toFixed(2),
+      pagado: pagado.toFixed(2),
+      // Lo pendiente es lo previsto menos lo pagado, no una suma aparte: así no
+      // puede quedar una tercera cuenta que no cierre con las otras dos.
+      pendiente: previsto.minus(pagado).toFixed(2),
+      vencido: vencido.toFixed(2),
+      comprobantes: schedules.length,
+    },
+  };
+}
+
+/**
+ * Los pagos de los próximos días, para la operación del día a día.
+ *
+ * Es la misma consulta del calendario mirada como agenda corta: quien abre la
+ * aplicación a la mañana quiere saber qué hay que pagar esta semana, no navegar
+ * un mes. Se incluye lo vencido porque sigue habiendo que pagarlo.
+ */
+export async function getProximosPagos(
+  user: AuthUser,
+  dias = 7,
+  filtros: FiltrosDeAgenda = {},
+): Promise<DiaDelCalendario[]> {
+  if (!hasPermission(user, PERMISSIONS.PAGOS_VER)) {
+    throw new ForbiddenError('Tu usuario no puede ver la agenda de pagos.');
+  }
+  const hoy = arToday();
+  const hasta = new Date(hoy.getTime() + dias * 86_400_000);
+
+  /*
+   * Se piden los dos meses que puede tocar la ventana y se filtra después.
+   *
+   * Una semana que empieza el 28 termina en el mes siguiente, y pedir "el mes
+   * actual" perdería la mitad. Reutilizar el calendario mensual —en vez de
+   * escribir otra consulta— es lo que garantiza que las dos vistas cuenten lo
+   * mismo.
+   */
+  const meses = new Set([mesDe(hoy), mesDe(hasta)]);
+  const dias_: DiaDelCalendario[] = [];
+  for (const mes of meses) {
+    const calendario = await getPaymentCalendar(user, mes, filtros);
+    dias_.push(...calendario.dias);
+  }
+
+  const desdeISO = toISODate(hoy);
+  const hastaISO = toISODate(hasta);
+  return dias_
+    .filter((d) => d.fecha <= hastaISO && (d.fecha >= desdeISO || tieneDeuda(d)))
+    .sort((a, b) => a.fecha.localeCompare(b.fecha));
+}
+
+/** Un día pasado sigue importando si quedó algo sin pagar. */
+function tieneDeuda(dia: DiaDelCalendario): boolean {
+  return toDecimal(dia.aPagar).gt(0);
+}
+
+function mesDe(fecha: Date): string {
+  return toISODate(fecha).slice(0, 7);
+}
+
+/**
+ * Cuál de dos estados manda para pintar el día.
+ *
+ * Un día con un pago vencido y tres agendados es un día vencido: lo urgente no
+ * se diluye porque haya compañía.
+ */
+function masUrgente(a: PaymentStatus | null, b: PaymentStatus): PaymentStatus {
+  const orden: PaymentStatus[] = ['VENCIDO', 'VENCE_HOY', 'AGENDADO', 'PAGADO', 'CANCELADO'];
+  if (!a) return b;
+  return orden.indexOf(a) <= orden.indexOf(b) ? a : b;
 }

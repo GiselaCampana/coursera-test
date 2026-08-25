@@ -138,3 +138,105 @@ test.describe('precios y compras', () => {
     await sinScrollHorizontal(page);
   });
 });
+
+test.describe('el calendario de pagos', () => {
+  /*
+   * Cada prueba entra con su usuario: no hay beforeEach común porque una de
+   * ellas necesita entrar como operador, y con una sesión de administrador ya
+   * abierta el formulario de ingreso no está.
+   */
+
+  test('se alterna entre lista, calendario y próximos siete días', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/pagos');
+
+    // La lista sigue siendo lo primero que se ve: el calendario no la reemplaza.
+    await expect(page.getByRole('link', { name: 'Lista' })).toHaveAttribute('aria-current', 'page');
+
+    await page.getByRole('link', { name: 'Calendario' }).click();
+    await expect(page.getByText('Total previsto del mes')).toBeVisible();
+    await expect(page.getByRole('grid')).toBeVisible();
+
+    await page.getByRole('link', { name: 'Próximos 7 días' }).click();
+    await expect(page.getByText('Total previsto del mes')).toHaveCount(0);
+  });
+
+  test('el resumen del mes muestra las cuatro cifras', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/pagos?vista=calendario');
+
+    /*
+     * Se busca adentro del resumen y no en toda la página: "Pagado" es también
+     * una opción del filtro por estado, y pedirlo suelto encuentra las dos.
+     */
+    const resumen = page.locator('.resumen-mes');
+    for (const etiqueta of ['Total previsto del mes', 'Pagado', 'Pendiente', 'Vencido']) {
+      await expect(resumen.getByText(etiqueta, { exact: true })).toBeVisible();
+    }
+  });
+
+  test('se navega al mes anterior, al siguiente y de vuelta a hoy', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/pagos?vista=calendario&mes=2026-08');
+    await expect(page.getByText('agosto de 2026')).toBeVisible();
+
+    await page.getByRole('link', { name: '‹ Mes anterior' }).click();
+    await expect(page.getByText('julio de 2026')).toBeVisible();
+
+    await page.getByRole('link', { name: 'Mes siguiente ›' }).click();
+    await expect(page.getByText('agosto de 2026')).toBeVisible();
+
+    await page.getByRole('link', { name: 'Hoy', exact: true }).click();
+    await expect(page.getByRole('grid')).toBeVisible();
+  });
+
+  test('al tocar un día se abre el detalle, y los filtros se conservan al cambiar de mes', async ({
+    page,
+  }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/pagos?vista=calendario&mes=2026-08');
+
+    /*
+     * El detalle no vive dentro de la celda: en un teléfono no entra. La celda
+     * muestra importe, cuántos son y el estado, y al tocarla se abre el panel.
+     */
+    const conPagos = page.locator('.calendario-celda.con-pagos');
+    if ((await conPagos.count()) > 0) {
+      await conPagos.first().click();
+      const panel = page.locator('.panel-dia');
+      await expect(panel).toBeVisible();
+      await expect(panel.getByRole('link', { name: 'Abrir el comprobante' }).first()).toBeVisible();
+      await panel.getByRole('button', { name: 'Cerrar' }).click();
+      await expect(panel).toHaveCount(0);
+    }
+
+    // Y el filtro de proveedor sobrevive a la navegación entre meses.
+    await page.locator('#proveedor').selectOption({ label: 'Los Calvos' });
+    await page.getByRole('button', { name: 'Aplicar filtros' }).click();
+    await page.getByRole('link', { name: 'Mes siguiente ›' }).click();
+    await expect(page).toHaveURL(/proveedor=/);
+  });
+
+  test('un operador no ve el botón de confirmar el pago en el calendario', async ({ page }) => {
+    // El mismo permiso que rige la lista rige acá: es la misma agenda.
+    await ingresar(page, 'operador');
+    await page.goto('/pagos?vista=calendario&mes=2026-08');
+
+    const conPagos = page.locator('.calendario-celda.con-pagos');
+    if ((await conPagos.count()) > 0) {
+      await conPagos.first().click();
+      await expect(page.locator('.panel-dia')).toBeVisible();
+      await expect(page.getByRole('button', { name: 'Registrar el pago' })).toHaveCount(0);
+    }
+  });
+
+  test('el calendario entra en la pantalla del teléfono sin desbordarse', async ({
+    page,
+  }, testInfo) => {
+    soloEnIphone(test, testInfo.project.name);
+    await ingresar(page, 'admin');
+    await page.goto('/pagos?vista=calendario&mes=2026-08');
+    await expect(page.getByRole('grid')).toBeVisible();
+    await sinScrollHorizontal(page);
+  });
+});

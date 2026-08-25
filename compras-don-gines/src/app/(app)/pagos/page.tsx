@@ -3,7 +3,16 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
-import { listPayments } from '@/lib/services/payments';
+import {
+  getPaymentCalendar,
+  getProximosPagos,
+  listPayments,
+  type FiltrosDeAgenda,
+} from '@/lib/services/payments';
+import { prisma } from '@/lib/db';
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, PAYMENT_STATUS_LABEL } from '@/lib/domain/payments';
+import { Calendario } from './Calendario';
+import { Proximos } from './Proximos';
 import { arTodayISO, formatDateAr } from '@/lib/datetime';
 import { formatARS, toDecimal } from '@/lib/money';
 import { EtiquetaPago } from '@/components/Estado';
@@ -19,18 +28,145 @@ const GRUPOS = [
   { clave: 'pagados', titulo: 'Pagados' },
 ] as const;
 
+/** Las tres formas de mirar la misma agenda. */
+const VISTAS = [
+  { clave: 'lista', titulo: 'Lista' },
+  { clave: 'calendario', titulo: 'Calendario' },
+  { clave: 'proximos', titulo: 'Próximos 7 días' },
+] as const;
+
+type Vista = (typeof VISTAS)[number]['clave'];
+
 export default async function PaginaPagos({
   searchParams,
 }: {
-  searchParams: Promise<{ grupo?: string; confirmado?: string }>;
+  searchParams: Promise<{
+    grupo?: string;
+    confirmado?: string;
+    vista?: string;
+    mes?: string;
+    proveedor?: string;
+    sucursal?: string;
+    estado?: string;
+    forma?: string;
+  }>;
 }) {
   const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PAGOS_VER)) redirect('/');
 
-  const { grupo, confirmado } = await searchParams;
-  const agenda = await listPayments(user);
+  const parametros = await searchParams;
+  const { grupo, confirmado } = parametros;
   const puedeConfirmar = hasPermission(user, PERMISSIONS.PAGOS_CONFIRMAR);
   const hoy = arTodayISO();
+
+  const vista = (VISTAS.find((v) => v.clave === parametros.vista)?.clave ?? 'lista') as Vista;
+  const mes = /^\d{4}-\d{2}$/.test(parametros.mes ?? '') ? parametros.mes! : hoy.slice(0, 7);
+
+  const filtros: FiltrosDeAgenda = {
+    supplierId: parametros.proveedor || undefined,
+    branchId: parametros.sucursal || undefined,
+    status: parametros.estado || undefined,
+    paymentMethod: parametros.forma || undefined,
+  };
+  /* Los filtros viajan en la URL para que cambiar de mes no los pierda. */
+  const filtrosEnLaUrl = Object.entries({
+    proveedor: filtros.supplierId,
+    sucursal: filtros.branchId,
+    estado: filtros.status,
+    forma: filtros.paymentMethod,
+  })
+    .filter(([, v]) => v)
+    .map(([k, v]) => `&${k}=${encodeURIComponent(v!)}`)
+    .join('');
+
+  if (vista !== 'lista') {
+    const [proveedores, sucursales] = await Promise.all([
+      prisma.supplier.findMany({ orderBy: { tradeName: 'asc' }, select: { id: true, tradeName: true } }),
+      prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
+    ]);
+
+    return (
+      <>
+        <h1>Pagos</h1>
+        <Pestanas vista={vista} mes={mes} filtros={filtrosEnLaUrl} />
+
+        <form className="card card-compacta" method="get">
+          <input type="hidden" name="vista" value={vista} />
+          <input type="hidden" name="mes" value={mes} />
+          <div className="fila fila-2">
+            <div className="campo">
+              <label htmlFor="proveedor">Proveedor</label>
+              <select id="proveedor" name="proveedor" defaultValue={filtros.supplierId ?? ''}>
+                <option value="">Todos</option>
+                {proveedores.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.tradeName}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="campo">
+              <label htmlFor="sucursal">Sucursal</label>
+              <select id="sucursal" name="sucursal" defaultValue={filtros.branchId ?? ''}>
+                <option value="">Todas</option>
+                {sucursales.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="fila fila-2">
+            <div className="campo">
+              <label htmlFor="estado">Estado</label>
+              <select id="estado" name="estado" defaultValue={filtros.status ?? ''}>
+                <option value="">Todos</option>
+                {Object.entries(PAYMENT_STATUS_LABEL).map(([clave, texto]) => (
+                  <option key={clave} value={clave}>
+                    {texto}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="campo">
+              <label htmlFor="forma">Forma de pago</label>
+              <select id="forma" name="forma" defaultValue={filtros.paymentMethod ?? ''}>
+                <option value="">Todas</option>
+                {PAYMENT_METHODS.map((m) => (
+                  <option key={m} value={m}>
+                    {PAYMENT_METHOD_LABEL[m]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <div className="acciones">
+            <button type="submit" className="boton boton-secundario">
+              Aplicar filtros
+            </button>
+          </div>
+        </form>
+
+        {vista === 'calendario' ? (
+          <Calendario
+            calendario={await getPaymentCalendar(user, mes, filtros)}
+            hoy={hoy}
+            puedeConfirmar={puedeConfirmar}
+            filtros={filtrosEnLaUrl}
+          />
+        ) : (
+          <Proximos
+            dias={await getProximosPagos(user, 7, filtros)}
+            hoy={hoy}
+            puedeConfirmar={puedeConfirmar}
+          />
+        )}
+      </>
+    );
+  }
+
+  const agenda = await listPayments(user);
 
   const activo = (GRUPOS.find((g) => g.clave === grupo)?.clave ?? 'venceHoy') as
     | 'venceHoy'
@@ -48,6 +184,7 @@ export default async function PaginaPagos({
   return (
     <>
       <h1>Pagos</h1>
+      <Pestanas vista={vista} mes={mes} filtros={filtrosEnLaUrl} />
 
       {confirmado ? (
         <p className="mensaje mensaje-ok" role="status">
@@ -153,5 +290,23 @@ export default async function PaginaPagos({
         </>
       )}
     </>
+  );
+}
+
+/** Alternar entre las tres vistas de la misma agenda. */
+function Pestanas({ vista, mes, filtros }: { vista: Vista; mes: string; filtros: string }) {
+  return (
+    <div className="pestanas">
+      {VISTAS.map((v) => (
+        <Link
+          key={v.clave}
+          href={`/pagos?vista=${v.clave}${v.clave === 'calendario' ? `&mes=${mes}` : ''}${filtros}`}
+          className="pestana"
+          aria-current={vista === v.clave ? 'page' : undefined}
+        >
+          {v.titulo}
+        </Link>
+      ))}
+    </div>
   );
 }

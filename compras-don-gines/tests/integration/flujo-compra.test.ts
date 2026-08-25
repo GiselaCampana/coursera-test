@@ -12,12 +12,18 @@ import {
 } from '@/lib/services/documents';
 import { analizarSinGuardar, registrarLectura } from '@/lib/services/lectura';
 import { versionEnEjecucion } from '@/lib/version';
-import { confirmPayment, reschedulePayment } from '@/lib/services/payments';
+import {
+  confirmPayment,
+  getPaymentCalendar,
+  getProximosPagos,
+  listPayments,
+  reschedulePayment,
+} from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
 import { backfillProductLinks } from '@/lib/services/backfill-productos';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
-import { toISODate, dateOnlyFromISO } from '@/lib/datetime';
+import { arToday, toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
 import {
   SAFARI_ARTICULOS,
@@ -1929,5 +1935,268 @@ describe('el reporte por producto encuentra lo que se compró', () => {
       expect(despues[i].totalCost.toFixed(4)).toBe(antes[i].totalCost.toFixed(4));
       expect(despues[i].unitCost.toFixed(4)).toBe(antes[i].unitCost.toFixed(4));
     }
+  });
+});
+
+describe('la agenda de pagos vista como calendario', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * El calendario y la lista son la misma agenda mirada de dos formas. Salen de
+   * la misma consulta a propósito: si el calendario tuviera su propia cuenta de
+   * lo pendiente, tarde o temprano diría algo distinto que la lista y no habría
+   * forma de saber cuál de las dos tiene razón.
+   */
+
+  /** Un comprobante validado con su pago agendado para una fecha concreta. */
+  async function comprobanteQueVence(
+    numero: string,
+    vencimiento: string,
+    total = '100000.00',
+  ): Promise<string> {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await prisma.document.update({
+      where: { id: documento.id },
+      data: {
+        supplierId: escenario.proveedorId,
+        docType: 'FACTURA',
+        letter: 'A',
+        pointOfSale: '0010',
+        number: numero,
+        fullNumber: `0010-${numero}`,
+        issueDate: dateOnlyFromISO('2026-08-14'),
+        netTotal: total,
+        total,
+        status: 'VALIDADO',
+        dedupeKey: 'ACTIVE',
+        appliedTermType: 'DAYS',
+        appliedTermDays: 30,
+        validatedById: escenario.admin.id,
+        validatedAt: new Date(),
+      },
+    });
+    await prisma.paymentSchedule.create({
+      data: {
+        documentId: documento.id,
+        dueDate: dateOnlyFromISO(vencimiento),
+        plannedAmount: total,
+        plannedPaymentMethod: 'TRANSFERENCIA',
+        paidAmount: '0',
+        status: 'AGENDADO',
+      },
+    });
+    return documento.id;
+  }
+
+  it('agrupa varios pagos del mismo día y suma sus importes', async () => {
+    await comprobanteQueVence('00300001', '2026-11-10', '100000.00');
+    await comprobanteQueVence('00300002', '2026-11-10', '250000.00');
+    await comprobanteQueVence('00300003', '2026-11-25', '50000.00');
+
+    const calendario = await getPaymentCalendar(escenario.admin, '2026-11');
+
+    const diez = calendario.dias.find((d) => d.fecha === '2026-11-10')!;
+    expect(diez.cantidad).toBe(2);
+    expect(diez.aPagar).toBe('350000.00');
+    expect(diez.pagos).toHaveLength(2);
+
+    // Y los días sin pagos sencillamente no están: la grilla los dibuja vacíos.
+    expect(calendario.dias.map((d) => d.fecha)).toEqual(['2026-11-10', '2026-11-25']);
+  });
+
+  it('los totales del mes cierran entre sí', async () => {
+    await comprobanteQueVence('00300004', '2026-11-10', '100000.00');
+    await comprobanteQueVence('00300005', '2026-11-20', '300000.00');
+
+    const calendario = await getPaymentCalendar(escenario.admin, '2026-11');
+    expect(calendario.totales.previsto).toBe('400000.00');
+    expect(calendario.totales.pagado).toBe('0.00');
+    expect(calendario.totales.pendiente).toBe('400000.00');
+    expect(calendario.totales.comprobantes).toBe(2);
+  });
+
+  it('un pago parcial sigue en la agenda por el saldo, no por el total', async () => {
+    /*
+     * Es la diferencia entre "cuánto se facturó" y "cuánto falta". El calendario
+     * sirve para saber cuánta plata hay que tener ese día, así que muestra el
+     * saldo.
+     */
+    // En un mes ya pasado: un pago no se puede confirmar con fecha futura.
+    const documentId = await comprobanteQueVence('00300006', '2026-07-12', '100000.00');
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+    await confirmPayment(escenario.admin, {
+      scheduleId: agenda.id,
+      effectiveDate: '2026-07-12',
+      paymentMethod: 'TRANSFERENCIA',
+      amount: '40000.00',
+    });
+
+    const calendario = await getPaymentCalendar(escenario.admin, '2026-07');
+    const dia = calendario.dias.find((d) => d.fecha === '2026-07-12')!;
+
+    expect(dia.aPagar).toBe('60000.00');
+    expect(dia.pagos[0].plannedAmount).toBe('100000.00');
+    expect(dia.pagos[0].paidAmount).toBe('40000.00');
+    expect(dia.pagos[0].status).not.toBe('PAGADO');
+
+    // Y en los totales del mes, esos $40.000 ya están del lado de lo pagado.
+    expect(calendario.totales.pagado).toBe('40000.00');
+    expect(calendario.totales.pendiente).toBe('60000.00');
+  });
+
+  it('al pagar del todo, el importe pasa de pendiente a pagado sin duplicarse', async () => {
+    const documentId = await comprobanteQueVence('00300007', '2026-07-15', '80000.00');
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+
+    const antes = await getPaymentCalendar(escenario.admin, '2026-07');
+    expect(antes.totales.pendiente).toBe('80000.00');
+    expect(antes.totales.pagado).toBe('0.00');
+
+    await confirmPayment(escenario.admin, {
+      scheduleId: agenda.id,
+      effectiveDate: '2026-07-15',
+      paymentMethod: 'TRANSFERENCIA',
+    });
+
+    const despues = await getPaymentCalendar(escenario.admin, '2026-07');
+    expect(despues.totales.pagado).toBe('80000.00');
+    expect(despues.totales.pendiente).toBe('0.00');
+    // El previsto no cambió: pagar no agrega plata, la mueve de columna.
+    expect(despues.totales.previsto).toBe(antes.totales.previsto);
+    expect(despues.totales.comprobantes).toBe(1);
+    expect(despues.dias.find((d) => d.fecha === '2026-07-15')!.pagos).toHaveLength(1);
+  });
+
+  it('cambiar la fecha mueve el pago de mes y deja auditoría', async () => {
+    const documentId = await comprobanteQueVence('00300008', '2026-11-05', '90000.00');
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+
+    await reschedulePayment(escenario.admin, agenda.id, '2026-12-03', 'Lo pasamos a diciembre.');
+
+    const noviembre = await getPaymentCalendar(escenario.admin, '2026-11');
+    const diciembre = await getPaymentCalendar(escenario.admin, '2026-12');
+    expect(noviembre.dias).toHaveLength(0);
+    expect(diciembre.dias.find((d) => d.fecha === '2026-12-03')!.aPagar).toBe('90000.00');
+
+    const asiento = await prisma.auditLog.findFirst({
+      where: { entityId: agenda.id, action: 'pago.reprogramado' },
+    });
+    expect(asiento).not.toBeNull();
+  });
+
+  it('marca como provisorias las fechas de factura contra factura', async () => {
+    const documentId = await comprobanteQueVence('00300009', '2026-11-08', '70000.00');
+    await prisma.paymentSchedule.update({
+      where: { documentId },
+      data: { dueDateProvisional: true },
+    });
+    await prisma.document.update({
+      where: { id: documentId },
+      data: { appliedTermType: 'NEXT_INVOICE', appliedTermDays: 0 },
+    });
+
+    const calendario = await getPaymentCalendar(escenario.admin, '2026-11');
+    const dia = calendario.dias.find((d) => d.fecha === '2026-11-08')!;
+
+    expect(dia.hayProvisorias).toBe(true);
+    expect(dia.pagos[0].provisoria).toBe(true);
+    // Y la condición se nombra, para que se entienda por qué es provisoria.
+    expect(dia.pagos[0].condicion).toBe('Factura contra factura');
+  });
+
+  it('los filtros acotan igual que en la lista', async () => {
+    await comprobanteQueVence('00300010', '2026-11-10', '100000.00');
+
+    const conProveedor = await getPaymentCalendar(escenario.admin, '2026-11', {
+      supplierId: escenario.proveedorId,
+    });
+    expect(conProveedor.dias).toHaveLength(1);
+
+    const otroProveedor = await getPaymentCalendar(escenario.admin, '2026-11', {
+      supplierId: escenario.proveedorErrecaldeId,
+    });
+    expect(otroProveedor.dias).toHaveLength(0);
+
+    const otraSucursal = await getPaymentCalendar(escenario.admin, '2026-11', {
+      branchId: escenario.sucursales.pueyrredon,
+    });
+    expect(otraSucursal.dias).toHaveLength(0);
+
+    const otraForma = await getPaymentCalendar(escenario.admin, '2026-11', {
+      paymentMethod: 'CHEQUE',
+    });
+    expect(otraForma.dias).toHaveLength(0);
+  });
+
+  it('un operador sólo ve el calendario de su sucursal', async () => {
+    /*
+     * El mismo alcance por sucursal que en la lista: no es una vista nueva de
+     * datos nuevos, es la misma agenda.
+     */
+    await comprobanteQueVence('00300011', '2026-11-10', '100000.00');
+
+    const delAdmin = await getPaymentCalendar(escenario.admin, '2026-11');
+    const delOperadorDeDevoto = await getPaymentCalendar(escenario.operadorDevoto, '2026-11');
+    const delOperadorDeOtra = await getPaymentCalendar(escenario.operadorPueyrredon, '2026-11');
+
+    expect(delAdmin.dias).toHaveLength(1);
+    expect(delOperadorDeDevoto.dias).toHaveLength(1);
+    expect(delOperadorDeOtra.dias).toHaveLength(0);
+  });
+
+  it('sin permiso de ver pagos, no hay calendario', async () => {
+    const sinPermiso = { ...escenario.admin, permissions: [] as string[] };
+    await expect(
+      getPaymentCalendar(sinPermiso as typeof escenario.admin, '2026-11'),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it('el calendario y la lista dicen lo mismo', async () => {
+    /*
+     * La prueba que las ata. Los mismos comprobantes, los mismos importes: si
+     * alguna de las dos empieza a contar distinto, esto falla.
+     */
+    await comprobanteQueVence('00300012', '2026-11-10', '100000.00');
+    await comprobanteQueVence('00300013', '2026-11-20', '250000.00');
+
+    const calendario = await getPaymentCalendar(escenario.admin, '2026-11');
+    const lista = await listPayments(escenario.admin);
+
+    const deNoviembre = [...lista.proximos, ...lista.venceHoy, ...lista.vencidos].filter(
+      (s) => toISODate(s.dueDate).startsWith('2026-11'),
+    );
+    expect(calendario.totales.comprobantes).toBe(deNoviembre.length);
+
+    const sumaDeLaLista = deNoviembre.reduce(
+      (t, s) => t + Number(s.plannedAmount.toString()),
+      0,
+    );
+    expect(Number(calendario.totales.previsto)).toBeCloseTo(sumaDeLaLista, 2);
+  });
+
+  it('los próximos siete días incluyen lo vencido', async () => {
+    /*
+     * Una deuda no deja de existir porque la fecha haya pasado: esconderla sería
+     * perder de vista justamente lo que más importa.
+     */
+    const hoy = arToday();
+    const ayer = toISODate(new Date(hoy.getTime() - 86_400_000));
+    const enTresDias = toISODate(new Date(hoy.getTime() + 3 * 86_400_000));
+    const enVeinteDias = toISODate(new Date(hoy.getTime() + 20 * 86_400_000));
+
+    await comprobanteQueVence('00300014', ayer, '10000.00');
+    await comprobanteQueVence('00300015', enTresDias, '20000.00');
+    await comprobanteQueVence('00300016', enVeinteDias, '30000.00');
+
+    const proximos = await getProximosPagos(escenario.admin, 7);
+    const fechas = proximos.map((d) => d.fecha);
+
+    expect(fechas).toContain(ayer);
+    expect(fechas).toContain(enTresDias);
+    // Lo de dentro de veinte días es del mes que viene: no es "de esta semana".
+    expect(fechas).not.toContain(enVeinteDias);
   });
 });

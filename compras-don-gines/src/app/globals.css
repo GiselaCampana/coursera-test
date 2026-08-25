@@ -1293,3 +1293,145 @@ tbody tr:last-child td {
   max-height: 60vh;
   overflow-y: auto;
 }
+
+/* ---------------------------------------------------------------------------
+   Calendario de pagos
+
+   La grilla es de siete columnas fijas y las celdas son cuadradas: un mes tiene
+   que entrar entero en la pantalla del teléfono sin desplazarse a lo ancho,
+   porque el sentido de la vista es ver el mes de un vistazo. Por eso en la
+   celda va lo mínimo —número, importe y cuántos son— y el detalle se abre
+   abajo.
+
+   El estado nunca se distingue sólo por color: cada celda lleva un signo y el
+   panel del día escribe el estado con todas las letras. Un depósito a la
+   mañana, con el teléfono al sol, es donde esto se usa.
+--------------------------------------------------------------------------- */
+
+.calendario-barra {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.calendario-titulo {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  color: var(--verde);
+  text-transform: capitalize;
+}
+
+.calendario-grilla {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+.calendario-encabezado {
+  text-align: center;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--tinta-suave);
+  padding: 4px 0;
+}
+
+.calendario-celda {
+  min-height: 62px;
+  border: 1px solid var(--borde);
+  border-radius: var(--radio-chico);
+  background: var(--papel);
+  padding: 4px 3px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font: inherit;
+  color: inherit;
+  text-align: center;
+  overflow: hidden;
+}
+
+.calendario-celda.vacia {
+  border-color: transparent;
+  background: transparent;
+}
+
+.calendario-celda.con-pagos {
+  cursor: pointer;
+}
+
+.calendario-celda.es-hoy {
+  border-color: var(--verde);
+  border-width: 2px;
+}
+
+.calendario-celda.abierta {
+  box-shadow: inset 0 0 0 2px var(--verde-claro);
+}
+
+.calendario-numero {
+  font-size: 0.75rem;
+  color: var(--tinta-suave);
+  line-height: 1.1;
+}
+
+.calendario-importe {
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.15;
+  /* Un importe largo no puede empujar la grilla: se parte, no desborda. */
+  overflow-wrap: anywhere;
+}
+
+.calendario-marca {
+  font-size: 0.65rem;
+  color: var(--tinta-media);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Los cuatro estados, con fondo y con signo. */
+.dia-vencido {
+  background: var(--error-fondo);
+  border-color: var(--error-borde);
+}
+.dia-hoy {
+  background: var(--aviso-fondo);
+  border-color: var(--aviso-borde);
+}
+.dia-agendado {
+  background: var(--crema-hundida);
+}
+.dia-pagado {
+  background: var(--ok-fondo);
+  border-color: var(--ok-borde);
+}
+.dia-cancelado {
+  background: var(--crema-hundida);
+  color: var(--tinta-suave);
+}
+
+.panel-dia {
+  border-left: 3px solid var(--verde-claro);
+}
+
+.resumen-mes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+}
+
+@media (min-width: 700px) {
+  .calendario-celda {
+    min-height: 88px;
+  }
+  .calendario-importe {
+    font-size: 0.72rem;
+  }
+  .resumen-mes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
