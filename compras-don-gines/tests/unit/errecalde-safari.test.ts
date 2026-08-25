@@ -246,3 +246,109 @@ describe('cuándo se puede ahorrar una tanda de OCR', () => {
     expect(alcanzaConUnaDivision(23, 0)).toBe(false);
   });
 });
+
+describe('cuándo NO se asigna el pie por posición', () => {
+  /*
+   * Suponer el orden impreso es una hipótesis, no una lectura, y sólo se acepta
+   * si pasa las cinco condiciones. Cada caso de acá rompe una sola, para que se
+   * vea qué está sosteniendo qué. En todos, lo correcto es dejar el pie sin leer
+   * y mandar el comprobante a revisión: nunca acomodar los importes hasta que la
+   * cuenta dé.
+   */
+  const CABECERA = 'DISTRIBUCION ERRECALDE S.A. CUIT 30-71780890-4\nFactura-Remito A 00008-00002647';
+
+  const leerPie = (importes: string[], completo = CABECERA) =>
+    analizadorErrecalde.analizar({
+      completo: `${completo}\n${importes.join('\n')}`,
+      resumen: importes.join('\n'),
+      articulos: '',
+    });
+
+  const sinLeer = (analisis: ReturnType<typeof analizadorErrecalde.analizar>) => {
+    expect(analisis.summary?.netTotal).toBeNull();
+    expect(analisis.summary?.total).toBeNull();
+    expect(
+      analisis.observaciones.some((o) => /releer los totales/i.test(o)),
+      `observaciones: ${analisis.observaciones.join(' | ')}`,
+    ).toBe(true);
+  };
+
+  it('con menos importes de los que tiene el pie de este proveedor', () => {
+    // Tres números sueltos pueden ser cualquier cosa del papel. El pie de
+    // Errecalde tiene cinco renglones, y cuatro sólo si el recorte se comió el
+    // neto, que es el de más arriba.
+    sinLeer(leerPie(['$804.398,16', '$114.914,02', '$4.816.812,73']));
+  });
+
+  it('con más importes de los que tiene el pie', () => {
+    sinLeer(
+      leerPie([
+        '$1.000,00',
+        '$3.830.467,37',
+        '$804.398,16',
+        '$114.914,02',
+        '$67.033,18',
+        '$4.816.812,73',
+      ]),
+    );
+  });
+
+  it('cuando el último importe no es el mayor: entonces no es el total', () => {
+    // El total es la suma de los otros cuatro, así que tiene que ser el mayor.
+    // Si no lo es, el bloque no está en el orden que se supuso.
+    sinLeer(
+      leerPie(['$3.830.467,37', '$804.398,16', '$114.914,02', '$67.033,18', '$100.000,00']),
+    );
+  });
+
+  it('cuando las percepciones son más grandes que el IVA', () => {
+    // En este formato las percepciones son chicas al lado del IVA. Un bloque
+    // donde eso se da vuelta no tiene la forma de este pie.
+    sinLeer(
+      leerPie(['$3.830.467,37', '$67.033,18', '$804.398,16', '$114.914,02', '$4.816.812,73']),
+    );
+  });
+
+  it('cuando los cinco no cierran entre sí', () => {
+    sinLeer(
+      leerPie(['$3.830.467,37', '$804.398,16', '$114.914,02', '$67.033,18', '$5.000.000,00']),
+    );
+  });
+
+  it('cuando cierran pero el IVA no es el 21 % del neto', () => {
+    /*
+     * Éste es el que muestra por qué la igualdad sola no alcanza. Los cinco
+     * números suman perfecto —2.000.000 + 400.000 + 100.000 + 50.000 =
+     * 2.550.000— pero 400.000 no es el 21 % de 2.000.000, así que el segundo no
+     * es el IVA y el orden supuesto es el equivocado. Sin este control, cualquier
+     * lista que cierre se acepta con las etiquetas cambiadas de lugar.
+     */
+    sinLeer(
+      leerPie(['$2.000.000,00', '$400.000,00', '$100.000,00', '$50.000,00', '$2.550.000,00']),
+    );
+  });
+});
+
+describe('la asignación por posición es sólo de Errecalde', () => {
+  it('el analizador genérico no completa un pie sin etiquetas', async () => {
+    /*
+     * "El primero es el neto y el último el total" vale para el pie de este
+     * proveedor porque sabemos cómo lo imprime. Aplicárselo a un comprobante
+     * cuyo formato no conocemos sería inventar con cara de dato: los mismos
+     * cinco números podrían estar en otro orden, o no ser un pie.
+     */
+    const { elegirAnalizador } = await import('@/lib/ocr/parsers');
+    const importes = ['$3.830.467,37', '$804.398,16', '$114.914,02', '$67.033,18', '$4.816.812,73'];
+    const textos = {
+      completo: `PROVEEDOR DESCONOCIDO S.R.L.\n${importes.join('\n')}`,
+      resumen: importes.join('\n'),
+      articulos: '',
+    };
+
+    const { analizador } = elegirAnalizador(textos);
+    expect(analizador.codigo).not.toBe('errecalde');
+
+    const analisis = analizador.analizar(textos);
+    expect(analisis.summary?.netTotal).toBeNull();
+  });
+});

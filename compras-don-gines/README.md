@@ -379,11 +379,30 @@ aparecieron tres fallas que la corrida de Chromium no ejercita nunca:
 
 1. **El pie sin etiquetas.** El recorte trajo los cuatro importes de abajo, cada uno en su
    línea y sin una palabra al lado, y el neto gravado quedó afuera; en la página completa
-   salió deformado ("63,830.46737" donde el papel dice $3.830.467,37). Ahora el neto se
-   deduce de los otros cuatro, **pero sólo se acepta si sus dígitos aparecen en alguna
-   cifra que el OCR haya leído**. Deducirlo y usarlo sin más sería hacer trampa: la
-   igualdad "neto + IVA + percepciones = total" se cumpliría por construcción y no
-   verificaría nada. Sin ese rastro, no se completa y el comprobante queda para releer.
+   salió deformado ("63,830.46737" donde el papel dice $3.830.467,37).
+
+   El orden del pie de este proveedor es fijo, así que los importes se pueden ubicar por
+   su posición. Pero eso es una **hipótesis, no una lectura**, y se acepta sólo si pasa
+   las cinco condiciones:
+
+   | | Condición |
+   |---|---|
+   | Cuántos son | Cinco importes, o cuatro si el recorte se comió el neto. Con tres, un pie no se distingue de tres números sueltos del papel |
+   | Qué forma tienen | El último es el mayor —es la suma de los otros—, el IVA es menor que el neto y las percepciones son menores que el IVA |
+   | Que cierren | `neto + IVA + percepciones = total` |
+   | Que el IVA sea IVA | El segundo tiene que ser el 21 % del primero. Sin esto, cualquier lista de cinco números que sume bien se acepta con las etiquetas cambiadas de lugar |
+   | Que lo deducido esté leído | Un valor que se dedujo —el neto— sólo vale si sus dígitos aparecen en alguna cifra que el OCR haya leído en la página |
+
+   La última es la que impide la trampa más fácil: el neto deducido cierra la cuenta *por
+   construcción*, porque sale de restarle al total el IVA y las percepciones, así que esa
+   igualdad no prueba nada por sí sola. Lo que lo vuelve un dato leído es el rastro en el
+   texto. Si falla cualquiera de las cinco, no se completa nada y el comprobante va a
+   revisión.
+
+   **Y todo esto vive dentro del analizador de Errecalde.** Las funciones que lo hacen no
+   se exportan, y no las usa el analizador genérico ni ningún otro proveedor: "el primero
+   es el neto y el último el total" vale porque sabemos cómo imprime *este* proveedor.
+   Aplicárselo a un formato que no conocemos sería inventar con cara de dato.
 
 2. **Dos lecturas del mismo renglón, y las dos cerrando.** Una pasada leyó SARDO BLOQUE
    como 475 kg a $13.295,25 con subtotal $6.315.243 —perdió la coma en los tres números a
@@ -493,7 +512,7 @@ en un asiento de auditoría propio, `comprobante.centavos_conciliados`.
 ## Pruebas
 
 ```bash
-npm test              # unitarias e integración (243)
+npm test              # unitarias e integración (250)
 npm run test:unit     # sólo unitarias
 npm run test:e2e      # end to end: prepara la base, compila y corre Playwright (72)
 npm run test:all      # todo

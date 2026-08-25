@@ -858,13 +858,20 @@ function analizarPie(
   // etiquetas de un lado y los importes del otro, cada uno en su propio bloque,
   // y entonces ninguna línea tiene etiqueta e importe juntos.
   //
-  // El orden impreso es fijo —neto, IVA, percepción de IVA, percepción de IIBB,
-  // total— así que se pueden asignar por posición. Pero asignarlos a ciegas
-  // sería adivinar: sólo se aceptan si la suma de los cuatro primeros da el
-  // quinto. Esa igualdad es la que vuelve verificable la asignación, y si no se
-  // cumple no se completa nada y el comprobante queda para releer.
+  // El orden impreso de este proveedor es fijo —neto, IVA, percepción de IVA,
+  // percepción de IIBB, total—, así que los importes se pueden ubicar por su
+  // posición. Es una regla que vale **para este formato y ningún otro**, y por
+  // eso vive acá adentro: `asignarPorPosicion` y `reconstruirPie` no se exportan
+  // y no las usa ni el analizador genérico ni ningún otro proveedor. Aplicar
+  // "el primero es el neto" a un comprobante cuyo pie no conocemos sería
+  // inventar con cara de dato.
+  //
+  // Y aun dentro de Errecalde, asignar por posición es una hipótesis, no una
+  // lectura. Se acepta sólo si pasa las cinco condiciones de
+  // `elPieEsDeErrecalde` + `asignarPorPosicion` + `reconstruirPie`. Si falla
+  // cualquiera, no se completa nada y el comprobante queda para revisión.
   const faltaTodo = !summary.netTotal && summary.ivaLines!.length === 0 && !summary.total;
-  if (faltaTodo && sueltos.length >= 3) {
+  if (faltaTodo && elPieEsDeErrecalde(sueltos)) {
     const cola = sueltos.slice(-5);
     const asignado = asignarPorPosicion(cola) ?? reconstruirPie(cola, textoCompleto);
     if (asignado) {
@@ -880,10 +887,17 @@ function analizarPie(
       summary.total = asignado.total.toString();
     } else {
       avisos.push(
-        'El pie se leyó sin etiquetas y los importes no cierran entre sí, así que no se ' +
-          'asignaron: hay que releer los totales.',
+        'El pie se leyó sin etiquetas y los importes no se pudieron verificar entre sí, así ' +
+          'que no se asignaron: hay que releer los totales.',
       );
     }
+  } else if (faltaTodo && sueltos.length > 0) {
+    // Había importes sueltos pero el bloque no tiene la forma del pie de este
+    // proveedor. Se dice, en vez de acomodarlos hasta que la cuenta dé.
+    avisos.push(
+      `Se leyeron ${sueltos.length} importes sueltos en el pie, pero no tienen la forma del ` +
+        'recuadro de totales de este proveedor, así que no se asignaron: hay que releer los totales.',
+    );
   }
 
   summary.ivaTotal = sumar(summary.ivaLines);
@@ -907,11 +921,65 @@ function analizarPie(
   return { summary, avisos };
 }
 
+/** La tasa de IVA de este proveedor, contra la que se contrasta el pie. */
+const TASA_IVA = new Decimal('0.21');
+
+/** ¿El IVA es coherente con el 21 % de ese neto? */
+function ivaCoherente(neto: Decimal, iva: Decimal): boolean {
+  const esperado = neto.times(TASA_IVA);
+  // El IVA impreso sale de redondear renglón por renglón, así que nunca es
+  // exactamente el 21 % del neto; un 2 % de holgura cubre esa diferencia sin
+  // llegar a aceptar un número que no sea el IVA.
+  return iva.minus(esperado).abs().lte(esperado.abs().times('0.02').plus(1));
+}
+
+/**
+ * ¿Este bloque de importes sueltos puede ser el pie de una factura de Errecalde?
+ *
+ * Es el filtro previo a suponer cualquier orden, y mira la forma del bloque
+ * antes que sus valores:
+ *
+ *  - **Cuántos son.** El pie de este proveedor tiene cinco renglones. Se admiten
+ *    cuatro —cuando el recorte se comió el neto, que es el de más arriba— pero
+ *    no menos: con tres no hay forma de distinguir un pie de tres importes
+ *    sueltos de cualquier otra parte del papel.
+ *  - **Cómo se ordenan.** El último es el total y tiene que ser el mayor de
+ *    todos: es la suma de los otros. Y las percepciones son chicas al lado del
+ *    neto y del IVA, nunca al revés.
+ *
+ * Un bloque que no tenga esta forma no se acomoda hasta que dé: se deja el pie
+ * sin leer y el comprobante va a revisión.
+ */
+function elPieEsDeErrecalde(sueltos: Decimal[]): boolean {
+  if (sueltos.length < 4 || sueltos.length > 5) return false;
+
+  const cola = sueltos.slice(-5);
+  const total = cola[cola.length - 1];
+  const resto = cola.slice(0, -1);
+
+  // El total manda: ningún renglón del pie puede ser mayor que él.
+  if (!resto.every((v) => v.lt(total))) return false;
+  // Y todos tienen que ser positivos; un pie con un importe en cero o negativo
+  // es una lectura rota, no un pie.
+  if (!cola.every((v) => v.gt(0))) return false;
+
+  // Las percepciones son las dos últimas antes del total, y son las chicas.
+  // Con cinco importes: neto, IVA, percepción, percepción, total.
+  if (cola.length === 5) {
+    const [neto, iva, percepcionUno, percepcionDos] = cola;
+    if (!iva.lt(neto)) return false;
+    if (!percepcionUno.lt(iva) || !percepcionDos.lt(iva)) return false;
+  }
+
+  return true;
+}
+
 /**
  * Reparte los importes sueltos del pie por su orden impreso.
  *
- * Devuelve null si la cuenta no cierra: es la única prueba de que el orden que
- * se supuso es el que estaba en el papel.
+ * Devuelve null si la cuenta no cierra o si el IVA no se parece al 21 % del
+ * neto: son las dos pruebas de que el orden que se supuso es el que estaba en el
+ * papel. Sin ellas, cualquier lista de cinco números se acomoda.
  */
 function asignarPorPosicion(valores: Decimal[]): {
   neto: Decimal;
@@ -927,6 +995,10 @@ function asignarPorPosicion(valores: Decimal[]): {
 
   const suma = percepciones.reduce((acumulado, v) => acumulado.plus(v), neto.plus(iva));
   if (suma.minus(total).abs().gt(1)) return null;
+  // La igualdad sola no alcanza: con cinco números cualesquiera que sumen bien,
+  // el orden podría ser otro. Que además el segundo sea el 21 % del primero es
+  // lo que ata la asignación a este formato y no a cualquier lista que cierre.
+  if (!ivaCoherente(neto, iva)) return null;
   return { neto, iva, percepciones, total };
 }
 
@@ -972,8 +1044,7 @@ function reconstruirPie(
   if (neto.lte(0) || neto.lte(iva)) return null;
 
   // El IVA de esta factura es del 21 %: sirve como segundo control barato.
-  const ivaEsperado = neto.times('0.21');
-  if (iva.minus(ivaEsperado).abs().gt(ivaEsperado.times('0.02').plus(1))) return null;
+  if (!ivaCoherente(neto, iva)) return null;
 
   // Y la corroboración: los dígitos del neto deducido, en alguna cifra leída.
   const buscados = digitosDe(neto.toFixed(2));
