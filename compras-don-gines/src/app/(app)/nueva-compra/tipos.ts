@@ -7,6 +7,14 @@ export interface Opcion {
 }
 
 export interface OpcionProducto extends Opcion {
+  /**
+   * Los códigos con que los proveedores facturan este mismo artículo.
+   *
+   * No reemplazan al PLU: cuelgan de él. Están acá para poder encontrar el
+   * producto escribiendo el código que se ve en el papel, que es lo que uno
+   * tiene delante mientras revisa la factura.
+   */
+  codigosDeProveedor?: string[];
   codigo: string;
 }
 

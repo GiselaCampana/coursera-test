@@ -281,6 +281,17 @@ model ProductAlias {
   createdAt    DateTime  @default(now())
 
   @@unique([productId, supplierId, normalized])
+  /// Un código de un proveedor apunta a **un** producto interno y a uno solo.
+  ///
+  /// Al revés sí: el mismo PLU puede tener un código distinto en cada proveedor
+  /// —ART-00228 en Errecalde, 4587 en otro, CREM-PDA en un tercero— y todos
+  /// apuntan al mismo artículo de Don Ginés. Lo que no puede pasar es que
+  /// ART-00228 de Errecalde signifique dos cosas: ahí no hay forma de saber a
+  /// cuál de los dos productos cargarle la compra.
+  ///
+  /// Postgres trata los nulos como distintos, así que esto no molesta a los
+  /// alias que no tienen código: pueden convivir todos los que hagan falta.
+  @@unique([supplierId, supplierCode])
   @@index([normalized])
   @@index([supplierId, supplierCode])
   @@map("product_aliases")

@@ -20,11 +20,18 @@ import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
  * producto al que colgarlas. Cantidades, kilos, precios, IVA, percepciones,
  * costos, totales e imágenes quedan exactamente como estaban.
  *
- * Y no adivina: usa el mismo reconocimiento que la carga —alias del proveedor,
- * código de artículo, alias aprendido, descripción normalizada— y sólo aplica
- * lo inequívoco. Lo dudoso queda pendiente y se informa, porque un producto mal
- * asignado es peor que uno sin asignar: el sin asignar se ve, el mal asignado
- * ensucia el costo de un artículo que nadie compró.
+ * Y no adivina: usa el mismo reconocimiento que la carga —código del proveedor
+ * primero, después alias y descripción— y sólo aplica lo inequívoco. Lo dudoso
+ * queda pendiente y se informa, porque un producto mal asignado es peor que uno
+ * sin asignar: el sin asignar se ve, el mal asignado ensucia el costo de un
+ * artículo que nadie compró.
+ *
+ * El orden importa especialmente acá. Si ya se sabe que el ART-00228 de
+ * Errecalde es el PLU 1211, **todas** las compras históricas con ese código se
+ * pueden asociar sin dudar, por mal escrita que venga la descripción: el código
+ * es una identificación y la descripción, un parecido. Por eso lo resuelto por
+ * código se informa aparte, y es lo que en la práctica rescata a los renglones
+ * cuya descripción salió del OCR hecha pedazos.
  */
 
 export interface RenglonDelInforme {
@@ -44,6 +51,13 @@ export interface RenglonDelInforme {
 export interface InformeDeBackfill {
   /** Se reconocieron sin lugar a dudas: son las que se aplican. */
   seguras: RenglonDelInforme[];
+  /**
+   * De las seguras, cuántas salieron del código del proveedor.
+   *
+   * Se informa aparte porque son las de mayor confianza: no dependen de cómo
+   * haya salido la descripción del OCR.
+   */
+  porCodigoDeProveedor: number;
   /** Más de un producto se parece por igual: las resuelve una persona. */
   ambiguas: RenglonDelInforme[];
   /** No se parecen a nada del catálogo. */
@@ -114,6 +128,7 @@ export async function backfillProductLinks(
 
   const informe: InformeDeBackfill = {
     seguras: [],
+    porCodigoDeProveedor: 0,
     ambiguas: [],
     sinCoincidencia: [],
     aplicadas: 0,
@@ -145,6 +160,7 @@ export async function backfillProductLinks(
 
     if (resultado.productId) {
       informe.seguras.push(fila);
+      if (resultado.method === 'SUPPLIER_CODE') informe.porCodigoDeProveedor += 1;
     } else if ((resultado.suggestions?.length ?? 0) > 0) {
       // Se parece a algo, pero no lo suficiente o no de forma única.
       informe.ambiguas.push(fila);
@@ -189,6 +205,7 @@ export async function backfillProductLinks(
     entityId: opciones.supplierId ?? 'todos',
     after: {
       aplicadas: informe.aplicadas,
+      porCodigoDeProveedor: informe.porCodigoDeProveedor,
       ambiguas: informe.ambiguas.length,
       sinCoincidencia: informe.sinCoincidencia.length,
     },

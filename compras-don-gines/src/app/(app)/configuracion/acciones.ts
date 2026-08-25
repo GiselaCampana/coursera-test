@@ -6,6 +6,8 @@ import { toUserMessage } from '@/lib/errors';
 import {
   saveBranch,
   saveProduct,
+  saveSupplierCode,
+  removeSupplierCode,
   saveRole,
   saveSupplier,
   saveSupplierTaxRule,
@@ -42,3 +44,5 @@ export const guardarProveedor = accion(saveSupplier, ['/configuracion/proveedore
 export const guardarPlazo = accion(saveSupplierTerm, ['/configuracion/proveedores']);
 export const guardarReglaImpositiva = accion(saveSupplierTaxRule, ['/configuracion/proveedores']);
 export const guardarProducto = accion(saveProduct, ['/configuracion/productos', '/precios']);
+export const guardarCodigoDeProveedor = accion(saveSupplierCode, ['/configuracion/productos']);
+export const quitarCodigoDeProveedor = accion(removeSupplierCode, ['/configuracion/productos']);

@@ -527,3 +527,116 @@ export async function saveProduct(user: AuthUser, form: FormData) {
   });
   return product;
 }
+
+/**
+ * Guarda el código con el que un proveedor identifica un producto interno.
+ *
+ * Son dos códigos distintos y conviene no confundirlos: el PLU es con el que
+ * Don Ginés vende el artículo —1211, Cremoso Punta del Agua— y el código de
+ * proveedor es el que ese proveedor imprime en su factura —ART-00228 en
+ * Errecalde—. El de la factura nunca reemplaza al PLU: queda colgado de él.
+ *
+ * Un mismo PLU puede tener un código distinto en cada proveedor, y eso es lo
+ * habitual. Lo que no puede pasar es lo contrario: que el mismo código del
+ * mismo proveedor apunte a dos productos, porque entonces no hay forma de saber
+ * a cuál cargarle la compra. La base lo impide con un índice único, y acá se lo
+ * comprueba antes para poder decirlo con palabras en vez de con un error de
+ * Postgres.
+ */
+export async function saveSupplierCode(user: AuthUser, form: FormData) {
+  assert(user, PERMISSIONS.PRODUCTOS_GESTIONAR);
+
+  const productId = texto(form.get('productId'));
+  const supplierId = texto(form.get('supplierId'));
+  const codigo = texto(form.get('supplierCode'));
+  if (!productId || !supplierId || !codigo) {
+    throw new ValidationError('Elegí el proveedor y escribí el código con el que factura.');
+  }
+
+  const [producto, proveedor] = await Promise.all([
+    prisma.product.findUnique({ where: { id: productId } }),
+    prisma.supplier.findUnique({ where: { id: supplierId } }),
+  ]);
+  if (!producto) throw new NotFoundError('No encontramos ese producto.');
+  if (!proveedor) throw new NotFoundError('No encontramos ese proveedor.');
+
+  const tomado = await prisma.productAlias.findFirst({
+    where: { supplierId, supplierCode: codigo },
+    include: { product: { select: { internalCode: true, normalizedName: true } } },
+  });
+  if (tomado && tomado.productId !== productId) {
+    throw new ConflictError(
+      `El código ${codigo} de ${proveedor.tradeName} ya está asignado al PLU ` +
+        `${tomado.product.internalCode} · ${tomado.product.normalizedName}. ` +
+        'Un código de un proveedor identifica un solo artículo: sacalo de ahí primero.',
+    );
+  }
+  if (tomado) return; // Ya estaba, y en este mismo producto.
+
+  /*
+   * El código va sobre una grafía existente si la hay, y si no crea la suya.
+   *
+   * La convención que sostiene el índice único es que el código vive en una
+   * sola fila: un producto puede tener varias formas de escribirse para el
+   * mismo proveedor, pero sólo una lleva el código.
+   */
+  const sinCodigo = await prisma.productAlias.findFirst({
+    where: { productId, supplierId, supplierCode: null },
+    orderBy: { createdAt: 'asc' },
+  });
+
+  if (sinCodigo) {
+    await prisma.productAlias.update({
+      where: { id: sinCodigo.id },
+      data: { supplierCode: codigo, origin: 'MANUAL' },
+    });
+  } else {
+    await prisma.productAlias.create({
+      data: {
+        productId,
+        supplierId,
+        supplierCode: codigo,
+        alias: producto.normalizedName,
+        normalized: normalizeText(producto.normalizedName),
+        origin: 'MANUAL',
+      },
+    });
+  }
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_UPDATED,
+    entity: 'Product',
+    entityId: productId,
+    after: { proveedor: proveedor.tradeName, codigo, plu: producto.internalCode },
+  });
+}
+
+/** Saca el código de un proveedor, sin borrar la grafía que lo acompañaba. */
+export async function removeSupplierCode(user: AuthUser, form: FormData) {
+  assert(user, PERMISSIONS.PRODUCTOS_GESTIONAR);
+
+  const aliasId = texto(form.get('aliasId'));
+  const alias = await prisma.productAlias.findUnique({
+    where: { id: aliasId },
+    include: { product: { select: { internalCode: true } } },
+  });
+  if (!alias) throw new NotFoundError('Ese código ya no está cargado.');
+
+  /*
+   * Se le quita el código, no se borra la fila.
+   *
+   * La fila también lleva la grafía con la que el proveedor escribe el
+   * artículo, que sigue sirviendo para reconocerlo por descripción. Borrarla
+   * entera desaprendería más de lo que se pidió.
+   */
+  await prisma.productAlias.update({ where: { id: aliasId }, data: { supplierCode: null } });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_UPDATED,
+    entity: 'Product',
+    entityId: alias.productId,
+    before: { codigo: alias.supplierCode, plu: alias.product.internalCode },
+  });
+}

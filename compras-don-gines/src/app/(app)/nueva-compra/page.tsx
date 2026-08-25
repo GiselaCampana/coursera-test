@@ -31,7 +31,22 @@ export default async function PaginaNuevaCompra() {
     prisma.product.findMany({
       where: { active: true },
       orderBy: { normalizedName: 'asc' },
-      select: { id: true, internalCode: true, normalizedName: true },
+      select: {
+        id: true,
+        internalCode: true,
+        normalizedName: true,
+        /*
+         * Los códigos con que cada proveedor factura este artículo.
+         *
+         * Van al selector para poder buscarlo escribiendo el código que se ve
+         * en el papel: es lo que uno tiene delante cuando está revisando la
+         * factura, y muchas veces se recuerda antes que el PLU.
+         */
+        aliases: {
+          where: { supplierCode: { not: null } },
+          select: { supplierCode: true },
+        },
+      },
     }),
   ]);
 
@@ -44,6 +59,9 @@ export default async function PaginaNuevaCompra() {
         id: p.id,
         codigo: p.internalCode,
         nombre: p.normalizedName,
+        codigosDeProveedor: p.aliases
+          .map((a) => a.supplierCode)
+          .filter((c): c is string => Boolean(c)),
       }))}
       hoy={arTodayISO()}
       puedeForzar={hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR)}

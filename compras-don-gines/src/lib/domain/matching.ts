@@ -44,6 +44,19 @@ export interface MatchResult {
   suggestions?: { productId: string; score: number }[];
 }
 
+/**
+ * Un código de proveedor, listo para comparar.
+ *
+ * Se ignoran mayúsculas y los separadores con que cada sistema lo imprime:
+ * "ART-00228", "art 00228" y "ART00228" son el mismo código. Lo que **no** se
+ * toca son los dígitos ni las letras: "ART-00228" y "ART-00229" son artículos
+ * distintos, y cualquier tolerancia ahí es una compra cargada al producto
+ * equivocado.
+ */
+export function normalizarCodigo(codigo: string): string {
+  return codigo.trim().toLowerCase().replace(/[\s._/-]+/g, '');
+}
+
 /** Minúsculas, sin acentos, sin puntuación y con los espacios colapsados. */
 export function normalizeText(input: string): string {
   return input
@@ -112,15 +125,26 @@ export function matchProduct(input: MatchInput, candidates: ProductCandidate[]):
     return { productId: null, method: 'NONE', score: null, reason: 'No hay productos cargados.' };
   }
 
-  // 1. Código del proveedor: es el dato más confiable.
-  if (input.supplierCode) {
-    const code = input.supplierCode.trim().toLowerCase();
+  /*
+   * 1. El código de ESTE proveedor, que es el dato más confiable que hay.
+   *
+   * Es una identificación, no un parecido: si Errecalde ya dijo alguna vez que
+   * su ART-00228 es el PLU 1211, no hay descripción que pueda contradecirlo.
+   * Por eso va antes que todo lo demás y no compite con nada.
+   *
+   * La coincidencia se exige **exacta en los dos campos**. Un alias con código
+   * pero sin proveedor no sirve acá: el mismo "4587" puede ser el cremoso en un
+   * proveedor y una lata de tomate en otro, y aceptarlo por el código suelto es
+   * justamente cómo se cargaría la compra al artículo equivocado.
+   */
+  if (input.supplierCode && input.supplierId) {
+    const code = normalizarCodigo(input.supplierCode);
     for (const c of candidates) {
       const hit = c.aliases?.find(
         (a) =>
           a.supplierCode &&
-          a.supplierCode.trim().toLowerCase() === code &&
-          (!input.supplierId || !a.supplierId || a.supplierId === input.supplierId),
+          normalizarCodigo(a.supplierCode) === code &&
+          a.supplierId === input.supplierId,
       );
       if (hit) return { productId: c.id, method: 'SUPPLIER_CODE', score: 1 };
     }

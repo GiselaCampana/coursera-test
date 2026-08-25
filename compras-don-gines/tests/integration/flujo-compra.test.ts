@@ -6,6 +6,7 @@ import {
   acceptReadDocument,
   confirmDocument,
   createDocument,
+  matchItemsToProducts,
   rejectDocument,
   voidDocument,
   type ConfirmDocumentInput,
@@ -22,6 +23,7 @@ import {
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
 import { backfillProductLinks } from '@/lib/services/backfill-productos';
+import { saveSupplierCode } from '@/lib/services/admin';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { arToday, toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
@@ -2198,5 +2200,306 @@ describe('la agenda de pagos vista como calendario', () => {
     expect(fechas).toContain(enTresDias);
     // Lo de dentro de veinte días es del mes que viene: no es "de esta semana".
     expect(fechas).not.toContain(enVeinteDias);
+  });
+});
+
+describe('el código del proveedor y el PLU interno son dos cosas distintas', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * En Don Ginés el cremoso es el PLU 1211. Errecalde lo factura como
+   * ART-00228. El código de la factura no reemplaza al PLU: queda colgado de
+   * él, y el mismo PLU puede tener un código distinto en cada proveedor.
+   *
+   * El escenario siembra el producto **sin** el código a propósito: lo que se
+   * prueba es que la aplicación lo aprenda con la primera factura y lo use sola
+   * en la segunda.
+   */
+  const CREMOSO = 'ART-00228';
+
+  async function facturaConElCremoso(numero: string, aprender: boolean) {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await confirmDocument(escenario.admin, {
+      documentId: documento.id,
+      supplierId: escenario.proveedorErrecaldeId,
+      docType: 'FACTURA',
+      letter: 'A',
+      pointOfSale: '00008',
+      number: numero,
+      issueDate: '2026-08-22',
+      printed: {
+        grossSubtotal: null,
+        discountTotal: null,
+        netTotal: '100000.00',
+        ivaTotal: '21000.00',
+        perceptionsTotal: '0',
+        total: '121000.00',
+        lineCount: null,
+        netWeightKg: null,
+        totalUnits: null,
+      },
+      items: [
+        {
+          lineNumber: 1,
+          supplierCode: CREMOSO,
+          description: 'CREMOSO PUNTA DEL AGUA',
+          quantity: '10',
+          unit: 'KG',
+          unitNetPrice: '10000.00',
+          grossSubtotal: '100000.00',
+          discountPct: '0',
+          ivaRate: '0.21',
+          // La primera vez lo asocia una persona; la segunda no manda nada.
+          productId: aprender ? escenario.productos['1211'] : null,
+          learnAlias: aprender,
+        },
+      ],
+      payment: { dueDate: '2026-08-28', paymentMethod: 'TRANSFERENCIA', notes: null },
+    });
+    return documento.id;
+  }
+
+  it('la primera factura aprende que ART-00228 es el PLU 1211', async () => {
+    await facturaConElCremoso('00009001', true);
+
+    const aprendido = await prisma.productAlias.findFirst({
+      where: { supplierId: escenario.proveedorErrecaldeId, supplierCode: CREMOSO },
+      include: { product: { select: { internalCode: true } } },
+    });
+    expect(aprendido).not.toBeNull();
+    expect(aprendido!.product.internalCode).toBe('1211');
+    expect(aprendido!.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('la segunda factura lo asocia sola, sin que nadie elija nada', async () => {
+    await facturaConElCremoso('00009002', true);
+    const segunda = await facturaConElCremoso('00009003', false);
+
+    const renglon = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId: segunda },
+    });
+    expect(renglon.productId).toBe(escenario.productos['1211']);
+    // Y por el código, no por parecido de descripción.
+    expect(renglon.matchMethod).toBe('SUPPLIER_CODE');
+
+    // El movimiento dice lo mismo: es de donde sale el reporte.
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentId: segunda },
+    });
+    expect(movimiento.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('el reporte por PLU 1211 encuentra la compra', async () => {
+    await facturaConElCremoso('00009004', true);
+    await facturaConElCremoso('00009005', false);
+
+    const reporte = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['1211'],
+    });
+    expect(reporte.rows).toHaveLength(2);
+    expect(reporte.totals.kilos).toBe('20.00');
+    // Y el nombre que muestra es el interno, no el del proveedor.
+    expect(reporte.rows[0].productName).toBe('Cremoso Punta del Agua');
+  });
+
+  it('buscar ART-00228 encuentra el producto 1211', async () => {
+    await facturaConElCremoso('00009006', true);
+
+    /*
+     * La búsqueda del catálogo tiene que entrar por los tres lados: el PLU con
+     * el que se vende, el nombre con el que se lo llama, y el código que está
+     * impreso en la factura que uno tiene en la mano.
+     */
+    const porCodigo = await prisma.product.findMany({
+      where: { aliases: { some: { supplierCode: { contains: CREMOSO, mode: 'insensitive' } } } },
+      select: { internalCode: true },
+    });
+    expect(porCodigo.map((p) => p.internalCode)).toContain('1211');
+
+    const porPlu = await prisma.product.findMany({
+      where: { internalCode: { contains: '1211' } },
+      select: { internalCode: true },
+    });
+    expect(porPlu.map((p) => p.internalCode)).toContain('1211');
+  });
+
+  it('otro proveedor puede tener otro código para el mismo PLU', async () => {
+    await facturaConElCremoso('00009007', true);
+
+    // Los Calvos factura el mismo cremoso como "4587".
+    await prisma.productAlias.create({
+      data: {
+        productId: escenario.productos['1211'],
+        supplierId: escenario.proveedorId,
+        supplierCode: '4587',
+        alias: 'CREMOSO P. DEL AGUA',
+        normalized: 'cremoso p del agua',
+        origin: 'MANUAL',
+      },
+    });
+
+    const codigos = await prisma.productAlias.findMany({
+      where: { productId: escenario.productos['1211'], supplierCode: { not: null } },
+      select: { supplierCode: true, supplierId: true },
+    });
+    expect(codigos).toHaveLength(2);
+    expect(codigos.map((c) => c.supplierCode).sort()).toEqual(['4587', CREMOSO]);
+
+    // Y cada uno reconoce el mismo PLU desde su proveedor.
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    void documento;
+    const desdeLosCalvos = await matchItemsToProducts(
+      [
+        {
+          lineNumber: 1,
+          supplierCode: '4587',
+          description: 'CUALQUIER COSA QUE NO SE PAREZCA',
+        } as unknown as Parameters<typeof matchItemsToProducts>[0][number],
+      ],
+      escenario.proveedorId,
+    );
+    expect(desdeLosCalvos[0].productId).toBe(escenario.productos['1211']);
+    expect(desdeLosCalvos[0].method).toBe('SUPPLIER_CODE');
+  });
+
+  it('el mismo código del mismo proveedor no puede apuntar a dos PLU', async () => {
+    await facturaConElCremoso('00009008', true);
+
+    /*
+     * La restricción de base. Al revés sí se puede —el mismo PLU con un código
+     * por proveedor— pero esto no: si ART-00228 de Errecalde significara dos
+     * artículos, no habría forma de saber a cuál cargarle la compra.
+     */
+    await expect(
+      prisma.productAlias.create({
+        data: {
+          productId: escenario.productos['2001'],
+          supplierId: escenario.proveedorErrecaldeId,
+          supplierCode: CREMOSO,
+          alias: 'OTRA COSA',
+          normalized: 'otra cosa',
+          origin: 'MANUAL',
+        },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('el aviso es entendible cuando se intenta desde la pantalla', async () => {
+    await facturaConElCremoso('00009009', true);
+
+    const form = new FormData();
+    form.set('productId', escenario.productos['2001']);
+    form.set('supplierId', escenario.proveedorErrecaldeId);
+    form.set('supplierCode', CREMOSO);
+
+    /*
+     * Un error de Postgres no le sirve a nadie: hay que decir con qué artículo
+     * choca el código y qué hay que hacer.
+     */
+    await expect(saveSupplierCode(escenario.admin, form)).rejects.toThrow(
+      /ya está asignado al PLU 1211/,
+    );
+  });
+
+  it('un código sin proveedor no vincula nada', async () => {
+    /*
+     * La coincidencia se exige exacta en los dos campos, y esta prueba cubre el
+     * caso que lo hace necesario: un alias con código pero **sin proveedor**.
+     *
+     * El mismo "4587" puede ser el cremoso en un proveedor y una lata de tomate
+     * en otro. Un código suelto, que no dice de quién es, no identifica nada:
+     * aceptarlo desde cualquier factura es exactamente cómo se carga una compra
+     * al artículo equivocado. Antes se aceptaba.
+     */
+    await prisma.productAlias.create({
+      data: {
+        productId: escenario.productos['2001'],
+        supplierId: null,
+        supplierCode: '4587',
+        alias: 'CODIGO SIN DUENO',
+        normalized: 'codigo sin dueno',
+        origin: 'MANUAL',
+      },
+    });
+
+    const desdeErrecalde = await matchItemsToProducts(
+      [
+        {
+          lineNumber: 1,
+          supplierCode: '4587',
+          description: 'ALGO QUE NO SE PARECE A NADA DEL CATALOGO',
+        } as unknown as Parameters<typeof matchItemsToProducts>[0][number],
+      ],
+      escenario.proveedorErrecaldeId,
+    );
+    expect(desdeErrecalde[0].productId).toBeNull();
+  });
+
+  it('el código se compara sin importar cómo lo escriban', async () => {
+    /*
+     * "ART-00228", "art 00228" y "ART00228" son el mismo código: cada sistema lo
+     * imprime distinto y el OCR agrega lo suyo. Lo que **no** se toca son los
+     * dígitos: ART-00228 y ART-00229 son artículos distintos.
+     */
+    await facturaConElCremoso('00009012', true);
+
+    const conEspacios = await matchItemsToProducts(
+      [
+        {
+          lineNumber: 1,
+          supplierCode: 'art 00228',
+          description: 'NADA QUE SE PAREZCA',
+        } as unknown as Parameters<typeof matchItemsToProducts>[0][number],
+      ],
+      escenario.proveedorErrecaldeId,
+    );
+    expect(conEspacios[0].productId).toBe(escenario.productos['1211']);
+
+    const otroArticulo = await matchItemsToProducts(
+      [
+        {
+          lineNumber: 1,
+          supplierCode: 'ART-00229',
+          description: 'NADA QUE SE PAREZCA',
+        } as unknown as Parameters<typeof matchItemsToProducts>[0][number],
+      ],
+      escenario.proveedorErrecaldeId,
+    );
+    expect(otroArticulo[0].productId).toBeNull();
+  });
+
+  it('el backfill histórico resuelve por código antes que por descripción', async () => {
+    /*
+     * Es lo que rescata los renglones cuya descripción salió del OCR hecha
+     * pedazos: el código es una identificación y la descripción, un parecido.
+     */
+    await facturaConElCremoso('00009010', true);
+    const historica = await facturaConElCremoso('00009011', false);
+
+    // Se simula el estado viejo, y encima con la descripción rota.
+    await prisma.documentItem.updateMany({
+      where: { documentId: historica },
+      data: { productId: null, matchMethod: 'NONE', description: 'CREM0S0 PVNTA DEL A6UA' },
+    });
+    await prisma.purchaseMovement.updateMany({
+      where: { documentId: historica },
+      data: { productId: null },
+    });
+
+    const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
+
+    expect(informe.porCodigoDeProveedor).toBeGreaterThanOrEqual(1);
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentId: historica },
+    });
+    expect(movimiento.productId).toBe(escenario.productos['1211']);
+
+    const reporte = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['1211'],
+    });
+    expect(reporte.rows).toHaveLength(2);
   });
 });

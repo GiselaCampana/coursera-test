@@ -46,6 +46,8 @@ interface ArticuloEditable {
   ivaTasa: string;
   productoId: string;
   asociacionOriginal: string;
+  /** ¿Se guarda la asociación para las próximas facturas del proveedor? */
+  recordar: boolean;
 }
 
 const vacio = (v: string | null | undefined) => (v === null || v === undefined ? '' : v);
@@ -112,6 +114,16 @@ export function PasoRevision({
       ivaTasa: a.ivaTasa,
       productoId: a.productoId ?? '',
       asociacionOriginal: a.asociacion,
+      /*
+       * ¿Se guarda la asociación para las próximas facturas?
+       *
+       * Marcado por omisión, porque es lo que uno quiere el 99 % de las veces:
+       * asociar a mano el mismo artículo en cada factura es exactamente el
+       * trabajo que la aplicación viene a sacarse de encima. Se puede
+       * desmarcar cuando la asociación es de este comprobante y nada más —una
+       * descripción rara, un artículo que vino por única vez—.
+       */
+      recordar: true,
     })),
   );
 
@@ -260,7 +272,11 @@ export function PasoRevision({
     };
   }, [proveedorId, fecha]);
 
-  const actualizarArticulo = (clave: string, campo: keyof ArticuloEditable, valor: string) => {
+  const actualizarArticulo = (
+    clave: string,
+    campo: keyof ArticuloEditable,
+    valor: string | boolean,
+  ) => {
     setArticulos((prev) =>
       prev.map((a) => (a.clave === clave ? { ...a, [campo]: valor } : a)),
     );
@@ -289,6 +305,7 @@ export function PasoRevision({
         ivaTasa: comprobante.condiciones.ivaTasa ?? '0.21',
         productoId: '',
         asociacionOriginal: 'MANUAL',
+        recordar: true,
       },
     ]);
   };
@@ -343,9 +360,16 @@ export function PasoRevision({
           discountPct: a.descuentoPct || '0',
           ivaRate: a.ivaTasa || '0',
           productId: a.productoId || null,
-          // Si el usuario asoció a mano una descripción nueva, se aprende el
-          // alias para que la próxima factura del proveedor la reconozca sola.
-          learnAlias: Boolean(a.productoId) && a.asociacionOriginal !== 'SUPPLIER_CODE',
+          /*
+           * Aprender la asociación es lo que hace que la próxima factura del
+           * proveedor se vincule sola: queda guardado que su ART-00228 es el
+           * PLU 1211, y desde entonces el código alcanza.
+           *
+           * No se aprende nada cuando ya vino asociado por código —ya estaba
+           * aprendido— ni cuando el operador desmarcó la casilla.
+           */
+          learnAlias:
+            Boolean(a.productoId) && a.recordar && a.asociacionOriginal !== 'SUPPLIER_CODE',
         })),
         payment: {
           dueDate: vencimiento,
@@ -751,7 +775,7 @@ export function PasoRevision({
                     />
                   </div>
                   <div className="campo">
-                    <label htmlFor={`prod-${articulo.clave}`}>Producto del catálogo</label>
+                    <label htmlFor={`prod-${articulo.clave}`}>PLU Don Ginés</label>
                     <select
                       id={`prod-${articulo.clave}`}
                       value={articulo.productoId}
@@ -760,14 +784,70 @@ export function PasoRevision({
                       }
                     >
                       <option value="">Sin asociar</option>
+                      {/*
+                        Cada opción lleva el PLU, el nombre y los códigos con
+                        que los proveedores lo facturan. Es lo que permite
+                        encontrarlo tecleando cualquiera de los tres: el PLU si
+                        se lo sabe de memoria, el nombre si no, y el código que
+                        se está mirando en el papel.
+                      */}
                       {productos.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.codigo} · {p.nombre}
+                          {p.codigosDeProveedor && p.codigosDeProveedor.length > 0
+                            ? ` · ${p.codigosDeProveedor.join(' ')}`
+                            : ''}
                         </option>
                       ))}
                     </select>
                   </div>
                 </div>
+
+                {/*
+                  Los dos códigos, uno al lado del otro y sin ocupar lugar.
+
+                  Son cosas distintas y conviene que se vean como tales: a la
+                  izquierda el que imprime el proveedor en su factura, a la
+                  derecha el PLU con el que Don Ginés vende el artículo. El de
+                  la factura nunca reemplaza al PLU.
+                */}
+                <div className="fila-dato-meta">
+                  <span>
+                    Proveedor: <strong>{articulo.codigo ?? 'sin código'}</strong>
+                  </span>
+                  <span>
+                    PLU Don Ginés:{' '}
+                    <strong>
+                      {articulo.productoId
+                        ? (productos.find((p) => p.id === articulo.productoId)?.codigo ??
+                          'Sin asociar')
+                        : 'Sin asociar'}
+                    </strong>
+                  </span>
+                  {articulo.asociacionOriginal === 'SUPPLIER_CODE' ? (
+                    <span>Vinculado por el código del proveedor</span>
+                  ) : null}
+                </div>
+
+                {/*
+                  Sólo se ofrece recordar cuando hay algo nuevo que recordar: si
+                  el renglón ya vino asociado por código, la asociación existe.
+                */}
+                {articulo.productoId && articulo.asociacionOriginal !== 'SUPPLIER_CODE' ? (
+                  <label className="casilla">
+                    <input
+                      type="checkbox"
+                      checked={articulo.recordar}
+                      onChange={(e) =>
+                        actualizarArticulo(articulo.clave, 'recordar', e.target.checked)
+                      }
+                    />
+                    <span>
+                      Recordar esta asociación para futuras facturas de{' '}
+                      {proveedores.find((p) => p.id === proveedorId)?.nombre ?? 'este proveedor'}
+                    </span>
+                  </label>
+                ) : null}
 
                 {calculado ? (
                   <dl style={{ margin: 0 }}>

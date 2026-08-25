@@ -212,6 +212,15 @@ export async function sembrarEscenario(): Promise<Escenario> {
      */
     ['2001', 'Queso Sardo bloque Melincué', 'SARDO BLOQUE MELINCUE'],
     ['2002', 'Queso Sardo Don Alfonso', 'SARDO DON ALFONSO'],
+    /*
+     * El caso de la vinculación código de proveedor ↔ PLU interno.
+     *
+     * En Don Ginés es el PLU 1211; Errecalde lo factura como ART-00228. Se
+     * siembra **sin** el código a propósito: el punto de las pruebas es que la
+     * aplicación lo aprenda al confirmar la primera factura y lo use sola en la
+     * segunda.
+     */
+    ['1211', 'Cremoso Punta del Agua', 'CREMOSO PUNTA DEL AGUA'],
   ];
 
   const productos: Record<string, string> = {};
@@ -219,7 +228,7 @@ export async function sembrarEscenario(): Promise<Escenario> {
     // Los códigos 2xxx son los quesos de Errecalde; el resto, de Los Calvos. El
     // alias tiene que colgar del proveedor que lo imprime: un alias de otro
     // proveedor no reconoce nada.
-    const deQuien = codigo.startsWith('2') ? errecalde.id : proveedor.id;
+    const deQuien = codigo.startsWith('2') || codigo === '1211' ? errecalde.id : proveedor.id;
     const producto = await prisma.product.create({
       data: {
         internalCode: codigo,
@@ -236,7 +245,8 @@ export async function sembrarEscenario(): Promise<Escenario> {
         aliases: {
           create: {
             supplierId: deQuien,
-            supplierCode: codigo,
+            // El cremoso arranca sin código: la aplicación lo tiene que aprender.
+            supplierCode: codigo === '1211' ? null : codigo,
             alias,
             normalized: normalizeText(alias),
             origin: 'MANUAL',

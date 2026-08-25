@@ -829,6 +829,20 @@ async function writeCostHistory(
   });
 }
 
+/**
+ * Aprende que este proveedor llama así —y con este código— a este producto.
+ *
+ * Son dos cosas distintas y se guardan como tales. La **descripción** es una
+ * grafía del nombre, y de esas puede haber varias: "JAMON COCIDO MONT-BLANC" y
+ * "JAMON COCIDO MONTBLANC" son el mismo fiambre escrito de dos maneras. El
+ * **código** es una identificación, y de ésa hay una sola por proveedor: el
+ * ART-00228 de Errecalde es el PLU 1211 y no puede ser otra cosa.
+ *
+ * De ahí la convención que sostiene el índice único: el código vive en una sola
+ * fila de alias del producto, y las demás grafías lo dejan en nulo. Sin eso, un
+ * producto con tres formas de escribirse tendría tres filas con el mismo código
+ * y el índice no se podría crear.
+ */
 async function learnProductAlias(
   tx: Prisma.TransactionClient,
   input: {
@@ -839,6 +853,49 @@ async function learnProductAlias(
   },
 ) {
   const normalized = normalizeText(input.description);
+  const codigo = input.supplierCode?.trim() || null;
+
+  /*
+   * El código primero, porque es lo que hace que la próxima factura se asocie
+   * sola sin depender de cómo venga escrita la descripción.
+   *
+   * Si ese código ya está tomado por **otro** producto, no se toca nada: es el
+   * conflicto que el índice impide, y resolverlo pisando lo que había sería
+   * decidir por el operador a espaldas suyas. Se deja que lo arregle desde la
+   * ficha del producto.
+   */
+  if (codigo) {
+    const tomado = await tx.productAlias.findFirst({
+      where: { supplierId: input.supplierId, supplierCode: codigo },
+    });
+    if (!tomado) {
+      const mismaGrafia = await tx.productAlias.findFirst({
+        where: { productId: input.productId, supplierId: input.supplierId, normalized },
+      });
+      if (mismaGrafia) {
+        await tx.productAlias.update({
+          where: { id: mismaGrafia.id },
+          data: { supplierCode: codigo, origin: 'MANUAL' },
+        });
+        return;
+      }
+      await tx.productAlias.create({
+        data: {
+          productId: input.productId,
+          supplierId: input.supplierId,
+          supplierCode: codigo,
+          alias: input.description,
+          normalized: normalized.length >= 3 ? normalized : normalizeText(codigo),
+          origin: 'MANUAL',
+        },
+      });
+      return;
+    }
+    if (tomado.productId !== input.productId) return;
+  }
+
+  // Sin código, o con el código ya guardado en otra fila del mismo producto:
+  // queda la grafía, que es lo único que agrega.
   if (normalized.length < 3) return;
   const exists = await tx.productAlias.findFirst({
     where: { productId: input.productId, supplierId: input.supplierId, normalized },
@@ -848,7 +905,7 @@ async function learnProductAlias(
     data: {
       productId: input.productId,
       supplierId: input.supplierId,
-      supplierCode: input.supplierCode,
+      supplierCode: null,
       alias: input.description,
       normalized,
       origin: 'MANUAL',

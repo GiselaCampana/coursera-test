@@ -12,19 +12,57 @@ import {
   type RoundingRule,
 } from '@/lib/domain/pricing';
 import { FormularioConfig, Casilla } from '@/components/FormularioConfig';
-import { guardarProducto } from '../acciones';
+import { guardarCodigoDeProveedor, guardarProducto, quitarCodigoDeProveedor } from '../acciones';
 
 export const metadata: Metadata = { title: 'Productos' };
 export const dynamic = 'force-dynamic';
 
-export default async function PaginaProductos() {
+export default async function PaginaProductos({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string }>;
+}) {
   const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) redirect('/configuracion');
 
+  const { q } = await searchParams;
+  const busqueda = (q ?? '').trim();
+
+  /*
+   * Se busca por PLU, por nombre y por el código de cualquier proveedor.
+   *
+   * Los tres hacen falta y por razones distintas: el PLU es con el que se vende,
+   * el nombre es con el que uno lo llama, y el código del proveedor es lo que
+   * está impreso en la factura que se tiene en la mano. Poder entrar por el
+   * código es lo que permite responder "¿qué es el ART-00228?" sin buscar a ojo.
+   */
+  const filtro = busqueda
+    ? {
+        OR: [
+          { internalCode: { contains: busqueda, mode: 'insensitive' as const } },
+          { normalizedName: { contains: busqueda, mode: 'insensitive' as const } },
+          {
+            aliases: {
+              some: {
+                OR: [
+                  { supplierCode: { contains: busqueda, mode: 'insensitive' as const } },
+                  { alias: { contains: busqueda, mode: 'insensitive' as const } },
+                ],
+              },
+            },
+          },
+        ],
+      }
+    : {};
+
   const [productos, proveedores] = await Promise.all([
     prisma.product.findMany({
+      where: filtro,
       orderBy: [{ active: 'desc' }, { category: 'asc' }, { normalizedName: 'asc' }],
-      include: { aliases: true, defaultSupplier: true },
+      include: {
+        aliases: { include: { supplier: { select: { tradeName: true } } } },
+        defaultSupplier: true,
+      },
     }),
     prisma.supplier.findMany({ where: { active: true }, orderBy: { tradeName: 'asc' } }),
   ]);
@@ -178,6 +216,23 @@ export default async function PaginaProductos() {
   return (
     <>
       <h1>Productos y alias</h1>
+
+      <form className="card card-compacta" method="get">
+        <div className="campo">
+          <label htmlFor="q">Buscar por PLU, nombre o código de proveedor</label>
+          <input id="q" name="q" type="search" defaultValue={busqueda} placeholder="1211, cremoso, ART-00228" />
+        </div>
+        <div className="acciones">
+          <button type="submit" className="boton boton-secundario">
+            Buscar
+          </button>
+          {busqueda ? (
+            <a href="/configuracion/productos" className="boton boton-secundario">
+              Ver todos
+            </a>
+          ) : null}
+        </div>
+      </form>
       <p className="medio">
         Cada producto define cómo se compra, cómo se vende y con qué margen, descuento por efectivo
         y redondeo se forma su precio.
@@ -222,6 +277,74 @@ export default async function PaginaProductos() {
                 Alias: {producto.aliases.map((a) => a.alias).join(' · ')}
               </p>
             ) : null}
+
+            {/*
+              Los códigos con que cada proveedor factura este mismo artículo.
+              Van aparte de los alias porque son otra cosa: el alias es una
+              forma de escribir el nombre, el código es una identificación. El
+              PLU de Don Ginés es el de arriba y no lo reemplaza ninguno.
+            */}
+            <details className="mt">
+              <summary>
+                Códigos por proveedor ({producto.aliases.filter((a) => a.supplierCode).length})
+              </summary>
+
+              {producto.aliases.filter((a) => a.supplierCode).length > 0 ? (
+                <ul className="lista chica">
+                  {producto.aliases
+                    .filter((a) => a.supplierCode)
+                    .map((a) => (
+                      <li key={a.id} className="fila-dato-meta">
+                        <span>{a.supplier?.tradeName ?? 'Sin proveedor'}</span>
+                        <strong>{a.supplierCode}</strong>
+                        <FormularioConfig
+                          titulo="Quitar"
+                          textoBoton="Quitar"
+                          accion={quitarCodigoDeProveedor}
+                        >
+                          <input type="hidden" name="aliasId" value={a.id} />
+                        </FormularioConfig>
+                      </li>
+                    ))}
+                </ul>
+              ) : (
+                <p className="chico medio">
+                  Todavía no hay ningún código cargado. Se aprenden solos cuando se confirma una
+                  factura eligiendo el producto, o se pueden cargar acá.
+                </p>
+              )}
+
+              <FormularioConfig
+                titulo="Agregar el código de un proveedor"
+                textoBoton="Agregar el código"
+                accion={guardarCodigoDeProveedor}
+              >
+                <input type="hidden" name="productId" value={producto.id} />
+                <div className="fila fila-2">
+                  <div className="campo">
+                    <label htmlFor={`sc-prov-${producto.id}`}>Proveedor</label>
+                    <select id={`sc-prov-${producto.id}`} name="supplierId" required>
+                      <option value="">Elegí el proveedor…</option>
+                      {proveedores.map((prov) => (
+                        <option key={prov.id} value={prov.id}>
+                          {prov.tradeName}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="campo">
+                    <label htmlFor={`sc-cod-${producto.id}`}>Código en su factura</label>
+                    <input
+                      id={`sc-cod-${producto.id}`}
+                      name="supplierCode"
+                      type="text"
+                      placeholder="ART-00228"
+                      required
+                    />
+                  </div>
+                </div>
+              </FormularioConfig>
+            </details>
 
             <FormularioConfig
               titulo={`Editar ${producto.normalizedName}`}
