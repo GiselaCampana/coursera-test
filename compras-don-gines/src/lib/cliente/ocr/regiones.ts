@@ -232,6 +232,34 @@ const FILAS_DEL_BORDE = 3;
 const ALTO_MINIMO_DEL_BORDE = 0.08;
 
 /**
+ * Cuánto se baja por debajo del final de la tabla.
+ *
+ * Es lo que da sentido a toda la relectura. La fila que falta está, por
+ * definición, **más abajo** de donde el recorte de la tabla dejó de mirar: si
+ * estuviera adentro, ya se habría leído. Una franja que termina donde termina
+ * la tabla vuelve a leer exactamente el mismo papel y devuelve exactamente el
+ * mismo texto.
+ *
+ * Se baja el equivalente a unas filas, con un piso absoluto por si la altura de
+ * fila quedó mal estimada. Llevarse un pedazo del pie no molesta: sus renglones
+ * no tienen el par de porcentajes, así que el analizador los descarta solos.
+ */
+const BAJAR_DEBAJO_DE_LA_TABLA = 3;
+const BAJADA_MINIMA = 0.04;
+
+/**
+ * Tope del alto de la franja.
+ *
+ * En un comprobante de pocas filas cada fila ocupa mucho, y seis alturas de fila
+ * pueden ser un tercio de la página: ahí ya no es una relectura focalizada, es
+ * releer media hoja, y no vale la pena preferirla a la vuelta normal.
+ *
+ * Se recorta por arriba y nunca por abajo: lo de abajo es lo que se fue a
+ * buscar, y lo de arriba es sólo contexto para empalmar.
+ */
+const ALTO_MAXIMO_DEL_BORDE = 0.25;
+
+/**
  * La franja de abajo de la tabla, para ir a buscar la fila que se perdió.
  *
  * El caso: el recorte de la tabla se cortó antes de terminar, quedó un jirón con
@@ -240,30 +268,38 @@ const ALTO_MINIMO_DEL_BORDE = 0.08;
  * falta volver a pasar por la página entera —que en un iPhone son varias
  * pasadas de OCR— para ir a buscarlo.
  *
- * La franja va desde unas pocas filas antes del final de la tabla hasta donde
- * empieza el pie. Se incluye el hueco entre la tabla y el pie a propósito: si el
- * detector cortó la tabla de más, la fila que falta está justamente ahí, en
- * tierra de nadie, y es la razón por la que no salió en el recorte original.
+ * La franja arranca unas filas antes del final de la tabla —para que el
+ * analizador tenga con qué empalmar— y **sigue por debajo de ese final**, que es
+ * donde está lo que falta.
+ *
+ * Ese "por debajo" es toda la razón de ser de la relectura, y es donde se me fue
+ * la primera vez. La franja terminaba en `resumen.top`, con la idea de que entre
+ * la tabla y el pie hay un hueco. No lo hay: `detectarRegiones` hace las dos
+ * bandas **solapadas** a propósito —el pie arranca un margen *antes* de que
+ * termine la tabla, para no cortar el primer renglón de totales—, así que
+ * `resumen.top` cae por encima del final de la tabla y la franja quedaba
+ * enteramente adentro del recorte ya leído. Releía el mismo papel y devolvía el
+ * mismo texto, que es exactamente lo que se vio en el teléfono: la relectura se
+ * disparaba y no aparecía nada.
  */
 export function bordeInferiorDeLaTabla(regiones: RegionesDetectadas): Region | null {
   const tabla = regiones.articulos;
   if (!tabla) return null;
 
   const finDeLaTabla = Math.min(1, tabla.top + tabla.height);
-
-  /*
-   * Hasta dónde llega la franja.
-   *
-   * Si se detectó el pie, hasta donde el pie empieza: ahí termina todo lo que
-   * puede ser una fila. Si no, un poco más abajo del final de la tabla, que es
-   * lo único que se puede afirmar sin inventar.
-   */
-  const abajo = regiones.resumen
-    ? Math.max(finDeLaTabla, Math.min(1, regiones.resumen.top))
-    : Math.min(1, finDeLaTabla + 0.05);
-
   const altoDeFila = tabla.height / Math.max(1, regiones.filasDetectadas);
-  const arriba = Math.max(tabla.top, finDeLaTabla - altoDeFila * FILAS_DEL_BORDE);
+
+  // Abajo: por debajo del final de la tabla, que es donde está lo que falta.
+  const bajada = Math.max(altoDeFila * BAJAR_DEBAJO_DE_LA_TABLA, BAJADA_MINIMA);
+  const abajo = Math.min(1, finDeLaTabla + bajada);
+
+  // Arriba: unas filas antes del final, para incluir la última que sí se leyó,
+  // sin pasarse del tope. Se recorta acá y no abajo: abajo está lo que falta.
+  const arriba = Math.max(
+    tabla.top,
+    finDeLaTabla - altoDeFila * FILAS_DEL_BORDE,
+    abajo - ALTO_MAXIMO_DEL_BORDE,
+  );
 
   const alto = Math.max(ALTO_MINIMO_DEL_BORDE, abajo - arriba);
   const top = Math.max(0, Math.min(arriba, 1 - alto));

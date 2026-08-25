@@ -336,11 +336,19 @@ export class SesionLectura {
   /**
    * Relee sólo la franja de abajo de la tabla y la agrega a lo ya leído.
    *
-   * Dos pasadas sobre la misma franja, con segmentaciones distintas: una la trata
-   * como una columna de renglones apilados y la otra como un bloque. Es la misma
-   * disyuntiva que en la tabla entera —dónde cae el corte cambia el resultado— y
-   * acá cuesta barato hacer las dos, porque la franja es una fracción de la
-   * página.
+   * Dos pasadas sobre la misma franja, y se cambian **las dos cosas** entre una
+   * y otra: la segmentación y la limpieza.
+   *
+   * La primera va sobre la página tal como se preparó, tratando la franja como
+   * una columna de renglones apilados. La segunda sobre la página limpiada
+   * fuerte —filtro de mediana y realce— y tratándola como un bloque.
+   *
+   * Cambiar sólo la segmentación desperdiciaría la segunda pasada, porque la
+   * limpieza fuerte es sospechosa justamente acá: sobre una fila que ya salía
+   * débil, el filtro de mediana termina de borrarle los trazos finos en vez de
+   * rescatarlos. Si la fila que falta es de las tenues, la pasada sin limpiar es
+   * la que la trae; si es de las que se ven bien pero con ruido alrededor, la
+   * limpiada. Dos pasadas y dos hipótesis distintas.
    *
    * Dos y no más. Si la fila no aparece con ninguna de las dos segmentaciones,
    * es que en esa parte de la foto no se lee, y repetir la misma pasada no la va
@@ -372,16 +380,22 @@ export class SesionLectura {
       }
 
       const desde = performance.now();
-      const mapa = limpiarFuerte(this.paginas[i]);
+      const pasadas: { mapa: Mapa; agresivo: boolean; psm: PSM }[] = [
+        { mapa: this.paginas[i], agresivo: false, psm: PSM.SINGLE_COLUMN },
+        { mapa: limpiarFuerte(this.paginas[i]), agresivo: true, psm: PSM.SINGLE_BLOCK },
+      ];
+
       const partes: string[] = [];
-      for (const psm of [PSM.SINGLE_COLUMN, PSM.SINGLE_BLOCK]) {
+      for (const pasada of pasadas) {
         this.avisar({
           etapa: 'LEYENDO_ARTICULOS',
           avance: null,
           pagina: i + 1,
           totalPaginas: this.paginas.length,
         });
-        partes.push(await this.leerRegion(mapa, banda, true, 'LEYENDO_ARTICULOS', psm));
+        partes.push(
+          await this.leerRegion(pasada.mapa, banda, pasada.agresivo, 'LEYENDO_ARTICULOS', pasada.psm),
+        );
       }
 
       const textoArticulos = [previa.textoArticulos, ...partes]
