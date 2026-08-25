@@ -521,3 +521,92 @@ describe('el pie repartido entre dos pasadas', () => {
     expect(analisis.summary?.netTotal).toBe('3830467.37');
   });
 });
+
+describe('cuando hay más de una manera de armar el pie', () => {
+  /*
+   * La salvaguarda contra elegir cualquiera.
+   *
+   * Combinar campos entre pasadas mete en la misma bolsa importes del pie,
+   * importes de los renglones y basura de otras partes de la página. Que exista
+   * *una* combinación que cierre no alcanza para creerle: podría haber otra que
+   * también cierre con números que no son el pie.
+   *
+   * Acá se arman dos a propósito. Las dos cumplen todo —cierran, el IVA es el
+   * 21 % del neto, la jerarquía se respeta— y ninguna tiene por qué ganarle a la
+   * otra. Lo correcto es no elegir.
+   */
+  const CABECERA = 'DISTRIBUCION ERRECALDE S.A. CUIT 30-71780890-4';
+
+  // Dos pies completos y válidos, uno de $1.210.000 y otro de $2.420.000.
+  //   1.000.000 + 210.000 =            1.210.000
+  //   2.000.000 + 420.000 =            2.420.000
+  const AMBIGUO = [
+    '$1.000.000,00',
+    '$210.000,00',
+    '$1.210.000,00',
+    '$2.000.000,00',
+    '$420.000,00',
+    '$2.420.000,00',
+  ].join('\n');
+
+  const analisis = analizadorErrecalde.analizar({
+    completo: `${CABECERA}\n${AMBIGUO}`,
+    resumen: AMBIGUO,
+    articulos: '',
+  });
+
+  it('no elige ninguna de las dos', () => {
+    expect(analisis.summary?.netTotal).toBeNull();
+    expect(analisis.summary?.total).toBeNull();
+  });
+
+  it('dice que hay más de una y manda a releer', () => {
+    expect(
+      analisis.observaciones.some((o) => /maneras distintas de armar el pie/i.test(o)),
+      `observaciones: ${analisis.observaciones.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('con una sola combinación válida sí elige', () => {
+    // El mismo caso quitando el segundo pie: ahí no hay ambigüedad que valga.
+    const unico = analizadorErrecalde.analizar({
+      completo: `${CABECERA}\n$1.000.000,00\n$210.000,00\n$1.210.000,00`,
+      resumen: '$1.000.000,00\n$210.000,00\n$1.210.000,00',
+      articulos: '',
+    });
+    expect(unico.summary?.netTotal).toBe('1000000');
+    expect(unico.summary?.total).toBe('1210000');
+  });
+});
+
+describe('una sola lectura que trae el pie entero es la preferida', () => {
+  it('no se cae al camino combinado cuando el recorte alcanza', () => {
+    /*
+     * El camino posicional de una sola fuente conserva sus condiciones fuertes
+     * —los cinco importes, en el orden esperado— y sigue siendo el primero que
+     * se prueba. Sólo cuando ninguna fuente sola da un pie que cierre se
+     * combinan campos entre pasadas.
+     *
+     * Acá el recorte trae los cinco en orden y con etiquetas, y la página
+     * completa trae además ruido que podría armar otro pie. El resultado tiene
+     * que salir del recorte, sin ambigüedad.
+     */
+    const RECORTE = [
+      'Neto Gravado $3.830.467,37',
+      'IVA $804.398,16',
+      'Percepción IVA RG 5329 $114.914,02',
+      'Percepción IIBB Buenos Aires $67.033,18',
+      'TOTAL $4.816.812,73',
+    ].join('\n');
+
+    const analisis = analizadorErrecalde.analizar({
+      completo: `DISTRIBUCION ERRECALDE S.A. CUIT 30-71780890-4\n$1.000.000,00\n$210.000,00\n$1.210.000,00`,
+      resumen: RECORTE,
+      articulos: '',
+    });
+
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
+    expect(analisis.summary?.total).toBe('4816812.73');
+    expect(analisis.observaciones.filter((o) => /maneras distintas/i.test(o))).toEqual([]);
+  });
+});

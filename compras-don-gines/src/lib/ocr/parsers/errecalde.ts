@@ -114,9 +114,25 @@ export const analizadorErrecalde: AnalizadorComprobante = {
     const { summary, avisos: avisosPie } = mejorPie(textos);
     observaciones.push(...avisosPie);
 
-    const { items, avisos } = analizarArticulos(textos.articulos || textos.completo, {
-      netoImpreso: parseArNumber(summary.netTotal ?? '') ?? null,
-    });
+    /*
+     * La tabla también se arma con las dos lecturas.
+     *
+     * Dos renglones de esta factura —PERNIL TERMOLI y PLANCHA BARRAZA X10KG—
+     * salieron del recorte de la tabla **sin subtotal**: la franja los cortó
+     * después del "0% 21%". Sin importe no hay renglón, así que se perdían los
+     * dos, y con ellos $844.746 de los $3.830.467 de la factura.
+     *
+     * En la página completa los dos están enteros. De esa segunda lectura sólo
+     * se aceptan renglones **con código de artículo**, y sólo si no coinciden con
+     * ninguno ya leído: la página completa trae también pedazos de fila sin
+     * código —"RRA MELIN 106kg $1230809"— que son la misma fila cortada y que
+     * entrarían como artículos nuevos.
+     */
+    const { items, avisos } = analizarArticulos(
+      textos.articulos || textos.completo,
+      textos.articulos ? textos.completo : '',
+      { netoImpreso: parseArNumber(summary.netTotal ?? '') ?? null },
+    );
     observaciones.push(...avisos);
 
     if (items.length === 0) {
@@ -223,6 +239,14 @@ interface FilaErrecalde {
   esKilos: boolean;
   precio: Decimal | null;
   subtotal: Decimal;
+  /**
+   * ¿El subtotal salió impreso del papel, o se calculó como cantidad × precio?
+   *
+   * Importa para dos cosas. Un subtotal calculado cierra contra cantidad ×
+   * precio por construcción, así que no sirve para verificar el renglón; y entre
+   * dos lecturas del mismo renglón, la que trae el importe impreso vale más.
+   */
+  subtotalImpreso: boolean;
   ivaRate: string | null;
   descuento: string | null;
 }
@@ -291,6 +315,47 @@ function descripcionesCompatibles(a: string, b: string): boolean {
   return larga.startsWith(corta);
 }
 
+/** ¿Dos descripciones que comparten sus palabras, aunque a una le falte alguna? */
+function compartenPalabras(a: string, b: string): boolean {
+  const palabras = (texto: string) =>
+    texto
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .split(/[^A-Z0-9]+/)
+      .filter((p) => p.length > 3);
+
+  const pa = palabras(a);
+  const pb = palabras(b);
+  if (pa.length < 2 || pb.length < 2) return false;
+
+  const [corta, larga] = pa.length <= pb.length ? [pa, pb] : [pb, pa];
+  const comunes = corta.filter((p) => larga.includes(p));
+  if (comunes.length !== corta.length || comunes.length < 2) return false;
+
+  /*
+   * Salvo que lo que sobre sea una medida.
+   *
+   * En el catálogo de este proveedor el tamaño va como una palabra más al final
+   * —X3, X5KG, X10KG, X950GRS— y es justamente lo que distingue dos artículos
+   * que por lo demás se llaman igual. PLANCHA BARRAZA X5KG y PLANCHA BARRAZA
+   * X10KG son productos distintos con precios distintos.
+   *
+   * Eso choca con el caso que esta función existe para resolver: cuando una
+   * franja corta la descripción, la lectura corta es un prefijo de la larga.
+   * "PLANCHA BARRAZA" es prefijo de las dos, así que fundirla con cualquiera de
+   * ellas es elegir a cara o cruz.
+   *
+   * La regla: si lo que le sobra a la descripción más larga tiene dígitos, es
+   * una medida y las dos no son el mismo renglón. Si son palabras sin números
+   * —"BLOQUE" en SARDO BLOQUE MELINCUE— sí lo son.
+   */
+  const sobrantes = larga.filter((p) => !corta.includes(p));
+  if (sobrantes.some((p) => /\d/.test(p))) return false;
+
+  return true;
+}
+
 /**
  * ¿Son dos lecturas del mismo renglón del papel?
  *
@@ -332,6 +397,21 @@ function sonElMismoRenglon(a: FilaErrecalde, b: FilaErrecalde): boolean {
    */
   if (parecidoDeDescripcion(a.descripcion, b.descripcion) >= 0.85) return true;
 
+  /*
+   * O que compartan las palabras, aunque falte alguna.
+   *
+   * Las franjas cortan la descripción y a veces se llevan una palabra del medio:
+   * "SARDO BLOQUE MELINCUE" salió también como "SARDO MELINCUE", porque
+   * "BLOQUE" quedó en la línea siguiente. Comparadas letra a letra no se
+   * parecen —desde el sexto carácter ya son distintas— pero comparten todas las
+   * palabras de la más corta.
+   *
+   * Se piden al menos dos palabras de más de tres letras, y que la más corta
+   * esté contenida entera en la otra. Con una sola palabra en común se fundirían
+   * CAYFAR LATA BATATA y CAYFAR LATA CHOCOLATE, que son artículos distintos.
+   */
+  if (compartenPalabras(a.descripcion, b.descripcion)) return true;
+
   let coincidencias = 0;
   if (codigosCompatibles(a.codigo, b.codigo)) coincidencias++;
   if (descripcionesCompatibles(a.descripcion, b.descripcion)) coincidencias++;
@@ -348,13 +428,23 @@ function sonElMismoRenglon(a: FilaErrecalde, b: FilaErrecalde): boolean {
    * contra el neto se desarma y no hay forma de saber cuál sobra.
    *
    * Así que si las descripciones coinciden y exactamente una de las dos cierra
-   * su propia aritmética, se las trata como el mismo renglón. Se pide la
+   * su propia aritmética, se las trata como el mismo renglón. Las dos tienen que
+   * traer el importe impreso: un renglón cuyo importe se calculó no "deja de
+   * cerrar" por estar mal leído sino por no tener contra qué compararse, y
+   * tomarlo por una lectura dañada funde artículos distintos. Pasó con PLANCHA
+   * BARRAZA X10KG, que salió del recorte sin importe y con la descripción
+   * cortada en "PLANCHA BARRAZA": así es prefijo de X5KG y de X10KG a la vez. Se pide la
    * descripción y no el código a propósito: en esta factura conviven ART-00177
    * (CAYFAR LATA BATATA) y ART-00178 (CAYFAR LATA CHOCOLATE), dos artículos
    * distintos con códigos consecutivos que un dígito mal leído confunde, pero
    * cuyas descripciones no se parecen en nada.
    */
-  if (descripcionesCompatibles(a.descripcion, b.descripcion) && filaCierra(a) !== filaCierra(b)) {
+  if (
+    a.subtotalImpreso &&
+    b.subtotalImpreso &&
+    descripcionesCompatibles(a.descripcion, b.descripcion) &&
+    filaCierra(a) !== filaCierra(b)
+  ) {
     return true;
   }
   return false;
@@ -363,6 +453,9 @@ function sonElMismoRenglon(a: FilaErrecalde, b: FilaErrecalde): boolean {
 /** ¿Cierra el renglón contra su propio subtotal impreso? */
 function filaCierra(fila: FilaErrecalde): boolean {
   if (!fila.precio) return false;
+  // Un subtotal calculado cierra por construcción: eso no es haber verificado
+  // nada, así que no cuenta como que el renglón cierra.
+  if (!fila.subtotalImpreso) return false;
   const esperado = fila.cantidad.times(fila.precio);
   // El precio unitario viene redondeado a dos decimales, así que el error
   // admisible crece con la cantidad; más dos centavos de piso.
@@ -405,19 +498,42 @@ function elegirLectura(candidatas: FilaErrecalde[], limites: LimitesDelPie): Fil
     // 1. Que el importe quepa en el comprobante. Es lo primero porque una
     //    lectura imposible no se arregla con ninguna otra virtud.
     if (subtotalPosible(fila, limites)) puntos += 1000;
-    // 2. Que cantidad × precio dé el subtotal impreso.
-    if (filaCierra(fila)) puntos += 100;
+    /*
+     * 2. Qué tan verificado está el importe del renglón, de mejor a peor:
+     *
+     *    - impreso y que cierra contra cantidad × precio: dos lecturas
+     *      independientes que coinciden, que es la mejor prueba que hay;
+     *    - calculado porque la franja se comió el importe: no verifica nada,
+     *      pero tampoco se contradice con nada;
+     *    - impreso y que **no** cierra: la peor de las tres. Que dos lecturas
+     *      del papel se contradigan es peor que que falte una.
+     *
+     * El orden importa y sale de un caso real: PERNIL TERMOLI salió del recorte
+     * con la cantidad y el precio buenos y sin importe, y de la página completa
+     * con un importe impreso que no cierra con nada (99 × 3,47 contra 601).
+     * Premiar "tiene importe impreso" a secas elegía la segunda.
+     */
+    if (fila.subtotalImpreso && filaCierra(fila)) puntos += 200;
+    else if (!fila.subtotalImpreso) puntos += 100;
     // 3. Cuántas pasadas coincidieron en el código y en la descripción. Un dato
     //    que se leyó igual tres veces es mejor que uno que se leyó una sola.
     puntos += 10 * candidatas.filter((otra) => codigosCompatibles(otra.codigo, fila.codigo)).length;
     puntos +=
       10 * candidatas.filter((otra) => descripcionesCompatibles(otra.descripcion, fila.descripcion)).length;
-    // 4. Y a igualdad, la lectura más completa.
-    puntos +=
-      (fila.codigo ? 2 : 0) +
-      (fila.precio ? 2 : 0) +
-      (fila.unidades !== null ? 1 : 0) +
-      Math.min(fila.descripcion.length, 40) / 40;
+    /*
+     * 4. Y a igualdad de plata, la lectura más completa, con la descripción
+     *    pesando de verdad.
+     *
+     * Las franjas cortan la descripción cuando la medida final se les mezcla con
+     * los números: "PLANCHA BARRAZA X10KG" sale también como "PLANCHA BARRAZA".
+     * Las dos lecturas traen los mismos importes, así que ninguna señal de plata
+     * las separa, y con la descripción valiendo un punto quedaba a la suerte del
+     * orden. Un nombre entero importa: es con lo que el artículo se asocia
+     * después a su producto del catálogo, y es lo que distingue el de 10 kg del
+     * de 5.
+     */
+    puntos += (Math.min(fila.descripcion.length, 40) / 40) * 20;
+    puntos += (fila.codigo ? 2 : 0) + (fila.precio ? 2 : 0) + (fila.unidades !== null ? 1 : 0);
     return puntos;
   };
 
@@ -430,11 +546,38 @@ function elegirLectura(candidatas: FilaErrecalde[], limites: LimitesDelPie): Fil
       mejorPuntaje = puntaje;
     }
   }
-  return mejor;
+
+  /*
+   * El código se decide aparte, por consenso.
+   *
+   * Safari le cambia un dígito entre pasadas —ART-00487 / ART-60487, ART-02174 /
+   * ART-62174— y no hay razón para que el código bueno esté justamente en la
+   * lectura que ganó por sus importes. El que aparece más veces entre todas las
+   * lecturas del renglón es el que más probablemente sea el impreso.
+   */
+  const codigoPorConsenso = consenso(candidatas.map((c) => c.codigo));
+  return codigoPorConsenso && codigoPorConsenso !== mejor.codigo
+    ? { ...mejor, codigo: codigoPorConsenso }
+    : mejor;
+}
+
+/** El valor que más se repite, si alguno se repite más que los demás. */
+function consenso(valores: (string | null)[]): string | null {
+  const cuentas = new Map<string, number>();
+  for (const valor of valores) {
+    if (valor) cuentas.set(valor, (cuentas.get(valor) ?? 0) + 1);
+  }
+  if (cuentas.size === 0) return null;
+
+  const ordenadas = [...cuentas].sort((a, b) => b[1] - a[1]);
+  // Empate: no hay consenso, y elegir sería tirar una moneda.
+  if (ordenadas.length > 1 && ordenadas[0][1] === ordenadas[1][1]) return null;
+  return ordenadas[0][0];
 }
 
 function analizarArticulos(
   texto: string,
+  textoSecundario = '',
   limites: LimitesDelPie = { netoImpreso: null },
 ): { items: OcrItem[]; avisos: string[] } {
   const avisos: string[] = [];
@@ -456,18 +599,37 @@ function analizarArticulos(
    */
   const grupos: FilaErrecalde[][] = [];
 
-  for (const cruda of texto.split('\n')) {
-    const linea = cruda.trim();
-    if (linea.length < 8) continue;
-    if (NO_ES_ARTICULO.test(linea)) continue;
+  const recorrer = (fuente: string, soloConCodigoYNuevos: boolean) => {
+    for (const cruda of fuente.split('\n')) {
+      const linea = cruda.trim();
+      if (linea.length < 8) continue;
+      if (NO_ES_ARTICULO.test(linea)) continue;
 
-    const fila = analizarFila(linea, limites.netoImpreso);
-    if (!fila) continue;
+      const fila = analizarFila(linea, limites.netoImpreso);
+      if (!fila) continue;
 
-    const grupo = grupos.find((g) => g.some((otra) => sonElMismoRenglon(otra, fila)));
-    if (grupo) grupo.push(fila);
-    else grupos.push([fila]);
-  }
+      const grupo = grupos.find((g) => g.some((otra) => sonElMismoRenglon(otra, fila)));
+      if (grupo) {
+        /*
+         * La lectura de respaldo también suma variantes a un renglón que ya
+         * está, y no sólo renglones nuevos. Es lo que resuelve PLANCHA BARRAZA
+         * X10KG: del recorte de la tabla salió sin importe —la franja lo cortó—
+         * y de la página completa salió con el importe impreso. Quedarse con la
+         * primera por haber llegado antes sería tirar el único dato del papel.
+         */
+        grupo.push(fila);
+        continue;
+      }
+
+      // Un renglón nuevo desde la lectura de respaldo tiene que traer código:
+      // sin él, casi siempre es un pedazo de una fila que ya se leyó.
+      if (soloConCodigoYNuevos && !fila.codigo) continue;
+      grupos.push([fila]);
+    }
+  };
+
+  recorrer(texto, false);
+  if (textoSecundario.trim() !== '') recorrer(textoSecundario, true);
 
   const filas = grupos.map((grupo) => elegirLectura(grupo, limites));
 
@@ -483,6 +645,15 @@ function analizarArticulos(
       );
     } else if (!fila.precio) {
       avisos.push(`Renglón ${numero} (${fila.descripcion}): no se pudo leer el precio unitario.`);
+    } else if (!fila.subtotalImpreso) {
+      // No es un error: es un renglón que no se pudo contrastar. El importe se
+      // calculó con la cantidad y el precio, y quien mire el comprobante tiene
+      // que saber que ese número no salió del papel.
+      avisos.push(
+        `Renglón ${numero} (${fila.descripcion}): el importe no entró en el recorte y se ` +
+          `calculó como ${fila.cantidad.toString()} × ${fila.precio.toFixed(2)} = ` +
+          `${fila.subtotal.toFixed(2)}. No se pudo contrastar contra el comprobante.`,
+      );
     } else if (!filaCierra(fila)) {
       const esperado = fila.cantidad.times(fila.precio);
       avisos.push(
@@ -503,7 +674,10 @@ function analizarArticulos(
       pieceCount: fila.esKilos ? fila.unidades : null,
       totalWeightKg: fila.esKilos ? fila.cantidad.toString() : null,
       unitNetPrice: fila.precio ? fila.precio.toString() : null,
-      grossSubtotal: fila.subtotal.toString(),
+      // Sólo se declara impreso el que se leyó del papel. El calculado va como
+      // ausente: el dominio lo recalcula igual, pero sabiendo que nadie lo
+      // verificó contra el comprobante.
+      grossSubtotal: fila.subtotalImpreso ? fila.subtotal.toString() : null,
       discountPct: fila.descuento,
       discountAmount: null,
       netAmount: null,
@@ -528,8 +702,19 @@ export function analizarFila(linea: string, netoImpreso: Decimal | null = null):
   const izquierda = linea.slice(0, ancla.index);
   const derecha = linea.slice(ancla.index + ancla[0].length);
 
+  /*
+   * Puede no haber subtotal, y el renglón sirve igual.
+   *
+   * Las franjas cortan a veces justo después del "0% 21%": PERNIL TERMOLI y
+   * PLANCHA BARRAZA X10KG salieron así, con la cantidad y el precio enteros y
+   * sin importe. Descartarlos costaba $844.746 de una factura de $3.830.467.
+   *
+   * Cuando falta, el importe se calcula como cantidad × precio y **queda marcado
+   * como calculado**: así el control sabe que ese renglón no se pudo contrastar
+   * contra el papel, en vez de darlo por verificado porque la multiplicación
+   * cierra sola.
+   */
   const subtotalesCrudos = importesCrudosDelSubtotal(derecha);
-  if (subtotalesCrudos.length === 0) return null;
 
   const descuento = parseRate(repararDigitos(ancla[1].replace('%', '')));
   const iva = parseRate(repararDigitos(ancla[2].replace('%', '')));
@@ -553,7 +738,18 @@ export function analizarFila(linea: string, netoImpreso: Decimal | null = null):
   const resto = conCodigo ? izquierda.slice(conCodigo[0].length) : izquierda;
 
   // --- Columnas numéricas de la izquierda, de derecha a izquierda ----------
-  const numeros = [...resto.matchAll(new RegExp(`(?<![${CLASE_DIGITOS_OCR}.,])([${CLASE_DIGITOS_OCR}][${CLASE_DIGITOS_OCR}.,]*)\\s*(kg\\b|kilos?\\b)?`, 'gi'))]
+  /*
+   * La "X" de las medidas no abre un número.
+   *
+   * En este catálogo el tamaño va pegado a la X: X3, X5KG, X10KG, X950GRS. Sin
+   * esta salvedad, "PLANCHA BARRAZA X10KG" se lee como una cantidad de 10 kg,
+   * la descripción se corta en "PLANCHA BARRAZA" —que es principio del de 5 kg
+   * y del de 10— y los dos artículos se vuelven indistinguibles.
+   *
+   * Se excluye sólo la X, y no cualquier letra, a propósito: el signo pesos sale
+   * a veces como "s" pegada al importe ("s1045208") y ése sí hay que leerlo.
+   */
+  const numeros = [...resto.matchAll(new RegExp(`(?<![Xx${CLASE_DIGITOS_OCR}.,])([${CLASE_DIGITOS_OCR}][${CLASE_DIGITOS_OCR}.,]*)\\s*(kg\\b|kilos?\\b)?`, 'gi'))]
     .map((m) => ({ texto: m[1], kg: Boolean(m[2]), indice: m.index ?? 0 }))
     .filter((n) => /\d/.test(n.texto));
 
@@ -568,7 +764,7 @@ export function analizarFila(linea: string, netoImpreso: Decimal | null = null):
 
   const conciliado = conciliar(cantidadCruda.texto, precioCrudo.texto, subtotalesCrudos, netoImpreso);
   if (!conciliado) return null;
-  const { cantidad, precio, subtotal } = conciliado;
+  const { cantidad, precio, subtotal, impreso: subtotalImpreso } = conciliado;
 
   const unidadesCrudas = numeros.length >= 3 ? numeros[numeros.length - 3] : null;
   const unidades = unidadesCrudas
@@ -620,6 +816,7 @@ export function analizarFila(linea: string, netoImpreso: Decimal | null = null):
     esKilos: cantidadCruda.kg,
     precio,
     subtotal,
+    subtotalImpreso,
     ivaRate: iva ? iva.toString() : null,
     descuento: descuento ? descuento.toString() : null,
   };
@@ -669,7 +866,7 @@ function conciliar(
   precioTexto: string,
   subtotalTextos: string[],
   netoImpreso: Decimal | null = null,
-): { cantidad: Decimal; precio: Decimal | null; subtotal: Decimal } | null {
+): { cantidad: Decimal; precio: Decimal | null; subtotal: Decimal; impreso: boolean } | null {
   const cantidades = variantesDeCantidad(cantidadTexto);
   const precios = variantesDeImporte(precioTexto);
   const subtotales: Decimal[] = [];
@@ -677,6 +874,14 @@ function conciliar(
     for (const valor of variantesDeImporte(texto)) {
       if (!subtotales.some((v) => v.eq(valor))) subtotales.push(valor);
     }
+  }
+
+  // Sin subtotal impreso: se calcula con la cantidad y el precio, y se avisa.
+  if (subtotales.length === 0) {
+    const cantidad = cantidades.find((c) => c.gt(0));
+    const precio = precios[0] ?? null;
+    if (!cantidad || !precio) return null;
+    return { cantidad, precio, subtotal: cantidad.times(precio), impreso: false };
   }
 
   if (cantidades.length === 0 || subtotales.length === 0) return null;
@@ -722,13 +927,13 @@ function conciliar(
   if (combinaciones.length > 0) {
     combinaciones.sort((a, b) => a.error.comparedTo(b.error));
     const { cantidad, precio, subtotal } = combinaciones[0];
-    return { cantidad, precio, subtotal };
+    return { cantidad, precio, subtotal, impreso: true };
   }
 
   // Nada cerró: se devuelve la lectura literal y el control se encarga.
   const cantidad = cantidades.find((c) => c.gt(0));
   if (!cantidad) return null;
-  return { cantidad, precio: precios[0] ?? null, subtotal: subtotales[0] };
+  return { cantidad, precio: precios[0] ?? null, subtotal: subtotales[0], impreso: true };
 }
 
 /**
@@ -788,13 +993,29 @@ function soloDigitos(crudo: string): string {
  */
 function variantesDeImporte(crudo: string): Decimal[] {
   const salida: Decimal[] = [];
-  const literal = interpretarImporte(crudo);
-  if (literal) salida.push(literal);
+  const agregar = (valor: Decimal | null) => {
+    if (valor && valor.gt(0) && !salida.some((v) => v.eq(valor))) salida.push(valor);
+  };
 
-  const digitos = soloDigitos(crudo);
-  if (digitos.length >= 3) {
-    const conComa = new Decimal(`${digitos.slice(0, -2)}.${digitos.slice(-2)}`);
-    if (!salida.some((v) => v.eq(conComa))) salida.push(conComa);
+  /*
+   * El signo pesos leído como letra.
+   *
+   * Sobre ROQUEFORT AZUL el precio salió "s1045208": esa "s" es el "$", pero la
+   * reparación de dígitos la toma por un 5 y el precio se vuelve $51.045.208.
+   * No se puede decidir acá cuál de las dos lecturas es la buena —hay importes
+   * que de verdad empiezan con 5— así que se generan las dos y decide la
+   * aritmética del renglón.
+   */
+  const textos = [crudo];
+  const sinSigno = crudo.replace(/^[sS$]\s*/, '');
+  if (sinSigno !== crudo && sinSigno !== '') textos.push(sinSigno);
+
+  for (const texto of textos) {
+    agregar(interpretarImporte(texto));
+    const digitos = soloDigitos(texto);
+    if (digitos.length >= 3) {
+      agregar(new Decimal(`${digitos.slice(0, -2)}.${digitos.slice(-2)}`));
+    }
   }
   return salida;
 }
@@ -1086,8 +1307,18 @@ function mejorPie(textos: TextosComprobante): { summary: OcrSummary; avisos: str
    * efectivamente leyó, y aceptarlos sólo si entre ellos se verifican.
    */
   if (mejorPuntaje < 100) {
-    const combinado = combinarCamposDelPie(fuentes, todoLoLeido);
-    if (combinado && puntuarPie(combinado.summary) > mejorPuntaje) return combinado;
+    const combinado = combinarCamposDelPie(recorte, completo, todoLoLeido);
+    if (combinado) {
+      if (puntuarPie(combinado.summary) > mejorPuntaje) return combinado;
+      /*
+       * Si la combinación no dio un pie pero encontró **varias** maneras de
+       * armarlo, ése es el diagnóstico que vale y hay que decirlo. Dejar en su
+       * lugar el "no tiene la forma del recuadro de totales" del camino
+       * posicional manda a buscar el problema equivocado: no es que los
+       * importes no parezcan un pie, es que parecen dos.
+       */
+      if (combinado.avisos.length > 0) return combinado;
+    }
   }
 
   return mejor!;
@@ -1114,80 +1345,176 @@ function mejorPie(textos: TextosComprobante): { summary: OcrSummary; avisos: str
  * resta.
  */
 function combinarCamposDelPie(
-  fuentes: string[],
+  recorte: string,
+  completo: string,
   todoLoLeido: string,
 ): { summary: OcrSummary; avisos: string[] } | null {
-  // Todos los importes que apareció alguna pasada, sin repetir.
-  const candidatos: Decimal[] = [];
-  for (const fuente of fuentes) {
-    for (const cruda of fuente.split('\n')) {
+  /*
+   * Cada candidato guarda de dónde salió: qué lectura y qué token exacto.
+   *
+   * La procedencia hace tres cosas. Impide que un mismo token se use para dos
+   * campos —el mismo "$67.033,18" no puede ser a la vez percepción de IIBB y
+   * percepción de IVA—, permite preferir lo que vino del recorte del pie sobre
+   * lo que vino de la página completa cuando los dos dicen lo mismo, y deja
+   * sumar confianza cuando los importes aparecen en el orden esperado.
+   */
+  const candidatos: CandidatoDePie[] = [];
+  const juntar = (texto: string, fuente: 'pie' | 'pagina') => {
+    let posicion = 0;
+    for (const cruda of texto.split('\n')) {
       const linea = cruda.trim();
+      posicion++;
       if (linea === '' || ANCLA_DTO_IVA.test(linea)) continue;
       const importe = ultimoImporte(linea);
-      if (importe && importe.gt(0) && !candidatos.some((c) => c.eq(importe))) {
-        candidatos.push(importe);
-      }
+      if (!importe || importe.lte(0)) continue;
+      candidatos.push({ valor: importe, fuente, token: linea, posicion });
     }
-  }
+  };
+  juntar(recorte, 'pie');
+  juntar(completo, 'pagina');
   if (candidatos.length < 3) return null;
 
-  let mejor: { neto: Decimal; iva: Decimal; percepciones: Decimal[]; total: Decimal; leidos: number } | null =
-    null;
+  const soluciones: SolucionDePie[] = [];
 
   for (const total of candidatos) {
-    // El total es el mayor: ningún otro campo del pie puede superarlo.
-    if (candidatos.some((c) => c.gt(total))) continue;
+    // El total es el mayor de los cinco elegidos. No se le pide ser el mayor de
+    // todo lo leído: en la bolsa hay también importes de los renglones y basura
+    // de otras partes de la página, y cualquiera de ésos lo taparía.
+    const menores = candidatos.filter((c) => c.valor.lt(total.valor));
 
-    for (const iva of candidatos) {
-      if (iva.gte(total)) continue;
+    for (const iva of menores) {
+      if (iva.token === total.token) continue;
 
-      // Las percepciones: ninguna, una o dos, siempre menores que el IVA.
-      const posibles = candidatos.filter((c) => c.lt(iva));
-      const combinacionesDePercepciones: Decimal[][] = [[]];
+      const posibles = menores.filter((c) => c.valor.lt(iva.valor) && c.token !== iva.token);
+      const combinaciones: CandidatoDePie[][] = [[]];
       for (const a of posibles) {
-        combinacionesDePercepciones.push([a]);
+        combinaciones.push([a]);
         for (const b of posibles) {
-          if (b.eq(a)) continue;
-          combinacionesDePercepciones.push([a, b]);
+          // Un token no puede ocupar dos campos: el mismo renglón del OCR no es
+          // a la vez las dos percepciones.
+          if (b.token === a.token) continue;
+          combinaciones.push([a, b]);
         }
       }
 
-      for (const percepciones of combinacionesDePercepciones) {
-        const sumaPercepciones = percepciones.reduce((acc, v) => acc.plus(v), new Decimal(0));
-        const netoDeducido = total.minus(iva).minus(sumaPercepciones);
-        if (netoDeducido.lte(0) || netoDeducido.lte(iva)) continue;
-        if (!ivaCoherente(netoDeducido, iva)) continue;
+      for (const percepciones of combinaciones) {
+        const suma = percepciones.reduce((acc, c) => acc.plus(c.valor), new Decimal(0));
+        const netoDeducido = total.valor.minus(iva.valor).minus(suma);
+        if (netoDeducido.lte(0) || netoDeducido.lte(iva.valor)) continue;
+        if (!ivaCoherente(netoDeducido, iva.valor)) continue;
 
-        // ¿El neto estaba leído, o hubo que deducirlo?
-        const netoLeido = candidatos.find((c) => c.minus(netoDeducido).abs().lte('0.01'));
-        const neto = netoLeido ?? netoDeducido;
+        const usados = new Set([total.token, iva.token, ...percepciones.map((c) => c.token)]);
+        const netoLeido = candidatos.find(
+          (c) => !usados.has(c.token) && c.valor.minus(netoDeducido).abs().lte('0.01'),
+        );
+        const neto = netoLeido ? netoLeido.valor : netoDeducido;
         if (!netoLeido && !hayRastroDe(neto, todoLoLeido)) continue;
 
-        const leidos = 2 + percepciones.length + (netoLeido ? 1 : 0);
-        if (!mejor || leidos > mejor.leidos) {
-          mejor = { neto, iva, percepciones, total, leidos };
-        }
+        soluciones.push({
+          neto,
+          iva: iva.valor,
+          percepciones: percepciones.map((c) => c.valor),
+          total: total.valor,
+          puntaje: puntuarSolucion(netoLeido, iva, percepciones, total),
+          firma: [neto.toFixed(2), iva.valor.toFixed(2), total.valor.toFixed(2), suma.toFixed(2)].join('|'),
+        });
       }
     }
   }
 
-  if (!mejor) return null;
+  if (soluciones.length === 0) return null;
 
+  /*
+   * Y acá la salvaguarda: si quedan dos soluciones distintas y ninguna gana
+   * claramente, no se elige.
+   *
+   * Con los importes de los renglones y la basura de la página en la misma
+   * bolsa, que exista *una* combinación que cierre no alcanza para creerle:
+   * podría haber otra que también cierre con números que no son el pie. Cuando
+   * el puntaje no separa a la primera de la segunda, el comprobante va a
+   * revisión. Es la diferencia entre encontrar una solución y encontrar *la*
+   * solución.
+   */
+  soluciones.sort((a, b) => b.puntaje - a.puntaje);
+  const distintas = soluciones.filter(
+    (s, i) => soluciones.findIndex((o) => o.firma === s.firma) === i,
+  );
+  if (distintas.length > 1 && distintas[0].puntaje - distintas[1].puntaje < MARGEN_DE_DESEMPATE) {
+    return {
+      summary: pieVacio(),
+      avisos: [
+        `Hay ${distintas.length} maneras distintas de armar el pie con los importes leídos y ` +
+          'ninguna es claramente la correcta, así que no se asignó ninguna: hay que releer los totales.',
+      ],
+    };
+  }
+
+  const elegida = distintas[0];
   const summary = pieVacio();
-  summary.netTotal = mejor.neto.toString();
-  summary.ivaLines!.push({ label: 'IVA', rate: '0.21', amount: mejor.iva.toString() });
-  for (const [i, percepcion] of mejor.percepciones.entries()) {
+  summary.netTotal = elegida.neto.toString();
+  summary.ivaLines!.push({ label: 'IVA', rate: '0.21', amount: elegida.iva.toString() });
+  for (const [i, percepcion] of elegida.percepciones.entries()) {
     summary.perceptionLines!.push({
       label: i === 0 ? 'Percepción IVA RG 5329' : 'Percepción IIBB Buenos Aires',
       rate: null,
       amount: percepcion.toString(),
     });
   }
-  summary.total = mejor.total.toString();
+  summary.total = elegida.total.toString();
   summary.ivaTotal = sumar(summary.ivaLines);
   summary.perceptionsTotal = sumar(summary.perceptionLines);
 
   return { summary, avisos: [] };
+}
+
+/** Un importe leído, con la marca de dónde salió. */
+interface CandidatoDePie {
+  valor: Decimal;
+  /** De qué lectura vino: el recorte del pie o la página completa. */
+  fuente: 'pie' | 'pagina';
+  /** La línea exacta del OCR, que es lo que identifica al token. */
+  token: string;
+  /** En qué renglón de su fuente apareció, para premiar el orden esperado. */
+  posicion: number;
+}
+
+interface SolucionDePie {
+  neto: Decimal;
+  iva: Decimal;
+  percepciones: Decimal[];
+  total: Decimal;
+  puntaje: number;
+  /** Dos soluciones con la misma firma son la misma solución. */
+  firma: string;
+}
+
+/**
+ * Cuánta diferencia de puntaje hace falta para considerar que una solución le
+ * gana a otra. Por debajo de esto las dos son igual de plausibles y no se elige.
+ */
+const MARGEN_DE_DESEMPATE = 10;
+
+/** Cuánto confiar en una manera de armar el pie. */
+function puntuarSolucion(
+  netoLeido: CandidatoDePie | undefined,
+  iva: CandidatoDePie,
+  percepciones: CandidatoDePie[],
+  total: CandidatoDePie,
+): number {
+  const usados = [iva, ...percepciones, total, ...(netoLeido ? [netoLeido] : [])];
+
+  let puntos = 0;
+  // Un número leído vale más que uno deducido de una resta.
+  puntos += usados.length * 20;
+  // Lo que vino del recorte del pie vale más que lo que vino de la página
+  // completa: ese recorte es el recuadro de totales y nada más.
+  puntos += usados.filter((c) => c.fuente === 'pie').length * 5;
+  // Y que aparezcan en el orden impreso suma confianza, sin ser obligatorio:
+  // el pie va neto, IVA, percepciones, total, de arriba hacia abajo.
+  const enOrden = percepciones.every((p) => p.posicion > iva.posicion) && total.posicion > iva.posicion;
+  if (enOrden) puntos += 8;
+
+  return puntos;
 }
 
 /**

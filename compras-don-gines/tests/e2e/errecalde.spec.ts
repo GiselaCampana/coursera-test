@@ -97,43 +97,45 @@ test.describe('lectura de una foto real de Errecalde', () => {
     await sinScrollHorizontal(page);
   });
 
-  test('no frena por centavos de OCR, y avisa los que concilió', async ({ page }, testInfo) => {
+  test('cierra sin conciliar centavos: el detalle cae sobre el neto impreso', async ({
+    page,
+  }, testInfo) => {
     soloEnIphone(test, testInfo.project.name);
     await leer(page, await fotoErrecalde());
 
     /*
-     * Sobre esta foto quedan uno o dos renglones cuyos centavos el OCR no lee:
-     * los dígitos más chicos de la tabla, contra el borde derecho de la
-     * columna, salen "00" donde el papel dice "34".
+     * Esta prueba pedía la conciliación de centavos, porque sobre esta foto
+     * quedaban renglones cuyos centavos el OCR no leía: los dígitos más chicos
+     * de la tabla, contra el borde derecho de la columna, salían "00" donde el
+     * papel dice "34".
      *
-     * La conciliación de centavos los corrige con la cantidad y el precio del
-     * propio renglón, y sólo porque acá se dan todas sus condiciones: el pie
-     * cierra consigo mismo, están los 23 renglones, los pesos de cada importe
-     * coinciden y las correcciones empujan hacia lo que al detalle le falta para
-     * el subtotal impreso, sin pasarse.
+     * Ya no pasa. El analizador de Errecalde elige entre las variantes que le
+     * ofrecen las pasadas la que cierra contra el propio renglón —cantidad ×
+     * precio— y contra el neto impreso, así que el importe llega bien leído en
+     * vez de llegar mal y corregirse después. Corregir en la lectura, con los
+     * dígitos a la vista, es mejor que corregir en el dominio con una cuenta.
      *
-     * Así que el comprobante se puede guardar, pero lo dice.
+     * Así que acá lo que se controla es que **no haga falta** conciliar nada, y
+     * la conciliación en sí se prueba donde se la puede provocar a voluntad:
+     * en `lectura.spec.ts`, sobre la factura dibujada de Los Calvos, a la que
+     * se le comen los centavos de un renglón a propósito.
      */
-    // Nada de rojo y el guardado habilitado: los centavos ya no frenan.
     await expect(page.locator('.semaforo-error')).toHaveCount(0);
     await expect(page.locator('.card', { hasText: 'Qué no cierra' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Continuar al pago' })).toBeEnabled();
 
-    /*
-     * El semáforo puede quedar verde o amarillo, y las dos cosas están bien: si
-     * además hizo falta releer la foto, el amarillo lo dice y eso no tiene que
-     * ver con los centavos. Lo que no puede pasar es que la conciliación quede
-     * escondida, así que la advertencia se pide en el estado que sea.
-     */
-    const semaforo = page.locator('.semaforo-ok, .semaforo-aviso');
-    await expect(semaforo).toBeVisible();
-    await expect(semaforo).toContainText(/Se conciliaron autom[áa]ticamente/);
-    await expect(semaforo).toContainText(/centavos de OCR/);
+    // Ningún renglón necesitó corrección.
+    await expect(page.locator('.controles li', { hasText: 'Centavos conciliados' })).toHaveCount(0);
 
-    // Y en la lista de controles queda el detalle de qué se cambió.
-    const control = page.locator('.controles li', { hasText: 'Centavos conciliados' });
-    await expect(control).toContainText(/Rengl[óo]n \d+/);
-    await expect(control).toContainText(/se leyó .* y quedó/);
+    // Cada importe se pudo contrastar contra el papel, y la cuenta de cada
+    // renglón cierra: es lo que hace que no quede nada que conciliar.
+    const controles = page.locator('.controles li');
+    await expect(controles.filter({ hasText: 'Importe impreso de cada renglón' })).toContainText(
+      'Todos los renglones se controlaron contra el importe impreso',
+    );
+    await expect(controles.filter({ hasText: 'Aritmética de los renglones' })).toContainText(
+      'cierran en todos los renglones',
+    );
 
     // Y el detalle cae sobre el neto impreso, dentro del peso: lo que queda son
     // los centavos de redondeo del propio proveedor, no un error de lectura.
@@ -141,6 +143,9 @@ test.describe('lectura de una foto real de Errecalde', () => {
     // Sin el signo pesos adelante: el formato es-AR separa con un espacio
     // especial que una expresión regular no normaliza.
     await expect(detalle).toContainText(/3\.830\.467,\d\d/);
+    await expect(controles.filter({ hasText: 'Neto de los artículos' })).toContainText(
+      'coincide con el neto impreso',
+    );
   });
 
   test('el resumen muestra los kilos, las unidades y los impuestos por separado', async ({

@@ -107,6 +107,24 @@ describe('el caso que motivó la regla', () => {
     expect(control?.message).toContain('22.587,00');
     expect(control?.message).toContain('22.587,30');
     expect(informe.reconciliation?.totalAbsoluto).toBe('0.30');
+
+    /*
+     * Y el aviso que va arriba de todo, en el semáforo, con las palabras que
+     * lee el encargado.
+     *
+     * Se controla acá, letra por letra, porque es lo único de toda la lectura
+     * que cambia un importe respecto del papel: si el aviso desapareciera o se
+     * volviera genérico, el comprobante seguiría guardándose en verde y nadie
+     * se enteraría de que hubo una corrección. La pantalla lo saca de este
+     * mismo texto —`report.reconciliation.mensaje`—, así que probarlo acá
+     * cubre lo que muestra.
+     */
+    // El espacio que va entre el "$" y el número no es un espacio común: el
+    // formato es-AR usa uno angosto e indivisible, así que la comparación lo
+    // deja libre en vez de copiarlo a ciegas.
+    expect(informe.reconciliation?.mensaje).toMatch(
+      /^Se conciliaron automáticamente \$\s0,30 por diferencias de centavos de OCR en un renglón\.$/,
+    );
   });
 
   it('sin conciliar, el mismo comprobante frena', () => {
