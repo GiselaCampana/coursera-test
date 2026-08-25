@@ -36,6 +36,13 @@ export interface AnalisisComprobante {
    * otras dos, y lo que hace es impedir ese verde.
    */
   filasSinResolver?: number;
+  /**
+   * ¿Alguno de esos jirones está en el borde de abajo de la tabla?
+   *
+   * Cuando lo está, la fila que falta se puede recuperar releyendo esa franja
+   * sola, sin volver a pasar por la página entera.
+   */
+  faltaElFinalDeLaTabla?: boolean;
 }
 
 /**

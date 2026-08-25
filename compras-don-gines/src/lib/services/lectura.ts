@@ -21,7 +21,7 @@ import { conciliarCentavos, type Conciliacion } from '@/lib/domain/conciliacion'
 import { mergeHeaders, toPrintedSummary, toRawItems } from '@/lib/ocr/normalize';
 import { elegirAnalizador } from '@/lib/ocr/parsers';
 import type { AnalisisComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
-import type { OcrHeader, OcrSummary } from '@/lib/ocr/types';
+import type { OcrHeader, OcrSummary, ZonaAReleer } from '@/lib/ocr/types';
 import { env } from '@/lib/env';
 import { versionEnEjecucion } from '@/lib/version';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
@@ -88,8 +88,9 @@ export interface ResultadoLectura {
   intentos: number;
   observaciones: string[];
   /** Cuando la lectura no cerró y todavía quedan vueltas, qué hay que releer. */
-  releer: { motivo: string } | null;
+  releer: { motivo: string; zona: ZonaAReleer | null } | null;
 }
+
 
 interface Candidato {
   etiqueta: string;
@@ -100,6 +101,10 @@ interface Candidato {
   observaciones: string[];
   /** Filas que el lector contó en la imagen, sumando todas las páginas. */
   filasEnLaImagen: number | null;
+  /** Jirones con forma de fila que el analizador no pudo identificar. */
+  filasSinResolver: number;
+  /** ¿Alguno de esos jirones está entre el último artículo leído y el pie? */
+  faltaElFinalDeLaTabla: boolean;
 }
 
 interface CandidatoEvaluado extends Candidato {
@@ -322,7 +327,9 @@ export async function registrarLectura(
       renglonesSinAsociar: asociaciones.filter((a) => !a.productId).length,
       intentos: intentos.length,
       observaciones,
-      releer: puedeReleer ? { motivo: describirProblema(mejor.informe) } : null,
+      releer: puedeReleer
+        ? { motivo: describirProblema(mejor.informe), zona: zonaAReleer(mejor) }
+        : null,
     };
   } catch (error) {
     await prisma.document
@@ -387,6 +394,8 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
       analizador: analizador.codigo,
       observaciones: analisis.observaciones,
       filasEnLaImagen: filasDeEsteCandidato > 0 ? filasDeEsteCandidato : filasEnLaImagen,
+      filasSinResolver: sinResolver,
+      faltaElFinalDeLaTabla: analisis.faltaElFinalDeLaTabla ?? false,
     });
   }
   return candidatos;
@@ -563,6 +572,33 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
 }
 
 /** Resume en castellano qué fue lo que no cerró, para pedir la relectura. */
+/**
+ * Qué franja de la foto conviene volver a leer, si es que hay una.
+ *
+ * Las tres condiciones tienen que darse juntas, y cada una aporta algo que las
+ * otras dos no:
+ *
+ *  1. **Hay un jirón con forma de fila sin resolver.** Sin esto no hay ninguna
+ *     evidencia de que falte algo: el comprobante puede tener veintidós
+ *     renglones porque tiene veintidós.
+ *  2. **Está entre el último artículo leído y el pie.** Un jirón en el medio de
+ *     la tabla es casi siempre una fila que quedó partida en dos, y releer el
+ *     borde de abajo no lo arregla. Uno en la cola sí dice dónde ir a buscar.
+ *  3. **Se vieron más filas de las que se entendieron.** Es la confirmación
+ *     desde el otro lado: el conteo y la interpretación no coinciden.
+ *
+ * Con las tres, la fila que falta está en la franja de abajo de la tabla y se
+ * puede ir a buscar ahí sola. Con dos, no alcanza: releer la zona equivocada
+ * gasta una vuelta de OCR y deja el comprobante igual de rojo.
+ */
+function zonaAReleer(mejor: CandidatoEvaluado): ZonaAReleer | null {
+  if (mejor.filasSinResolver <= 0) return null;
+  if (!mejor.faltaElFinalDeLaTabla) return null;
+  const vistas = mejor.filasEnLaImagen ?? 0;
+  if (vistas <= mejor.items.length) return null;
+  return 'BORDE_INFERIOR_TABLA';
+}
+
 export function describirProblema(informe: ValidationReport): string {
   const fallas = informe.checks.filter((c) => c.severity === 'ERROR');
   if (fallas.length === 0) return 'La lectura anterior no quedó controlada.';

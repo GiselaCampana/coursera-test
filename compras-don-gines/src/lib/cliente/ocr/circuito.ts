@@ -1,5 +1,6 @@
 import { AppError } from '@/lib/errors';
 import { pedir } from '@/lib/cliente/red';
+import type { ZonaAReleer } from '@/lib/ocr/types';
 
 /**
  * El circuito de lectura, en un solo lugar.
@@ -62,10 +63,18 @@ export async function leerYControlar(entrada: EntradaDeCircuito): Promise<Salida
   const observaciones: string[] = [];
   let intento = 1;
   let motivo: string | undefined;
+  /*
+   * Qué zona pidió releer el servidor en la vuelta anterior.
+   *
+   * El servidor sabe qué le faltó al texto; el lector sabe dónde cae eso en la
+   * foto. Cuando lo único que falta es el final de la tabla, el lector va a
+   * buscar esa franja sola en vez de repetir la página entera.
+   */
+  let zona: ZonaAReleer | null = null;
 
   for (;;) {
     if (intento > 1) alAvanzar({ etapa: 'RELEYENDO', detalle: motivo ?? null });
-    const lectura = await sesion.leer(intento, motivo);
+    const lectura = await sesion.leer(intento, motivo, zona);
 
     alAvanzar({ etapa: 'VERIFICANDO_TOTALES' });
     const respuesta = await pedir(`/api/comprobantes/${documentId}/lectura`, {
@@ -85,6 +94,7 @@ export async function leerYControlar(entrada: EntradaDeCircuito): Promise<Salida
 
     if (control.puedeGuardar || !control.releer || intento >= maximoIntentos) break;
     motivo = control.releer.motivo;
+    zona = control.releer.zona ?? null;
     intento += 1;
   }
 

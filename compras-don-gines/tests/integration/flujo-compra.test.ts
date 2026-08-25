@@ -80,6 +80,18 @@ async function leerComprobante(
     encabezado?: string;
     articulos?: string;
     resumen?: string;
+    /**
+     * El texto de la página entera, cuando no es la suma de las tres zonas.
+     *
+     * Por omisión se arman pegando encabezado, artículos y resumen, que alcanza
+     * para los comprobantes dibujados. Pero sobre una foto real la página
+     * completa es **una** lectura propia, con su propio orden y su propia
+     * basura, y hay cosas que sólo se pueden probar así: un jirón de fila se
+     * reconoce como "el final de la tabla" por dónde cae respecto de los
+     * renglones que sí se leyeron, y pegar bloques de otra fuente detrás lo
+     * correría de lugar.
+     */
+    completo?: string;
   } = {},
 ) {
   return registrarLectura(usuario, documentId, {
@@ -93,11 +105,13 @@ async function leerComprobante(
     paginas: [
       {
         numero: 1,
-        textoCompleto: [
-          opciones.encabezado ?? LOS_CALVOS_ENCABEZADO_OCR,
-          opciones.articulos ?? LOS_CALVOS_ARTICULOS_OCR,
-          opciones.resumen ?? LOS_CALVOS_RESUMEN_OCR,
-        ].join('\n'),
+        textoCompleto:
+          opciones.completo ??
+          [
+            opciones.encabezado ?? LOS_CALVOS_ENCABEZADO_OCR,
+            opciones.articulos ?? LOS_CALVOS_ARTICULOS_OCR,
+            opciones.resumen ?? LOS_CALVOS_RESUMEN_OCR,
+          ].join('\n'),
         textoEncabezado: opciones.encabezado ?? LOS_CALVOS_ENCABEZADO_OCR,
         textoArticulos: opciones.articulos ?? LOS_CALVOS_ARTICULOS_OCR,
         textoResumen: opciones.resumen ?? LOS_CALVOS_RESUMEN_OCR,
@@ -1023,7 +1037,7 @@ describe('la fila que se pierden el detector y el analizador a la vez', () => {
     await adjuntarPagina(documento.id, SAFARI_COMPLETO);
 
     const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
-      encabezado: SAFARI_COMPLETO,
+      completo: SAFARI_COMPLETO,
       articulos: RECORTE_CORTADO,
       resumen: SAFARI_RESUMEN,
     });
@@ -1045,7 +1059,7 @@ describe('la fila que se pierden el detector y el analizador a la vez', () => {
     await adjuntarPagina(documento.id, SAFARI_COMPLETO);
 
     const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
-      encabezado: SAFARI_COMPLETO,
+      completo: SAFARI_COMPLETO,
       articulos: RECORTE_CORTADO,
       resumen: SAFARI_RESUMEN,
     });
@@ -1075,7 +1089,7 @@ describe('la fila que se pierden el detector y el analizador a la vez', () => {
     await adjuntarPagina(documento.id, SAFARI_COMPLETO);
 
     const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
-      encabezado: SAFARI_COMPLETO,
+      completo: SAFARI_COMPLETO,
       articulos: SAFARI_ARTICULOS,
       resumen: SAFARI_RESUMEN,
     });
@@ -1085,5 +1099,181 @@ describe('la fila que se pierden el detector y el analizador a la vez', () => {
     expect(control!.expected).toBe('23');
     expect(control!.severity).toBe('OK');
     expect(lectura.report.canSave).toBe(true);
+  });
+});
+
+describe('relectura focalizada del borde inferior de la tabla', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /** El recorte de la tabla cortado antes de la última fila. */
+  const RECORTE_CORTADO = SAFARI_ARTICULOS.split('\n')
+    .filter((linea) => !linea.includes('TOMATE'))
+    .join('\n');
+
+  /** La fila que aparece cuando se relee sólo la franja de abajo. */
+  const FILA_DEL_BORDE = SAFARI_ARTICULOS.split('\n')
+    .filter((linea) => linea.includes('TOMATE'))
+    .join('\n');
+
+  it('pide releer el borde inferior, y no la página entera', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    /*
+     * Las tres condiciones se dieron juntas: hay un jirón con forma de fila, está
+     * después del último artículo identificado, y se vieron más filas de las que
+     * se entendieron. Con eso el servidor puede decir *dónde* buscar, en vez de
+     * pedir otra vuelta completa.
+     */
+    expect(lectura.releer).not.toBeNull();
+    expect(lectura.releer!.zona).toBe('BORDE_INFERIOR_TABLA');
+  });
+
+  it('recupera TOMATE EN BOTELLA y el comprobante cierra en 23 de 23', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    // Primera vuelta: la tabla llega cortada.
+    const primera = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+    expect(primera.report.canSave).toBe(false);
+
+    /*
+     * Segunda vuelta: lo que devuelve el lector después de releer la franja es el
+     * texto que ya tenía **más** el de la franja. No se reemplaza: si se
+     * reemplazara, el intento 2 traería dos o tres renglones y perdería contra el
+     * intento 1, y la relectura no serviría de nada.
+     */
+    const segunda = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      intento: 2,
+      completo: SAFARI_COMPLETO,
+      articulos: `${RECORTE_CORTADO}\n${FILA_DEL_BORDE}`,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    const control = segunda.report.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control!.actual).toBe('23');
+    expect(control!.expected).toBe('23');
+    expect(control!.severity).toBe('OK');
+
+    // Y ya no queda ningún jirón sin resolver: no hay a dónde volver.
+    expect(segunda.releer).toBeNull();
+    expect(segunda.report.canSave).toBe(true);
+
+    // La fila recuperada, con sus números del papel.
+    const items = await prisma.documentItem.findMany({
+      where: { documentId: documento.id },
+      orderBy: { lineNumber: 'asc' },
+    });
+    expect(items).toHaveLength(23);
+    const tomate = items.find((i) => i.description.includes('TOMATE'));
+    expect(tomate).toBeDefined();
+    expect(tomate!.supplierCode).toBe('ART-01477');
+    expect(tomate!.quantity.toFixed(2)).toBe('32.00');
+    expect(tomate!.unitNetPrice.toFixed(2)).toBe('1021.35');
+    expect(tomate!.grossSubtotal.toFixed(2)).toBe('32683.24');
+
+    // Y el comprobante entero, contra el papel.
+    expect(segunda.report.computed.itemCount).toBe(23);
+    expect(segunda.report.computed.totalQuantityKg).toBe('480.340');
+    expect(segunda.report.computed.totalCost).toBe('4816812.73');
+  });
+
+  it('si la franja no trae nada nuevo, queda en rojo y no inventa el renglón', async () => {
+    /*
+     * El límite. Si la segunda pasada sobre la franja devuelve lo mismo que ya se
+     * tenía —porque en esa parte de la foto no se lee—, el comprobante tiene que
+     * quedar en rojo para que lo mire una persona.
+     *
+     * Lo que **no** puede hacer es completar el renglón que falta restando el
+     * detalle contra el neto impreso: daría un importe que cierra y un precio que
+     * nadie leyó, y ese precio terminaría en el costo del artículo y de ahí en el
+     * precio de venta al público.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+    const segunda = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      intento: 2,
+      completo: SAFARI_COMPLETO,
+      articulos: RECORTE_CORTADO,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    expect(segunda.report.canSave).toBe(false);
+
+    const items = await prisma.documentItem.findMany({ where: { documentId: documento.id } });
+    expect(items).toHaveLength(22);
+    // Ningún renglón inventado con el importe que falta.
+    expect(items.some((i) => i.grossSubtotal.toFixed(2) === '32683.24')).toBe(false);
+  });
+});
+
+describe('cuándo NO corresponde releer el borde', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  it('un jirón en el medio de la tabla no manda a releer el borde', async () => {
+    /*
+     * La condición que distingue "la franja se cortó y falta el final" de "una
+     * fila quedó partida en el medio".
+     *
+     * Se construye moviendo el mismo jirón —el de TOMATE— al principio del
+     * cuerpo de la tabla en la página completa. Todo lo demás queda igual: sigue
+     * habiendo un tramo con forma de fila sin identificar, y se siguen viendo más
+     * filas de las que se entienden. Lo único que cambia es que ahora tiene
+     * renglones identificados **después**, así que no dice nada sobre el borde de
+     * abajo.
+     *
+     * Sin esta prueba, la condición de la cola podría desaparecer sin que nada se
+     * pusiera rojo: las otras dos alcanzan para el caso feliz. Lo que se rompería
+     * en silencio es lo caro —una pasada de OCR sobre la franja equivocada, y el
+     * comprobante igual de rojo—.
+     */
+    const lineas = SAFARI_COMPLETO.split('\n');
+    const jiron = lineas.findIndex((l) => l.includes('$3268324'));
+    expect(jiron).toBeGreaterThan(0);
+    const primerArticulo = lineas.findIndex((l) => l.includes('ART-00873'));
+    const movido = [
+      ...lineas.slice(0, primerArticulo),
+      lineas[jiron],
+      ...lineas.slice(primerArticulo, jiron),
+      ...lineas.slice(jiron + 1),
+    ].join('\n');
+
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, movido);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: movido,
+      articulos: SAFARI_ARTICULOS.split('\n')
+        .filter((l) => !l.includes('TOMATE'))
+        .join('\n'),
+      resumen: SAFARI_RESUMEN,
+    });
+
+    // Sigue en rojo, que es lo correcto: falta un artículo.
+    expect(lectura.report.canSave).toBe(false);
+    // Pero no se manda a releer una franja que no es la que tiene el problema.
+    expect(lectura.releer?.zona ?? null).toBeNull();
   });
 });

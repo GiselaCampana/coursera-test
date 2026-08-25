@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+  bordeInferiorDeLaTabla,
   columnasNumericas,
   detectarRegiones,
   pareceFilaDeArticulo,
   pareceRenglonDePie,
   type LineaOcr,
+  type RegionesDetectadas,
 } from '@/lib/cliente/ocr/regiones';
 
 /**
@@ -97,5 +99,85 @@ describe('reparto de la página en zonas', () => {
     expect(regiones.filasDetectadas).toBe(0);
     expect(regiones.articulos).not.toBeNull();
     expect(regiones.resumen).not.toBeNull();
+  });
+});
+
+describe('la franja de abajo de la tabla', () => {
+  /*
+   * Es la que se relee cuando el recorte se cortó antes de terminar y quedó una
+   * fila afuera. Todo en coordenadas de 0 a 1 sobre la página.
+   */
+  const regiones = (parcial: Partial<RegionesDetectadas>): RegionesDetectadas => ({
+    encabezado: { left: 0, top: 0, width: 1, height: 0.2 },
+    articulos: { left: 0, top: 0.25, width: 1, height: 0.5 },
+    resumen: { left: 0, top: 0.8, width: 1, height: 0.2 },
+    filasDetectadas: 23,
+    ...parcial,
+  });
+
+  it('llega hasta donde empieza el pie, y no antes', () => {
+    /*
+     * El hueco entre la tabla y el pie se incluye a propósito: si el detector
+     * cortó la tabla de más, la fila que falta está justo ahí, en tierra de
+     * nadie, y ésa es la razón por la que no salió en el recorte original.
+     */
+    const banda = bordeInferiorDeLaTabla(regiones({}))!;
+    expect(banda.top + banda.height).toBeCloseTo(0.8, 5);
+  });
+
+  it('abarca las últimas filas de la tabla, no una sola', () => {
+    /*
+     * Con una sola fila no alcanzaría: la franja tiene que incluir también la
+     * última que sí se leyó, porque es lo único que le permite al analizador
+     * reconocer dónde empalma lo nuevo con lo que ya tenía.
+     */
+    const banda = bordeInferiorDeLaTabla(regiones({}))!;
+    const altoDeFila = 0.5 / 23;
+    // Empieza tres filas antes del final de la tabla (0,25 + 0,5 = 0,75).
+    expect(banda.top).toBeCloseTo(0.75 - altoDeFila * 3, 5);
+  });
+
+  it('es una fracción chica de la página: por eso vale la pena', () => {
+    // Si abarcara media página, releerla costaría lo mismo que releer todo y no
+    // tendría sentido preferirla a la relectura normal.
+    const banda = bordeInferiorDeLaTabla(regiones({}))!;
+    expect(banda.height).toBeLessThan(0.2);
+  });
+
+  it('sin pie detectado se estira un poco más allá del final de la tabla', () => {
+    // Es lo único que se puede afirmar sin inventar: la fila que falta está
+    // pasando el corte, pero no se sabe hasta dónde llega el detalle.
+    const banda = bordeInferiorDeLaTabla(regiones({ resumen: null }))!;
+    expect(banda.top + banda.height).toBeCloseTo(0.8, 5);
+  });
+
+  it('no devuelve nada si no se detectó la tabla', () => {
+    // Sin tabla no hay borde de tabla. Releer una franja arbitraria de la foto
+    // gastaría una pasada de OCR para nada.
+    expect(bordeInferiorDeLaTabla(regiones({ articulos: null }))).toBeNull();
+  });
+
+  it('respeta un alto mínimo aunque la tabla se haya detectado diminuta', () => {
+    /*
+     * Cuando el detector se equivoca por lo chico, la franja calculada puede
+     * quedar de dos milésimas de página: recortarla así daría una tira de pocos
+     * píxeles donde no se lee nada. El mínimo es lo que hace que la relectura
+     * tenga algo que leer.
+     */
+    const banda = bordeInferiorDeLaTabla(
+      regiones({
+        articulos: { left: 0, top: 0.5, width: 1, height: 0.01 },
+        resumen: { left: 0, top: 0.51, width: 1, height: 0.4 },
+      }),
+    )!;
+    expect(banda.height).toBeGreaterThanOrEqual(0.08);
+  });
+
+  it('nunca se sale de la página', () => {
+    const banda = bordeInferiorDeLaTabla(
+      regiones({ articulos: { left: 0, top: 0.9, width: 1, height: 0.1 }, resumen: null }),
+    )!;
+    expect(banda.top).toBeGreaterThanOrEqual(0);
+    expect(banda.top + banda.height).toBeLessThanOrEqual(1.0000001);
   });
 });

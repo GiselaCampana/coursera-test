@@ -216,3 +216,57 @@ export function ensanchar(region: Region, proporcion = 0.06): Region {
   const height = Math.min(1 - top, region.height + proporcion * 2);
   return { ...region, top, height };
 }
+
+/**
+ * Cuántas filas de la tabla entran, como mínimo, en la relectura del borde.
+ *
+ * Con una sola no alcanza: si el recorte se cortó una fila antes de terminar, la
+ * franja tiene que abarcar también la última que sí se leyó, porque es la única
+ * forma de que el analizador reconozca dónde empalma. Tres da margen para que
+ * entre entera aunque la altura de fila esté mal estimada, y sigue siendo una
+ * fracción chica de la página.
+ */
+const FILAS_DEL_BORDE = 3;
+
+/** Alto mínimo de la franja, por si la tabla se detectó más chica de lo que es. */
+const ALTO_MINIMO_DEL_BORDE = 0.08;
+
+/**
+ * La franja de abajo de la tabla, para ir a buscar la fila que se perdió.
+ *
+ * El caso: el recorte de la tabla se cortó antes de terminar, quedó un jirón con
+ * forma de fila entre el último artículo leído y el pie, y se vieron más filas
+ * de las que se entendieron. Con eso, lo que falta está acá abajo y no hace
+ * falta volver a pasar por la página entera —que en un iPhone son varias
+ * pasadas de OCR— para ir a buscarlo.
+ *
+ * La franja va desde unas pocas filas antes del final de la tabla hasta donde
+ * empieza el pie. Se incluye el hueco entre la tabla y el pie a propósito: si el
+ * detector cortó la tabla de más, la fila que falta está justamente ahí, en
+ * tierra de nadie, y es la razón por la que no salió en el recorte original.
+ */
+export function bordeInferiorDeLaTabla(regiones: RegionesDetectadas): Region | null {
+  const tabla = regiones.articulos;
+  if (!tabla) return null;
+
+  const finDeLaTabla = Math.min(1, tabla.top + tabla.height);
+
+  /*
+   * Hasta dónde llega la franja.
+   *
+   * Si se detectó el pie, hasta donde el pie empieza: ahí termina todo lo que
+   * puede ser una fila. Si no, un poco más abajo del final de la tabla, que es
+   * lo único que se puede afirmar sin inventar.
+   */
+  const abajo = regiones.resumen
+    ? Math.max(finDeLaTabla, Math.min(1, regiones.resumen.top))
+    : Math.min(1, finDeLaTabla + 0.05);
+
+  const altoDeFila = tabla.height / Math.max(1, regiones.filasDetectadas);
+  const arriba = Math.max(tabla.top, finDeLaTabla - altoDeFila * FILAS_DEL_BORDE);
+
+  const alto = Math.max(ALTO_MINIMO_DEL_BORDE, abajo - arriba);
+  const top = Math.max(0, Math.min(arriba, 1 - alto));
+
+  return { left: tabla.left, top, width: tabla.width, height: Math.min(1 - top, alto) };
+}

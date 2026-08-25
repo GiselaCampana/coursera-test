@@ -12,7 +12,14 @@ import { recortar, type Mapa } from '@/lib/cliente/ocr/imagen';
 import { mapaDesdeBlob } from '@/lib/cliente/ocr/lienzo';
 import { limpiarFuerte, prepararPagina, prepararRecorte } from '@/lib/cliente/ocr/preproceso';
 import { esPdf, paginasDePdf } from '@/lib/cliente/ocr/pdf';
-import { detectarRegiones, ensanchar, type Region, type RegionesDetectadas } from '@/lib/cliente/ocr/regiones';
+import {
+  bordeInferiorDeLaTabla,
+  detectarRegiones,
+  ensanchar,
+  type Region,
+  type RegionesDetectadas,
+} from '@/lib/cliente/ocr/regiones';
+import type { ZonaAReleer } from '@/lib/ocr/types';
 import { PSM, leerMapa, lectorPreparado, type ProgresoLector } from '@/lib/cliente/ocr/tesseract';
 
 export type EtapaLectura =
@@ -76,6 +83,26 @@ export class SesionLectura {
   private metadatos: { inclinacion: number; perspectivaCorregida: boolean }[] = [];
   private regionesPorPagina: RegionesDetectadas[] = [];
   private observaciones: string[] = [];
+  /**
+   * Lo que devolvió la vuelta anterior.
+   *
+   * La relectura del borde de la tabla lee **una franja sola** y no la página,
+   * así que por sí misma devolvería dos o tres renglones. Lo que se manda al
+   * servidor es el texto anterior más el de la franja: el analizador ya sabe
+   * unificar lecturas repetidas del mismo renglón, y así la vuelta focalizada
+   * agrega la fila que faltaba sin perder las que ya estaban.
+   */
+  private ultimaLectura: LecturaPagina[] = [];
+  /**
+   * Cuántas veces se releyó el borde de abajo.
+   *
+   * Se hace una sola vez, con dos segmentaciones distintas sobre la misma
+   * franja. Si con eso no aparece la fila, insistir no la va a hacer aparecer:
+   * el comprobante queda en rojo para que lo mire una persona, que es lo
+   * correcto. Nunca se completa el renglón faltante haciendo la resta contra el
+   * neto: eso sería inventar un precio que nadie leyó.
+   */
+  private bordesReleidos = 0;
 
   constructor(private readonly alAvanzar?: (avance: AvanceLectura) => void) {}
 
@@ -153,9 +180,26 @@ export class SesionLectura {
    * primer o el último renglón, justo en el borde del recorte—, se limpia más
    * fuerte y se cambia la segmentación, para que Tesseract agrupe distinto.
    */
-  async leer(intento: number, motivo?: string): Promise<LecturaComprobante> {
+  async leer(
+    intento: number,
+    motivo?: string,
+    zona?: ZonaAReleer | null,
+  ): Promise<LecturaComprobante> {
     if (this.paginas.length === 0) {
       throw new Error('Hay que preparar las páginas antes de leer.');
+    }
+
+    /*
+     * El atajo: cuando lo único que falta es el final de la tabla, se relee esa
+     * franja y nada más.
+     *
+     * Vale la pena el desvío porque una vuelta normal cuesta la página entera
+     * más la tabla por franjas más el pie —ocho o diez pasadas de OCR, que en un
+     * teléfono son varios segundos cada una— para ir a buscar un renglón que se
+     * sabe dónde está.
+     */
+    if (zona === 'BORDE_INFERIOR_TABLA' && this.puedeReleerElBorde()) {
+      return this.releerBordeDeLaTabla(intento, motivo);
     }
 
     const comienzo = Date.now();
@@ -263,6 +307,8 @@ export class SesionLectura {
       });
     }
 
+    this.ultimaLectura = resultados;
+
     const confianza =
       resultados.reduce((suma, p) => suma + p.confianza, 0) / Math.max(1, resultados.length);
 
@@ -276,6 +322,95 @@ export class SesionLectura {
       paginas: resultados,
       duracionMs: Date.now() - comienzo,
       confianza,
+      observaciones: this.observaciones,
+    };
+  }
+
+  /** ¿Hay con qué hacer la relectura del borde, y no se hizo ya? */
+  private puedeReleerElBorde(): boolean {
+    if (this.bordesReleidos >= 1) return false;
+    if (this.ultimaLectura.length === 0) return false;
+    return this.regionesPorPagina.some((r) => r && bordeInferiorDeLaTabla(r) !== null);
+  }
+
+  /**
+   * Relee sólo la franja de abajo de la tabla y la agrega a lo ya leído.
+   *
+   * Dos pasadas sobre la misma franja, con segmentaciones distintas: una la trata
+   * como una columna de renglones apilados y la otra como un bloque. Es la misma
+   * disyuntiva que en la tabla entera —dónde cae el corte cambia el resultado— y
+   * acá cuesta barato hacer las dos, porque la franja es una fracción de la
+   * página.
+   *
+   * Dos y no más. Si la fila no aparece con ninguna de las dos segmentaciones,
+   * es que en esa parte de la foto no se lee, y repetir la misma pasada no la va
+   * a hacer legible. Ahí el comprobante tiene que quedar en rojo: la alternativa
+   * —completar el renglón que falta restando contra el neto impreso— daría un
+   * importe que cierra y un precio que nadie leyó, y ese precio terminaría en el
+   * costo del artículo y en el precio de venta.
+   */
+  private async releerBordeDeLaTabla(
+    intento: number,
+    motivo?: string,
+  ): Promise<LecturaComprobante> {
+    const comienzo = Date.now();
+    this.bordesReleidos += 1;
+    this.avisar({ etapa: 'RELEYENDO', avance: null });
+
+    const resultados: LecturaPagina[] = [];
+
+    for (let i = 0; i < this.paginas.length; i++) {
+      const previa = this.ultimaLectura[i];
+      const regiones = this.regionesPorPagina[i];
+      const banda = regiones ? bordeInferiorDeLaTabla(regiones) : null;
+
+      // Una página sin tabla detectada, o sin lectura previa, se deja como está:
+      // no hay nada que releer ni con qué empalmarlo.
+      if (!previa || !banda) {
+        if (previa) resultados.push(previa);
+        continue;
+      }
+
+      const desde = performance.now();
+      const mapa = limpiarFuerte(this.paginas[i]);
+      const partes: string[] = [];
+      for (const psm of [PSM.SINGLE_COLUMN, PSM.SINGLE_BLOCK]) {
+        this.avisar({
+          etapa: 'LEYENDO_ARTICULOS',
+          avance: null,
+          pagina: i + 1,
+          totalPaginas: this.paginas.length,
+        });
+        partes.push(await this.leerRegion(mapa, banda, true, 'LEYENDO_ARTICULOS', psm));
+      }
+
+      const textoArticulos = [previa.textoArticulos, ...partes]
+        .filter((t): t is string => typeof t === 'string' && t.trim() !== '')
+        .join('\n');
+
+      resultados.push({
+        ...previa,
+        textoArticulos,
+        tiempos: [
+          ...(previa.tiempos ?? []),
+          { zona: 'Borde inferior de la tabla', ms: Math.round(performance.now() - desde) },
+        ],
+      });
+    }
+
+    this.ultimaLectura = resultados;
+
+    return {
+      intento,
+      estrategia:
+        'Relectura del borde inferior de la tabla, con dos segmentaciones sobre la misma franja' +
+        (motivo ? `. Motivo: ${motivo}` : ''),
+      proveedor: PROVEEDOR,
+      modelo: MODELO,
+      paginas: resultados,
+      duracionMs: Date.now() - comienzo,
+      confianza:
+        resultados.reduce((suma, p) => suma + p.confianza, 0) / Math.max(1, resultados.length),
       observaciones: this.observaciones,
     };
   }

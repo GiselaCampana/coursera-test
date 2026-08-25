@@ -11,6 +11,26 @@
  * Decimal la hace el dominio, con parseCanonicalNumber.
  */
 
+/**
+ * Qué parte de la imagen conviene volver a mirar.
+ *
+ * El servidor no sabe dónde cae nada en la foto: sabe qué le faltó al texto. La
+ * geometría la tiene el lector, que es el que recortó las zonas. Por eso esto es
+ * un nombre de zona y no un rectángulo — el que sabe dónde está el borde de la
+ * tabla es el teléfono.
+ *
+ * `BORDE_INFERIOR_TABLA` es el caso de TOMATE EN BOTELLA: el recorte de la tabla
+ * se cortó antes de terminar, quedó un jirón con forma de fila entre el último
+ * artículo leído y el pie, y hay más filas vistas que renglones entendidos. Con
+ * los tres a la vez, la fila que falta está en la franja de abajo y no hace
+ * falta releer nada más.
+ *
+ * Vive acá y no en el servicio de lectura porque lo usan los dos lados: el
+ * servidor lo emite y el lector del navegador lo consume, y el servicio es
+ * `server-only`.
+ */
+export type ZonaAReleer = 'BORDE_INFERIOR_TABLA';
+
 export interface OcrHeader {
   docType?: 'FACTURA' | 'REMITO' | null;
   letter?: string | null;

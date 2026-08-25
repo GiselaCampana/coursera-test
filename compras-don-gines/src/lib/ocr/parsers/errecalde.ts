@@ -150,19 +150,18 @@ export const analizadorErrecalde: AnalizadorComprobante = {
     const netoDelPie = parseArNumber(pieLeido.summary.netTotal ?? '');
     const medianaDeLosRenglones =
       sinCota.items.length >= MINIMO_PARA_JUZGAR_EL_PIE ? medianaDeSubtotales(sinCota.items) : null;
-    const pieCreible =
-      !netoDelPie ||
-      !medianaDeLosRenglones ||
-      netoDelPie.gte(medianaDeLosRenglones);
-
-    const summary = pieCreible ? pieLeido.summary : pieVacio();
-    if (!pieCreible && netoDelPie && medianaDeLosRenglones) {
-      observaciones.push(
-        `El neto gravado se leyó como ${netoDelPie.toFixed(2)} y el renglón mediano de la tabla ` +
+    const porLaMediana =
+      netoDelPie && medianaDeLosRenglones && netoDelPie.lt(medianaDeLosRenglones)
+        ? `El neto gravado se leyó como ${netoDelPie.toFixed(2)} y el renglón mediano de la tabla ` +
           `es de ${medianaDeLosRenglones.toFixed(2)}: un neto no puede ser menor que uno de sus ` +
-          'renglones. El pie no se leyó bien y queda para revisión.',
-      );
-    }
+          'renglones. El pie no se leyó bien y queda para revisión.'
+        : null;
+
+    const porLaSuma = netoDelPie ? sumaConfirmadaExcedeElNeto(sinCota.items, netoDelPie) : null;
+
+    const summary = porLaMediana || porLaSuma ? pieVacio() : pieLeido.summary;
+    if (porLaMediana) observaciones.push(porLaMediana);
+    if (porLaSuma) observaciones.push(porLaSuma);
 
     /*
      * La tabla también se arma con las dos lecturas.
@@ -178,7 +177,7 @@ export const analizadorErrecalde: AnalizadorComprobante = {
      * código —"RRA MELIN 106kg $1230809"— que son la misma fila cortada y que
      * entrarían como artículos nuevos.
      */
-    const { items, avisos, filasSinResolver } = analizarArticulos(
+    const { items, avisos, filasSinResolver, faltaElFinalDeLaTabla } = analizarArticulos(
       textos.articulos || textos.completo,
       textos.articulos ? textos.completo : '',
       { netoImpreso: parseArNumber(summary.netTotal ?? '') ?? null },
@@ -226,7 +225,7 @@ export const analizadorErrecalde: AnalizadorComprobante = {
       }
     }
 
-    return { header, items, summary, observaciones, filasSinResolver };
+    return { header, items, summary, observaciones, filasSinResolver, faltaElFinalDeLaTabla };
   },
 };
 
@@ -629,7 +628,7 @@ export function analizarArticulos(
   texto: string,
   textoSecundario = '',
   limites: LimitesDelPie = { netoImpreso: null },
-): { items: OcrItem[]; avisos: string[]; filasSinResolver: number } {
+): { items: OcrItem[]; avisos: string[]; filasSinResolver: number; faltaElFinalDeLaTabla: boolean } {
   const avisos: string[] = [];
 
   /*
@@ -751,7 +750,12 @@ export function analizarArticulos(
     );
   }
 
-  return { items, avisos, filasSinResolver: jirones.length };
+  return {
+    items,
+    avisos,
+    filasSinResolver: jirones.length,
+    faltaElFinalDeLaTabla: jirones.some((j) => j.enLaCola),
+  };
 }
 
 /**
@@ -778,12 +782,27 @@ export function analizarArticulos(
  * Se cuenta un jirón sólo si su importe no es el de ningún renglón ya
  * interpretado: si coincide, es otra lectura de una fila que ya está.
  */
+export interface JironDeFila {
+  /** El texto tal cual salió del OCR, para poder ir a buscarlo a la foto. */
+  linea: string;
+  /** Los importes que podría tener, ya acotados por el neto impreso. */
+  subtotales: Decimal[];
+  /**
+   * ¿Está después del último renglón que sí se pudo identificar?
+   *
+   * Es lo que distingue "la franja se cortó y falta el final de la tabla" —que
+   * se arregla releyendo el borde de abajo— de "una fila quedó partida en el
+   * medio", que no dice dónde ir a buscar.
+   */
+  enLaCola: boolean;
+}
+
 export function jironesSinResolver(
   fuentes: string[],
   interpretadas: FilaErrecalde[],
   netoImpreso: Decimal | null,
-): { linea: string; subtotales: Decimal[] }[] {
-  const jirones: { linea: string; subtotales: Decimal[] }[] = [];
+): JironDeFila[] {
+  const jirones: JironDeFila[] = [];
 
   /* Dos importes son el mismo renglón si difieren en menos de un peso: el OCR
    * se come un dígito de los centavos con frecuencia ($187.236,7 por
@@ -800,8 +819,25 @@ export function jironesSinResolver(
 
   for (const fuente of fuentes) {
     if (!fuente || fuente.trim() === '') continue;
-    for (const cruda of fuente.split('\n')) {
-      const linea = cruda.trim();
+    const lineas = fuente.split('\n');
+
+    /*
+     * Hasta dónde llegó la tabla que sí se pudo leer.
+     *
+     * Un jirón que aparece **después** del último renglón identificado es el
+     * caso que interesa: la franja se cortó y lo que falta está en el borde de
+     * abajo. Uno que aparece en el medio es casi siempre un pedazo de una fila
+     * que quedó partida en dos, y ése no dice dónde ir a buscar.
+     */
+    let ultimaIdentificada = -1;
+    for (let i = 0; i < lineas.length; i++) {
+      const l = lineas[i].trim();
+      if (l.length < 8 || NO_ES_ARTICULO.test(l)) continue;
+      if (analizarFila(l, netoImpreso)) ultimaIdentificada = i;
+    }
+
+    for (let i = 0; i < lineas.length; i++) {
+      const linea = lineas[i].trim();
       if (linea.length < 8) continue;
       if (NO_ES_ARTICULO.test(linea)) continue;
       // Si se pudo leer entera, no es un jirón: es un renglón.
@@ -824,7 +860,7 @@ export function jironesSinResolver(
       if (subtotales.length === 0) continue;
       if (yaEstá(subtotales)) continue;
 
-      jirones.push({ linea, subtotales });
+      jirones.push({ linea, subtotales, enLaCola: i > ultimaIdentificada });
     }
   }
 
@@ -1786,6 +1822,73 @@ function hayRastroDe(valor: Decimal, texto: string): boolean {
 }
 
 /** Un resumen vacío, con las listas listas para llenar. */
+/**
+ * La segunda defensa del pie: lo que ya está confirmado no puede pasarse.
+ *
+ * Los subtotales de los renglones son partes del neto, así que la suma de los
+ * que se leyeron **y cierran** no puede superarlo. Si con veintidós renglones
+ * confirmados la suma ya pasa el neto impreso, el que está mal es el neto: los
+ * renglones se sostienen cada uno contra su propia cuenta, y el neto no se
+ * sostiene contra nada.
+ *
+ * Es una defensa distinta de la de la mediana y por eso vale la pena tener las
+ * dos: la mediana atrapa un neto leído absurdamente chico —$4 en una factura de
+ * millones— y ésta atrapa uno leído *casi* bien, al que le falta un dígito o le
+ * sobra una coma, que la mediana deja pasar sin chistar.
+ *
+ * Tres condiciones para poder afirmarlo, y ninguna es opcional:
+ *
+ *  1. **Sólo renglones que cierran y que caben.** Que cierre no alcanza: la
+ *     lectura que perdió la coma en los tres números a la vez —475 kg a
+ *     $13.295,25 con subtotal $6.315.243— cierra impecable contra sí misma. Lo
+ *     que la delata es que un solo renglón no puede valer más que la factura
+ *     entera. Sin las dos condiciones la regla se da vuelta y termina
+ *     descartando el pie bueno por culpa del renglón malo.
+ *  2. **Sin descuento general.** Cuando el comprobante descuenta sobre el total
+ *     —Los Calvos descuenta 14 %—, la suma de los renglones *tiene* que dar más
+ *     que el neto: ésa es la definición del descuento, no un error. Aplicar la
+ *     regla ahí rechazaría todos los comprobantes con descuento.
+ *  3. **Sin descuentos por renglón.** Lo mismo, renglón por renglón: el
+ *     subtotal impreso es bruto y el neto va después del descuento.
+ */
+function sumaConfirmadaExcedeElNeto(items: OcrItem[], neto: Decimal): string | null {
+  if (neto.lte(0)) return null;
+
+  let suma = new Decimal(0);
+  let confirmados = 0;
+
+  for (const item of items) {
+    // Condición 3: cualquier descuento de renglón desactiva la regla.
+    const descuento = item.discountPct ? parseArNumber(item.discountPct) : null;
+    if (descuento && !descuento.isZero()) return null;
+
+    const subtotal = item.grossSubtotal ? parseArNumber(item.grossSubtotal) : null;
+    const cantidad = item.quantity ? parseArNumber(item.quantity) : null;
+    const precio = item.unitNetPrice ? parseArNumber(item.unitNetPrice) : null;
+    if (!subtotal || !cantidad || !precio) continue;
+
+    // Condición 1: sólo cuenta el renglón que cierra contra su propia cuenta...
+    const tolerancia = cantidad.abs().times(0.005).plus(0.02);
+    if (cantidad.times(precio).minus(subtotal).abs().gt(tolerancia)) continue;
+    // ...y que además cabe en el comprobante. Un renglón que vale más que toda
+    // la factura está mal escalado, y no puede ser prueba contra el pie.
+    if (subtotal.gt(neto)) continue;
+
+    suma = suma.plus(subtotal);
+    confirmados += 1;
+  }
+
+  if (confirmados === 0) return null;
+  // Un peso de tolerancia por el redondeo de cada renglón.
+  if (suma.lte(neto.plus(Decimal.max(neto.times(0.0005), 1)))) return null;
+
+  return (
+    `Los ${confirmados} renglones que cierran contra su propia cuenta suman ${suma.toFixed(2)}, ` +
+    `y el neto gravado se leyó como ${neto.toFixed(2)}: la suma de las partes no puede superar al ` +
+    'total. El pie no se leyó bien y queda para revisión.'
+  );
+}
+
 /**
  * El subtotal del renglón del medio, para poder juzgar el neto del pie.
  *

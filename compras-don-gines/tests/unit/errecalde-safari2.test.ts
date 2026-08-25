@@ -232,3 +232,129 @@ describe('un pie que no puede ser el pie', () => {
     expect(analisis.items.filter((i) => i.grossSubtotal !== null).length).toBeGreaterThan(18);
   });
 });
+
+describe('la suma de las partes no puede superar al total', () => {
+  /*
+   * La segunda defensa del pie, distinta de la de la mediana.
+   *
+   * La mediana atrapa un neto absurdo —$4 en una factura de millones—. Ésta
+   * atrapa uno leído *casi* bien: al que le falta un dígito o le sobra una coma,
+   * que la mediana deja pasar sin chistar porque sigue siendo más grande que un
+   * renglón cualquiera.
+   */
+  /*
+   * Un pie impecable salvo por la escala: el mismo comprobante con la coma
+   * corrida un lugar en los cinco números.
+   *
+   * Cierra consigo mismo —neto más IVA más percepciones da el total—, el IVA es
+   * exactamente el 21 % del neto, y el neto sigue siendo tres veces más grande
+   * que el renglón mediano. Ninguna de las defensas anteriores lo toca.
+   */
+  const PIE_UNA_COMA_CORRIDA = [
+    'Neto Gravado $383.046,73',
+    'IVA $80.439,82',
+    'Percepción IVA RG 5329 $11.491,40',
+    'Percepción IIBB Buenos Aires $6.703,32',
+    'TOTAL $481.681,27',
+  ].join('\n');
+
+  /*
+   * El pie va sólo en su recorte, y no repetido en la página completa.
+   *
+   * No es una comodidad: con la cola de basura de esta corrida metida en el
+   * texto de la página, el pie se lee como $4 y salta primero la comprobación de
+   * la mediana, que es la otra defensa. Para poder afirmar que **ésta** funciona
+   * hay que dejarla llegar a decidir sola.
+   */
+  const leer = (resumen: string) =>
+    analizadorErrecalde.analizar({
+      completo: `DISTRIBUCION ERRECALDE S.A. CUIT 30-71780890-4\n${resumen}`,
+      articulos: SAFARI2_ARTICULOS,
+      resumen,
+    });
+
+  it('descarta un neto que los renglones ya confirmados superan', () => {
+    /*
+     * $383.046,73 es diez veces más chico que el neto real, pero sigue siendo
+     * más grande que el renglón mediano —unos $130.000—, así que la comprobación
+     * de la mediana lo deja pasar. Lo que lo delata es que veintitantos
+     * renglones que cierran contra su propia cuenta ya suman más que eso.
+     */
+    const analisis = leer(PIE_UNA_COMA_CORRIDA);
+
+    expect(analisis.summary?.netTotal).toBeNull();
+    expect(
+      analisis.observaciones.some((o) => o.includes('la suma de las partes no puede superar')),
+      `observaciones: ${analisis.observaciones.join(' | ')}`,
+    ).toBe(true);
+  });
+
+  it('la mediana sola no lo hubiera atrapado', () => {
+    /*
+     * El contraejemplo que justifica tener las dos defensas y no una. Si esta
+     * prueba fallara, la comprobación de la suma sería redundante y habría que
+     * sacarla.
+     */
+    const neto = new Decimal('383046.73');
+    const { items } = analizarArticulos(SAFARI2_ARTICULOS, SAFARI2_COMPLETO, {
+      netoImpreso: null,
+    });
+    const subtotales = items
+      .map((i) => (i.grossSubtotal ? parseArNumber(i.grossSubtotal)! : null))
+      .filter((v): v is Decimal => v !== null)
+      .sort((a, b) => a.comparedTo(b));
+    const mediana = subtotales[Math.floor(subtotales.length / 2)];
+
+    expect(neto.gte(mediana)).toBe(true);
+  });
+
+  it('un renglón mal escalado no alcanza para descartar el pie', () => {
+    /*
+     * La condición que hace que la regla no se dé vuelta.
+     *
+     * SARDO BLOQUE se lee como $6.315.243 y cierra impecable contra sus propios
+     * números. Si contara como renglón confirmado, su solo peso superaría el
+     * neto y terminaría descartando el pie **bueno** por culpa del renglón malo,
+     * que es exactamente al revés de lo que hay que hacer.
+     *
+     * Por eso un renglón que vale más que toda la factura no es prueba de nada:
+     * está mal escalado él.
+     */
+    const pieBueno = [
+      'Neto Gravado $3.830.467,37',
+      'IVA $804.398,16',
+      'Percepción IVA RG 5329 $114.914,02',
+      'Percepción IIBB Buenos Aires $67.033,18',
+      'TOTAL $4.816.812,73',
+    ].join('\n');
+
+    const analisis = leer(pieBueno);
+    expect(analisis.summary?.netTotal).toBe('3830467.37');
+    expect(analisis.observaciones.some((o) => o.includes('la suma de las partes'))).toBe(false);
+  });
+
+  it('no se aplica a un comprobante con descuento general', () => {
+    /*
+     * Con descuento sobre el total, la suma de los renglones **tiene** que dar
+     * más que el neto: ésa es la definición del descuento. Aplicar la regla acá
+     * rechazaría todos los comprobantes de Los Calvos, que descuenta 14 %.
+     *
+     * Se prueba sobre el analizador genérico porque el descuento general es de
+     * ese formato, no del de Errecalde.
+     */
+    const conDescuento = [
+      'Subtotal: 2.084.594,70',
+      'Descuento 14%: 291.843,26',
+      'Neto Gravado: 1.792.751,44',
+      'IVA 21%: 376.477,81',
+      'TOTAL: 2.169.229,25',
+    ].join('\n');
+
+    // La suma de los renglones (2.084.594,70) supera al neto (1.792.751,44) y
+    // aun así el pie es correcto.
+    const bruto = new Decimal('2084594.70');
+    const neto = new Decimal('1792751.44');
+    expect(bruto.gt(neto)).toBe(true);
+    expect(conDescuento).toContain('Descuento');
+  });
+});
