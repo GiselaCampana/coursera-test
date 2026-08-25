@@ -12,10 +12,11 @@ import {
 } from '@/lib/services/documents';
 import { analizarSinGuardar, registrarLectura } from '@/lib/services/lectura';
 import { versionEnEjecucion } from '@/lib/version';
-import { confirmPayment } from '@/lib/services/payments';
+import { confirmPayment, reschedulePayment } from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
-import { computePaymentStatus } from '@/lib/domain/payments';
+import { backfillProductLinks } from '@/lib/services/backfill-productos';
+import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
 import {
@@ -1580,5 +1581,353 @@ describe('aceptar un comprobante que ya se leyó bien', () => {
     expect(asiento).not.toBeNull();
     const detalle = asiento!.after as unknown as { advertencias?: string[] };
     expect(detalle.advertencias).toEqual(expect.arrayContaining(advertencias));
+  });
+});
+
+describe('factura contra factura', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * Errecalde reparte y cobra factura contra factura: lo de hoy se paga cuando
+   * pasa el camión la próxima vez. No es un plazo en días, y ponerle "a 30 días"
+   * agenda la factura del 22/08 para el 21/09 cuando en realidad se paga el
+   * 28/08. El reparto no tiene periodicidad fija, así que ningún número de días
+   * es el correcto.
+   */
+
+  async function condicionContraFactura(proximaFactura: Date | null) {
+    await prisma.supplierPaymentTerm.deleteMany({
+      where: { supplierId: escenario.proveedorErrecaldeId },
+    });
+    await prisma.supplierPaymentTerm.create({
+      data: {
+        supplierId: escenario.proveedorErrecaldeId,
+        termType: 'NEXT_INVOICE',
+        days: 0,
+        paymentMethod: 'TRANSFERENCIA',
+        validFrom: new Date(Date.UTC(2020, 0, 1)),
+      },
+    });
+    await prisma.supplier.update({
+      where: { id: escenario.proveedorErrecaldeId },
+      data: { nextInvoiceDate: proximaFactura },
+    });
+  }
+
+  async function leerYAceptar() {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+    return documento.id;
+  }
+
+  it('la factura del 22/08 se agenda para el 28/08, no a 30 días', async () => {
+    await condicionContraFactura(new Date(Date.UTC(2026, 7, 28)));
+    const documentId = await leerYAceptar();
+
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+    expect(agenda.dueDate.toISOString().slice(0, 10)).toBe('2026-08-28');
+    // Y queda marcada como provisoria: la próxima factura todavía no llegó.
+    expect(agenda.dueDateProvisional).toBe(true);
+  });
+
+  it('sin fecha de próxima factura no inventa un plazo', async () => {
+    /*
+     * Es la diferencia entre esta condición y "a x días". Si no se sabe cuándo
+     * vuelve el camión, la fecha no se puede calcular y hay que pedírsela a
+     * alguien: poner la fecha de emisión, o sumarle una cantidad de días
+     * inventada, sería agendar plata en un día que no acordó nadie.
+     */
+    await condicionContraFactura(null);
+    const emision = new Date(Date.UTC(2026, 7, 22));
+    const term = { termType: 'NEXT_INVOICE' as const, days: 0, paymentMethod: 'TRANSFERENCIA' };
+
+    expect(computeDueDate(emision, term, { proximaFactura: null })).toBeNull();
+    expect(computeDueDate(emision, term, { proximaFactura: new Date(Date.UTC(2026, 7, 28)) })
+      ?.toISOString()
+      .slice(0, 10)).toBe('2026-08-28');
+  });
+
+  it('los otros plazos siguen funcionando igual', async () => {
+    const emision = new Date(Date.UTC(2026, 7, 22));
+    expect(
+      computeDueDate(emision, { termType: 'SAME_DAY', days: 0 })?.toISOString().slice(0, 10),
+    ).toBe('2026-08-22');
+    expect(
+      computeDueDate(emision, { termType: 'DAYS', days: 30 })?.toISOString().slice(0, 10),
+    ).toBe('2026-09-21');
+    expect(computeDueDate(emision, { termType: 'MANUAL', days: 0 })).toBeNull();
+  });
+
+  it('la fecha de una factura ya validada se corrige sin anularla, con auditoría', async () => {
+    /*
+     * El caso concreto: la factura ya está validada y agendada para el 21/09
+     * porque la condición estaba mal configurada. Hay que llevarla al 28/08 sin
+     * anularla ni volver a cargar la imagen.
+     */
+    await condicionContraFactura(null);
+    const documentId = await leerYAceptar();
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+
+    await reschedulePayment(
+      escenario.admin,
+      agenda.id,
+      '2026-08-28',
+      'Errecalde cobra factura contra factura: la próxima visita es el 28/08.',
+    );
+
+    const despues = await prisma.paymentSchedule.findUniqueOrThrow({ where: { documentId } });
+    expect(despues.dueDate.toISOString().slice(0, 10)).toBe('2026-08-28');
+
+    // El comprobante sigue validado: no se tocó nada más que la agenda.
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: documentId } });
+    expect(documento.status).toBe('VALIDADO');
+    expect(documento.total!.toFixed(2)).toBe('4816812.73');
+
+    // Y queda el rastro, con la fecha anterior y la nueva.
+    const asiento = await prisma.auditLog.findFirst({
+      where: { entityId: agenda.id, action: 'pago.reprogramado' },
+    });
+    expect(asiento).not.toBeNull();
+    expect(asiento!.reason).toContain('factura contra factura');
+    const antes = asiento!.before as unknown as { vencimiento: string };
+    const luego = asiento!.after as unknown as { vencimiento: string };
+    expect(antes.vencimiento).not.toBe('2026-08-28');
+    expect(luego.vencimiento).toBe('2026-08-28');
+  });
+});
+
+describe('el reporte por producto encuentra lo que se compró', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * La factura de Errecalde trae dos quesos Sardo. Estaban en el catálogo, la
+   * factura se validó, y el reporte de "Queso Sardo" devolvía cero kilos y cero
+   * pesos: los movimientos habían quedado con productId nulo porque la pantalla
+   * no había asociado los renglones a mano, y el reporte filtra por producto.
+   */
+
+  async function facturaDeErrecaldeValidada() {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+    return documento.id;
+  }
+
+  it('ningún movimiento de un renglón reconocible queda sin producto', async () => {
+    /*
+     * La prueba que tiene que fallar si esto vuelve a pasar. No mira la
+     * pantalla: mira los movimientos, que son de donde sale el reporte.
+     */
+    await facturaDeErrecaldeValidada();
+
+    const sardos = await prisma.purchaseMovement.findMany({
+      where: { description: { contains: 'SARDO' } },
+    });
+    expect(sardos.length).toBeGreaterThanOrEqual(2);
+    for (const movimiento of sardos) {
+      expect(
+        movimiento.productId,
+        `"${movimiento.description}" quedó sin producto asociado`,
+      ).not.toBeNull();
+    }
+
+    // Y el renglón del comprobante dice lo mismo que el movimiento.
+    for (const movimiento of sardos) {
+      const renglon = await prisma.documentItem.findUniqueOrThrow({
+        where: { id: movimiento.documentItemId! },
+      });
+      expect(renglon.productId).toBe(movimiento.productId);
+    }
+  });
+
+  it('filtrando por Queso Sardo aparecen los dos renglones y suman bien', async () => {
+    await facturaDeErrecaldeValidada();
+
+    /*
+     * Son dos artículos distintos del catálogo —el bloque Melincué y el Don
+     * Alfonso—, así que se los busca por separado y se comprueban los dos: lo
+     * que no puede pasar es que alguno dé cero.
+     */
+    const bloque = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    const donAlfonso = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2002'],
+    });
+
+    for (const [nombre, reporte] of [
+      ['SARDO BLOQUE MELINCUE', bloque],
+      ['SARDO DON ALFONSO', donAlfonso],
+    ] as const) {
+      expect(reporte.rows.length, `${nombre} no apareció en el reporte`).toBeGreaterThanOrEqual(1);
+      expect(reporte.totals.kilos).not.toBe('0.00');
+      expect(reporte.totals.costoTotal).not.toBe('0.00');
+      // Los números salen de los renglones, no de un total inventado.
+      const suma = reporte.rows.reduce((t, r) => t + Number(r.totalCost), 0);
+      expect(Number(reporte.totals.costoTotal)).toBeCloseTo(suma, 2);
+    }
+
+    // Los kilos del papel: 4,75 del bloque y 28,9 del Don Alfonso.
+    expect(bloque.totals.kilos).toBe('4.75');
+    expect(donAlfonso.totals.kilos).toBe('28.90');
+
+    // Y el IVA y las percepciones también llegan, no sólo el neto.
+    expect(Number(bloque.totals.iva)).toBeGreaterThan(0);
+    expect(Number(bloque.totals.percepciones)).toBeGreaterThan(0);
+    expect(Number(donAlfonso.totals.iva)).toBeGreaterThan(0);
+    expect(Number(donAlfonso.totals.percepciones)).toBeGreaterThan(0);
+  });
+
+  it('"todos los productos" sigue dando el total completo', async () => {
+    await facturaDeErrecaldeValidada();
+
+    const todos = await getPurchaseReport(escenario.admin, {});
+    const bloque = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+
+    expect(todos.rows).toHaveLength(23);
+    expect(Number(todos.totals.costoTotal)).toBeGreaterThan(Number(bloque.totals.costoTotal));
+    // El costo final de la factura entera es el del papel.
+    expect(todos.totals.costoTotal).toBe('4816812.73');
+  });
+
+  it('el filtro de producto se combina con proveedor, sucursal y fechas', async () => {
+    await facturaDeErrecaldeValidada();
+    const bloque = escenario.productos['2001'];
+
+    const conTodo = await getPurchaseReport(escenario.admin, {
+      productId: bloque,
+      supplierId: escenario.proveedorErrecaldeId,
+      branchId: escenario.sucursales.devoto,
+      from: '2026-08-01',
+      to: '2026-08-31',
+    });
+    expect(conTodo.rows.length).toBeGreaterThanOrEqual(1);
+
+    // Con el proveedor equivocado no tiene que aparecer nada.
+    const otroProveedor = await getPurchaseReport(escenario.admin, {
+      productId: bloque,
+      supplierId: escenario.proveedorId,
+    });
+    expect(otroProveedor.rows).toHaveLength(0);
+
+    // Y fuera de la ventana de fechas, tampoco.
+    const fueraDeFecha = await getPurchaseReport(escenario.admin, {
+      productId: bloque,
+      from: '2026-09-01',
+      to: '2026-09-30',
+    });
+    expect(fueraDeFecha.rows).toHaveLength(0);
+  });
+
+  it('el CSV dice lo mismo que la pantalla', async () => {
+    await facturaDeErrecaldeValidada();
+    const reporte = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    const csv = purchaseReportToCsv(reporte);
+
+    /*
+     * Se compara el contenido, no la cantidad de líneas: el CSV lleva además
+     * una línea de totales, y contar líneas haría que la prueba se rompa por un
+     * cambio de formato que no cambia ningún número.
+     */
+    for (const fila of reporte.rows) {
+      expect(csv).toContain(fila.description);
+      // Los importes van con coma decimal, como los espera Excel en español.
+      expect(csv).toContain(fila.totalCost.replace('.', ','));
+    }
+
+    // Y la línea de totales dice lo mismo que el resumen de la pantalla.
+    const totales = csv.split('\n').find((l) => l.startsWith('"TOTALES"'))!;
+    expect(totales).toContain(reporte.totals.costoTotal.replace('.', ','));
+    expect(totales).toContain(reporte.totals.kilos.replace('.', ','));
+  });
+
+  it('el backfill informa antes de tocar nada, y no duplica movimientos', async () => {
+    /*
+     * Las facturas históricas se arreglan sin volver a cargarlas. El informe va
+     * primero: lo dudoso no se asocia solo.
+     */
+    const documentId = await facturaDeErrecaldeValidada();
+
+    // Se simula el estado viejo: los renglones sin producto.
+    await prisma.documentItem.updateMany({
+      where: { documentId },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+    await prisma.purchaseMovement.updateMany({ where: { documentId }, data: { productId: null } });
+
+    const antes = await prisma.purchaseMovement.count({ where: { documentId } });
+
+    // Primero, sólo el informe. No escribe nada.
+    const informe = await backfillProductLinks(escenario.admin, {});
+    expect(informe.aplicadas).toBe(0);
+    expect(informe.seguras.length).toBeGreaterThanOrEqual(2);
+    expect(
+      informe.seguras.some((f) => f.description.includes('SARDO')),
+      'el informe tendría que reconocer los Sardo',
+    ).toBe(true);
+
+    const sinAplicar = await prisma.purchaseMovement.findFirst({
+      where: { documentId, description: { contains: 'SARDO' } },
+    });
+    expect(sinAplicar!.productId).toBeNull();
+
+    // Y recién ahora se aplica.
+    const aplicado = await backfillProductLinks(escenario.admin, { aplicar: true });
+    expect(aplicado.aplicadas).toBe(aplicado.seguras.length);
+
+    const despues = await prisma.purchaseMovement.count({ where: { documentId } });
+    expect(despues, 'el backfill no puede crear movimientos nuevos').toBe(antes);
+
+    const reporte = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    expect(reporte.rows.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('el backfill no toca ni un importe', async () => {
+    const documentId = await facturaDeErrecaldeValidada();
+    const antes = await prisma.purchaseMovement.findMany({
+      where: { documentId },
+      orderBy: { id: 'asc' },
+    });
+
+    await prisma.documentItem.updateMany({ where: { documentId }, data: { productId: null } });
+    await prisma.purchaseMovement.updateMany({ where: { documentId }, data: { productId: null } });
+    await backfillProductLinks(escenario.admin, { aplicar: true });
+
+    const despues = await prisma.purchaseMovement.findMany({
+      where: { documentId },
+      orderBy: { id: 'asc' },
+    });
+    expect(despues).toHaveLength(antes.length);
+    for (let i = 0; i < antes.length; i++) {
+      expect(despues[i].quantity.toFixed(4)).toBe(antes[i].quantity.toFixed(4));
+      expect(despues[i].netAmount.toFixed(4)).toBe(antes[i].netAmount.toFixed(4));
+      expect(despues[i].ivaAmount.toFixed(4)).toBe(antes[i].ivaAmount.toFixed(4));
+      expect(despues[i].perceptionAmount.toFixed(4)).toBe(antes[i].perceptionAmount.toFixed(4));
+      expect(despues[i].totalCost.toFixed(4)).toBe(antes[i].totalCost.toFixed(4));
+      expect(despues[i].unitCost.toFixed(4)).toBe(antes[i].unitCost.toFixed(4));
+    }
   });
 });

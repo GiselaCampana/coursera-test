@@ -12,6 +12,7 @@ import { prisma, type Prisma } from '@/lib/db';
 
 export const AUDIT_ACTIONS = {
   LOGIN: 'sesion.ingreso',
+  PRODUCT_BACKFILL: 'productos.reasignados',
   LOGIN_FAILED: 'sesion.ingreso_fallido',
   LOGOUT: 'sesion.salida',
   DOCUMENT_CREATED: 'comprobante.creado',

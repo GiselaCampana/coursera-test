@@ -115,8 +115,18 @@ export function PasoRevision({
     })),
   );
 
+  /*
+   * Con "factura contra factura" la fecha no se completa sola.
+   *
+   * Los demás plazos salen de una cuenta —el mismo día, a x días— y siempre dan
+   * algo. Éste depende de cuándo vuelve a pasar el proveedor, y si esa fecha no
+   * está cargada no hay nada que calcular: poner la de emisión, o sumarle días
+   * inventados, sería agendar plata en un día que no acordó nadie. Se deja
+   * vacía y la completa quien está mirando la factura, que es el que sabe.
+   */
+  const contraFactura = comprobante.condiciones.plazo === 'NEXT_INVOICE';
   const [vencimiento, setVencimiento] = useState(
-    comprobante.condiciones.vencimiento ?? comprobante.fecha ?? hoy,
+    comprobante.condiciones.vencimiento ?? (contraFactura ? '' : (comprobante.fecha ?? hoy)),
   );
   const [plazoTexto, setPlazoTexto] = useState<string | null>(null);
   const [formaDePago, setFormaDePago] = useState(
@@ -404,7 +414,11 @@ export function PasoRevision({
                 onChange={(e) => setVencimiento(e.target.value)}
               />
               <p className="ayuda">
-                Se calcula con el plazo del proveedor. Podés cambiarla antes de guardar.
+                {contraFactura
+                  ? vencimiento
+                    ? 'Es la fecha en que se espera la próxima factura del proveedor, así que es provisoria: cuando llegue, se confirma contra la fecha real. Podés cambiarla.'
+                    : 'Este proveedor cobra factura contra factura y no hay una próxima visita cargada. Poné vos la fecha en que esperás que vuelva a pasar.'
+                  : 'Se calcula con el plazo del proveedor. Podés cambiarla antes de guardar.'}
               </p>
             </div>
             <div className="campo">
@@ -1003,7 +1017,13 @@ export function PasoRevision({
           <button type="button" className="boton boton-secundario" onClick={onVolver}>
             Volver a las imágenes
           </button>
-          <button type="button" className="boton" onClick={() => onPaso(3)}>
+          <button
+            type="button"
+            className="boton"
+            onClick={() => onPaso(3)}
+            disabled={vencimiento === ''}
+            title={vencimiento === '' ? 'Falta la fecha prevista de pago.' : undefined}
+          >
             Continuar al pago
           </button>
         </div>

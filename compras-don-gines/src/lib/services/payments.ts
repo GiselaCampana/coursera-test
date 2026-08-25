@@ -4,7 +4,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { branchScopeFilter, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { money, toDecimal } from '@/lib/money';
-import { arToday, parseArDate } from '@/lib/datetime';
+import { arToday, parseArDate, toISODate } from '@/lib/datetime';
 import { computePaymentStatus, remainingAmount } from '@/lib/domain/payments';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 
@@ -244,4 +244,83 @@ export async function listPayments(user: AuthUser) {
     pagados: schedules.filter((s) => s.status === 'PAGADO').reverse(),
     cancelados: schedules.filter((s) => s.status === 'CANCELADO'),
   };
+}
+
+/**
+ * Confirma la fecha de un pago "factura contra factura" contra la factura real.
+ *
+ * Mientras la siguiente factura no llega, el pago está agendado para el día en
+ * que se la espera: una estimación. Cuando llega de verdad, esa fecha deja de
+ * ser una suposición y hay que llevarla al día que corresponde.
+ *
+ * No lo hace solo, y es a propósito. Que haya entrado otra factura del proveedor
+ * no significa que el pago se haga ese día —puede haber pasado el camión sin
+ * cobrar, o haberse acordado otra cosa—, así que esto se ofrece y lo decide una
+ * persona. Lo que sí hace es traer la fecha correcta para no tener que buscarla.
+ *
+ * Reutiliza `reschedulePayment`, así que queda el evento de reprogramación y el
+ * asiento de auditoría con la fecha anterior y la nueva, igual que cualquier
+ * otro cambio de fecha.
+ */
+export async function confirmarFechaContraFactura(user: AuthUser, scheduleId: string) {
+  const schedule = await prisma.paymentSchedule.findUnique({
+    where: { id: scheduleId },
+    include: { document: { select: { supplierId: true, issueDate: true, id: true } } },
+  });
+  if (!schedule) throw new NotFoundError('No encontramos ese pago en la agenda.');
+  if (!schedule.dueDateProvisional) {
+    throw new ConflictError('Ese pago no tiene una fecha provisoria que confirmar.');
+  }
+  if (!schedule.document.supplierId || !schedule.document.issueDate) {
+    throw new ConflictError('El comprobante no tiene proveedor o fecha de emisión.');
+  }
+
+  const siguiente = await siguienteFacturaDe(
+    schedule.document.supplierId,
+    schedule.document.issueDate,
+    schedule.document.id,
+  );
+  if (!siguiente) {
+    throw new ConflictError(
+      'Todavía no hay una factura posterior de este proveedor: la fecha sigue siendo provisoria.',
+    );
+  }
+
+  const actualizado = await reschedulePayment(
+    user,
+    scheduleId,
+    toISODate(siguiente.issueDate!),
+    `Llegó la factura ${siguiente.fullNumber ?? 'siguiente'} del proveedor.`,
+  );
+
+  // Ya no es una estimación: la factura que la definía existe.
+  await prisma.paymentSchedule.update({
+    where: { id: scheduleId },
+    data: { dueDateProvisional: false },
+  });
+
+  return actualizado;
+}
+
+/**
+ * La primera factura validada del proveedor posterior a una fecha dada.
+ *
+ * Se piden sólo las validadas: un borrador o algo que quedó a revisar todavía
+ * puede cambiar de fecha o no llegar a existir, y no puede mover un pago.
+ */
+export async function siguienteFacturaDe(
+  supplierId: string,
+  despuesDe: Date,
+  excepto: string,
+): Promise<{ id: string; fullNumber: string | null; issueDate: Date | null } | null> {
+  return prisma.document.findFirst({
+    where: {
+      supplierId,
+      status: 'VALIDADO',
+      id: { not: excepto },
+      issueDate: { gt: despuesDe },
+    },
+    orderBy: { issueDate: 'asc' },
+    select: { id: true, fullNumber: true, issueDate: true },
+  });
 }

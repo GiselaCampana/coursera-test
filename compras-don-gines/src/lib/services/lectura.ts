@@ -223,7 +223,11 @@ export async function registrarLectura(
 
     // --- 4. Gana el conjunto más consistente ------------------------------
     const mejor = elegirMejor(candidatos, reglas, intentos.length);
-    const vencimiento = condiciones.term ? computeDueDate(fechaEmision, condiciones.term) : null;
+    const vencimiento = condiciones.term
+      ? computeDueDate(fechaEmision, condiciones.term, {
+          proximaFactura: condiciones.proximaFactura,
+        })
+      : null;
     const asociaciones = await matchItemsToProducts(mejor.costeados, proveedor.supplierId);
 
     // --- 5. Se guarda lo leído -------------------------------------------

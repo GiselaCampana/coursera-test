@@ -228,6 +228,7 @@ export default async function PaginaProveedores() {
                   <select id={`tt-${proveedor.id}`} name="termType" defaultValue="DAYS">
                     <option value="SAME_DAY">En el día</option>
                     <option value="DAYS">A x días</option>
+                    <option value="NEXT_INVOICE">Factura contra factura</option>
                     <option value="MANUAL">Fecha manual</option>
                   </select>
                 </div>
@@ -257,6 +258,24 @@ export default async function PaginaProveedores() {
                   <label htmlFor={`vf-${proveedor.id}`}>Vigente desde</label>
                   <input id={`vf-${proveedor.id}`} name="validFrom" type="date" defaultValue={hoy} />
                 </div>
+              </div>
+              <div className="campo">
+                <label htmlFor={`nif-${proveedor.id}`}>Próxima factura o visita prevista</label>
+                <input
+                  id={`nif-${proveedor.id}`}
+                  name="nextInvoiceDate"
+                  type="date"
+                  defaultValue={
+                    proveedor.nextInvoiceDate
+                      ? proveedor.nextInvoiceDate.toISOString().slice(0, 10)
+                      : ''
+                  }
+                />
+                <p className="ayuda">
+                  Sólo para «factura contra factura»: es cuándo se espera que vuelva a pasar. Cada
+                  factura se agenda para esa fecha hasta que llegue la siguiente. Si se deja vacía,
+                  la fecha se pide al cargar cada comprobante.
+                </p>
               </div>
               <div className="campo">
                 <label htmlFor={`tnotes-${proveedor.id}`}>Nota</label>

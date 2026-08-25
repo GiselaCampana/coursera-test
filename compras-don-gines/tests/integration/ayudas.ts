@@ -202,10 +202,24 @@ export async function sembrarEscenario(): Promise<Escenario> {
     ['1007', 'Jamón cocido Mont-Blanc', 'JAMON COCIDO MONT-BLANC'],
     ['1008', 'Fiambre de pechuga de pollo ahumado y horneado', 'FIAMBRE DE PECHUGA DE POLLO AHUMADO Y HORNEADO'],
     ['1009', 'Fiambre cocido de pata Zur-Linde', 'FIAMBRE COCIDO DE PATA ZUR-LINDE'],
+    /*
+     * Los dos quesos de la factura de Errecalde.
+     *
+     * Están en el catálogo con el nombre que usa el negocio y con el alias que
+     * imprime el proveedor, que es como se los reconoce. Sin ellos la prueba de
+     * regresión del reporte por producto no tendría contra qué asociar y pasaría
+     * por la razón equivocada.
+     */
+    ['2001', 'Queso Sardo bloque Melincué', 'SARDO BLOQUE MELINCUE'],
+    ['2002', 'Queso Sardo Don Alfonso', 'SARDO DON ALFONSO'],
   ];
 
   const productos: Record<string, string> = {};
   for (const [codigo, nombre, alias] of definiciones) {
+    // Los códigos 2xxx son los quesos de Errecalde; el resto, de Los Calvos. El
+    // alias tiene que colgar del proveedor que lo imprime: un alias de otro
+    // proveedor no reconoce nada.
+    const deQuien = codigo.startsWith('2') ? errecalde.id : proveedor.id;
     const producto = await prisma.product.create({
       data: {
         internalCode: codigo,
@@ -214,14 +228,14 @@ export async function sembrarEscenario(): Promise<Escenario> {
         purchaseUnit: 'KG',
         saleMode: 'FETEABLE',
         avgPieceWeightKg: '3.000',
-        defaultSupplierId: proveedor.id,
+        defaultSupplierId: deQuien,
         targetMarginPct: '0.45',
         marginBasis: 'SOBRE_COSTO',
         cashDiscountPct: '0.10',
         roundingRule: 'NEAREST_100',
         aliases: {
           create: {
-            supplierId: proveedor.id,
+            supplierId: deQuien,
             supplierCode: codigo,
             alias,
             normalized: normalizeText(alias),

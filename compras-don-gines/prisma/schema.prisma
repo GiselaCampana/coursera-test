@@ -123,6 +123,8 @@ enum TermType {
   SAME_DAY
   DAYS
   MANUAL
+  /// Factura contra factura: se paga cuando llega la siguiente del proveedor.
+  NEXT_INVOICE
 }
 
 model Supplier {
@@ -133,6 +135,12 @@ model Supplier {
   currency   String   @default("ARS")
   active     Boolean  @default(true)
   notes      String?
+  /// Cuándo se espera la próxima factura o visita de este proveedor.
+  ///
+  /// Sólo tiene sentido con la condición "factura contra factura": sirve para
+  /// poder agendar el pago de la factura de hoy mientras la siguiente todavía
+  /// no llegó. Cuando llega, la fecha real reemplaza a la prevista.
+  nextInvoiceDate DateTime?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -535,6 +543,14 @@ model PaymentSchedule {
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
   /// Fecha prevista. Nunca se pisa con la fecha efectiva.
   dueDate    DateTime
+  /// ¿La fecha prevista es todavía una estimación?
+  ///
+  /// Sólo pasa con las condiciones "factura contra factura": el pago se hace
+  /// cuando llega la próxima factura del proveedor, y hasta que llega lo único
+  /// que hay es la fecha en que se la espera. Marcarlo permite mostrarla como
+  /// provisoria y confirmarla después contra la fecha real, en vez de que
+  /// conviva con las fechas firmes sin distinguirse.
+  dueDateProvisional Boolean @default(false)
   plannedAmount Decimal @db.Decimal(18, 4)
   plannedPaymentMethod String
   /// Acumulado de pagos confirmados. Permite pagos parciales a futuro.

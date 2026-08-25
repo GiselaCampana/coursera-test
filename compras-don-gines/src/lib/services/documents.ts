@@ -12,7 +12,7 @@ import {
   type RawItem,
 } from '@/lib/domain/costing';
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
-import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
+import { computeDueDate, computePaymentStatus, esFechaProvisoria } from '@/lib/domain/payments';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
 import { buildDocumentKey, getStorage } from '@/lib/storage';
 import { normalizeUpload } from '@/lib/images';
@@ -532,6 +532,38 @@ export async function confirmDocument(
   const total = money(input.printed.total ?? report.computed.totalCost);
   const paymentMethod = input.payment.paymentMethod || conditions.term?.paymentMethod || 'TRANSFERENCIA';
 
+  /*
+   * --- Asociación al catálogo, resuelta acá y no en el navegador -----------
+   *
+   * Cada renglón que se pueda reconocer con seguridad tiene que quedar
+   * **asociado y persistido**, no sólo reconocido de paso durante la lectura.
+   *
+   * Antes se guardaba lo que mandara la pantalla, y la pantalla manda null en
+   * cuanto el operador no eligió el producto a mano. El resultado era una
+   * compra perfectamente validada que después no existía para el reporte por
+   * producto: la factura de Errecalde traía dos quesos Sardo y el reporte de
+   * "Queso Sardo" devolvía cero kilos y cero pesos, porque los movimientos
+   * habían quedado con productId nulo.
+   *
+   * La alternativa —que el reporte adivine cada vez que se lo abre— sería peor:
+   * la misma compra podría clasificarse distinto según cuándo se mire, y el
+   * catálogo cambia. La compra se clasifica una vez, al confirmarse, y queda.
+   *
+   * Sólo se completa lo que el operador dejó vacío: una elección humana nunca
+   * se pisa. Y sólo cuando el reconocimiento es inequívoco; si hay empate, el
+   * renglón queda sin asociar para que lo resuelva una persona.
+   */
+  const reconocidos = await matchItemsToProducts(costed, supplier.id);
+  const productoDeCadaRenglon = input.items.map((source, i) => {
+    if (source.productId) return source.productId;
+    const reconocido = reconocidos[i];
+    return reconocido && reconocido.productId ? reconocido.productId : null;
+  });
+  const metodoDeCadaRenglon = input.items.map((source, i) => {
+    if (source.productId) return source.learnAlias ? 'MANUAL' : 'ALIAS';
+    return reconocidos[i]?.productId ? (reconocidos[i].method ?? 'NONE') : 'NONE';
+  });
+
   // --- Escritura transaccional -------------------------------------------
   const result = await prisma.$transaction(async (tx) => {
     // Se rehacen renglones y movimientos: confirmar dos veces no duplica nada.
@@ -572,14 +604,13 @@ export async function confirmDocument(
     const createdItems = [];
     for (let i = 0; i < costed.length; i++) {
       const item = costed[i];
-      const source = input.items[i];
       createdItems.push(
         await tx.documentItem.create({
           data: {
             documentId: document.id,
             ...itemToColumns(item),
-            productId: source.productId ?? null,
-            matchMethod: source.productId ? (source.learnAlias ? 'MANUAL' : 'ALIAS') : 'NONE',
+            productId: productoDeCadaRenglon[i],
+            matchMethod: metodoDeCadaRenglon[i],
           },
         }),
       );
@@ -610,7 +641,10 @@ export async function confirmDocument(
     for (let i = 0; i < costed.length; i++) {
       const item = costed[i];
       const documentItem = createdItems[i];
-      const productId = input.items[i].productId ?? null;
+      // El mismo producto que quedó en el renglón: el movimiento y el renglón
+      // no pueden discrepar, porque el reporte mira el movimiento y la pantalla
+      // del comprobante mira el renglón.
+      const productId = productoDeCadaRenglon[i];
 
       await tx.purchaseMovement.create({
         data: {
@@ -660,10 +694,22 @@ export async function confirmDocument(
 
     // Agenda de pago. Vencer y pagar son eventos distintos: acá sólo se agenda.
     const status = computePaymentStatus({ dueDate, plannedAmount: total, paidAmount: 0 });
+    /*
+     * Con "factura contra factura" la fecha queda marcada como provisoria.
+     *
+     * No es un detalle cosmético: mientras la próxima factura no llegue, esa
+     * fecha es una estimación de cuándo pasa el camión, y en la agenda tiene que
+     * poder distinguirse de las que salen de un plazo acordado. Cuando llega la
+     * factura siguiente se confirma contra su fecha real y deja de ser
+     * provisoria.
+     */
+    const provisoria = conditions.term ? esFechaProvisoria(conditions.term) : false;
+
     const schedule = await tx.paymentSchedule.upsert({
       where: { documentId: document.id },
       update: {
         dueDate,
+        dueDateProvisional: provisoria,
         plannedAmount: total.toString(),
         plannedPaymentMethod: paymentMethod,
         status,
@@ -672,6 +718,7 @@ export async function confirmDocument(
       create: {
         documentId: document.id,
         dueDate,
+        dueDateProvisional: provisoria,
         plannedAmount: total.toString(),
         plannedPaymentMethod: paymentMethod,
         paidAmount: '0',
@@ -912,7 +959,10 @@ export async function suggestDueDate(supplierId: string, issueDateISO: string) {
   const conditions = await getSupplierConditions(supplierId, issueDate);
   if (!conditions.term) return { dueDate: toDateOnly(issueDate), term: null, conditions };
   return {
-    dueDate: computeDueDate(issueDate, conditions.term) ?? toDateOnly(issueDate),
+    dueDate:
+      computeDueDate(issueDate, conditions.term, {
+        proximaFactura: conditions.proximaFactura,
+      }) ?? toDateOnly(issueDate),
     term: conditions.term,
     conditions,
   };
@@ -998,7 +1048,11 @@ export async function acceptReadDocument(
   const conditions = await getSupplierConditions(document.supplierId, document.issueDate);
   const dueDate =
     document.appliedDueDate ??
-    (conditions.term ? computeDueDate(document.issueDate, conditions.term) : null) ??
+    (conditions.term
+      ? computeDueDate(document.issueDate, conditions.term, {
+          proximaFactura: conditions.proximaFactura,
+        })
+      : null) ??
     toDateOnly(document.issueDate);
 
   return confirmDocument(user, {

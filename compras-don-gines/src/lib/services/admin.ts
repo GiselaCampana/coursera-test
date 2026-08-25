@@ -14,6 +14,7 @@ import { normalizeText } from '@/lib/domain/matching';
 import { toDecimal } from '@/lib/money';
 import { arToday, parseArDate } from '@/lib/datetime';
 import { ROUNDING_RULES, type RoundingRule } from '@/lib/domain/pricing';
+import type { TermType } from '@/lib/domain/payments';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 
 function assert(user: AuthUser, permission: Permission) {
@@ -311,8 +312,8 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
   assert(user, PERMISSIONS.PROVEEDORES_GESTIONAR);
 
   const supplierId = texto(form.get('supplierId'));
-  const termType = texto(form.get('termType')) as 'SAME_DAY' | 'DAYS' | 'MANUAL';
-  if (!['SAME_DAY', 'DAYS', 'MANUAL'].includes(termType)) {
+  const termType = texto(form.get('termType')) as TermType;
+  if (!['SAME_DAY', 'DAYS', 'MANUAL', 'NEXT_INVOICE'].includes(termType)) {
     throw new ValidationError('Elegí un tipo de plazo válido.');
   }
   const days = termType === 'DAYS' ? numero(form.get('days')) : 0;
@@ -321,6 +322,16 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
   }
 
   const validFrom = parseArDate(texto(form.get('validFrom'))) ?? arToday();
+
+  /*
+   * La fecha de la próxima factura, para "factura contra factura".
+   *
+   * Es lo que le falta a esa condición para poder dar una fecha de pago: no hay
+   * plazo en días que la reemplace, porque el reparto no tiene periodicidad
+   * fija. Se puede dejar vacía, y entonces cada factura pedirá la fecha al
+   * cargarse en vez de inventar una.
+   */
+  const proximaFactura = parseArDate(texto(form.get('nextInvoiceDate')));
 
   const supplier = await prisma.supplier.findUnique({ where: { id: supplierId } });
   if (!supplier) throw new NotFoundError('No encontramos ese proveedor.');
@@ -340,6 +351,18 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
         notes: texto(form.get('notes')) || null,
       },
     });
+
+    // Sólo se toca cuando el formulario la trae: no se borra una fecha buena
+    // por guardar una condición sin completar ese campo.
+    if (proximaFactura || termType !== 'NEXT_INVOICE') {
+      await tx.supplier.update({
+        where: { id: supplierId },
+        data: {
+          nextInvoiceDate:
+            termType === 'NEXT_INVOICE' ? proximaFactura : supplier.nextInvoiceDate,
+        },
+      });
+    }
   });
 
   await recordAudit({
@@ -347,7 +370,12 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
     action: AUDIT_ACTIONS.SUPPLIER_UPDATED,
     entity: 'SupplierPaymentTerm',
     entityId: supplierId,
-    after: { plazo: termType, dias: days, desde: validFrom.toISOString().slice(0, 10) },
+    after: {
+      plazo: termType,
+      dias: days,
+      desde: validFrom.toISOString().slice(0, 10),
+      proximaFactura: proximaFactura ? proximaFactura.toISOString().slice(0, 10) : null,
+    },
   });
 }
 
@@ -359,6 +387,16 @@ export async function saveSupplierTaxRule(user: AuthUser, form: FormData) {
   const ivaRate = parseTasa(texto(form.get('ivaRate')), 'IVA');
   const iibbRate = parseTasa(texto(form.get('iibbRate')) || '0', 'IIBB');
   const validFrom = parseArDate(texto(form.get('validFrom'))) ?? arToday();
+
+  /*
+   * La fecha de la próxima factura, para "factura contra factura".
+   *
+   * Es lo que le falta a esa condición para poder dar una fecha de pago: no hay
+   * plazo en días que la reemplace, porque el reparto no tiene periodicidad
+   * fija. Se puede dejar vacía, y entonces cada factura pedirá la fecha al
+   * cargarse en vez de inventar una.
+   */
+  const proximaFactura = parseArDate(texto(form.get('nextInvoiceDate')));
 
   const supplier = await prisma.supplier.findUnique({ where: { id: supplierId } });
   if (!supplier) throw new NotFoundError('No encontramos ese proveedor.');

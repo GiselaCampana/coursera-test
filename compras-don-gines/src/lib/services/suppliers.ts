@@ -13,13 +13,15 @@ import type { TermType } from '@/lib/domain/payments';
 export interface SupplierConditions {
   term: { termType: TermType; days: number; paymentMethod: string } | null;
   tax: { ivaRate: string; iibbRate: string } | null;
+  /** Cuándo se espera la próxima factura o visita. Sólo lo usa NEXT_INVOICE. */
+  proximaFactura: Date | null;
 }
 
 export async function getSupplierConditions(
   supplierId: string,
   atDate: Date,
 ): Promise<SupplierConditions> {
-  const [term, tax] = await Promise.all([
+  const [term, tax, proveedor] = await Promise.all([
     prisma.supplierPaymentTerm.findFirst({
       where: {
         supplierId,
@@ -36,6 +38,10 @@ export async function getSupplierConditions(
       },
       orderBy: { validFrom: 'desc' },
     }),
+    prisma.supplier.findUnique({
+      where: { id: supplierId },
+      select: { nextInvoiceDate: true },
+    }),
   ]);
 
   return {
@@ -49,6 +55,15 @@ export async function getSupplierConditions(
     tax: tax
       ? { ivaRate: tax.ivaRate.toString(), iibbRate: tax.iibbRate.toString() }
       : null,
+    /*
+     * Cuándo se espera la próxima factura del proveedor.
+     *
+     * Va acá, con el resto de las condiciones, porque es lo que le falta al
+     * plazo "factura contra factura" para poder dar una fecha. No es un dato del
+     * comprobante sino del vínculo con el proveedor, y por eso vive en su ficha
+     * y no en la factura.
+     */
+    proximaFactura: proveedor?.nextInvoiceDate ?? null,
   };
 }
 
