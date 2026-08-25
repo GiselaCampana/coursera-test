@@ -199,3 +199,4 @@ test.describe('lectura automática sin servicios pagos', () => {
     }
   });
 });
+

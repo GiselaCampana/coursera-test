@@ -4,7 +4,7 @@ import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { Decimal, money, parseArNumber, toDecimal } from '@/lib/money';
-import { arToday, dateOnlyFromISO, parseArDate, toDateOnly } from '@/lib/datetime';
+import { arToday, dateOnlyFromISO, parseArDate, toDateOnly, toISODate } from '@/lib/datetime';
 import {
   consistentPerceptionLines,
   costItems,
@@ -450,14 +450,33 @@ export async function confirmDocument(
     orderBy: { id: 'asc' },
   });
 
+  /*
+   * El desglose de percepciones que dejó la lectura, si sigue cuadrando.
+   *
+   * Se calcula una vez y se usa para las dos cosas: repartir el costo entre los
+   * artículos y volver a escribir las líneas de impuestos del comprobante.
+   */
+  const percepcionesDiscriminadas = consistentPerceptionLines(
+    percepcionesGuardadas.map((l) => ({ label: l.label, amount: l.amount.toString() })),
+    input.printed.perceptionsTotal ?? '0',
+  );
+
+  // Las mismas líneas, con la tasa y la base que traen guardadas, para volver a
+  // escribirlas tal cual si el desglose cuadra.
+  const percepcionesParaGuardar = percepcionesDiscriminadas
+    ? percepcionesGuardadas.map((l) => ({
+        label: l.label,
+        rate: l.rate?.toString() ?? null,
+        base: l.base?.toString() ?? null,
+        amount: l.amount.toString(),
+      }))
+    : null;
+
   const costed = costItems(input.items, {
     netTotal: input.printed.netTotal ?? '0',
     ivaTotal: input.printed.ivaTotal ?? '0',
     perceptionsTotal: input.printed.perceptionsTotal ?? '0',
-    perceptionLines: consistentPerceptionLines(
-      percepcionesGuardadas.map((l) => ({ label: l.label, amount: l.amount.toString() })),
-      input.printed.perceptionsTotal ?? '0',
-    ),
+    perceptionLines: percepcionesDiscriminadas,
   });
   const report = validateDocument({
     items: costed,
@@ -566,9 +585,25 @@ export async function confirmDocument(
       );
     }
 
+    /*
+     * Las percepciones se reescriben con el desglose que trajo la lectura.
+     *
+     * Antes se rearmaban siempre desde el total impreso, así que un comprobante
+     * de Errecalde —que discrimina "Percepción IVA RG 5329 $114.914,02" y
+     * "Percepción IIBB Buenos Aires $67.033,18"— quedaba guardado con un solo
+     * renglón de $181.947,20 al confirmarlo. El desglose se usaba para repartir
+     * el costo entre los artículos y después se tiraba.
+     *
+     * Eso es plata que el papel discrimina y el comprobante guardado ya no: dos
+     * percepciones distintas se declaran y se compensan distinto, y a fin de mes
+     * hay que poder decir cuánto fue de cada una sin volver a abrir la foto. Se
+     * conserva el desglose cuando suma el total impreso; si no cuadra, se cae al
+     * renglón único, que es lo único que se puede afirmar.
+     */
     await createTaxLines(tx, document.id, {
       ivaLines: buildIvaLines(input.printed, conditions.tax?.ivaRate),
-      perceptionLines: buildPerceptionLines(input.printed, conditions.tax?.iibbRate),
+      perceptionLines:
+        percepcionesParaGuardar ?? buildPerceptionLines(input.printed, conditions.tax?.iibbRate),
     });
 
     // Movimientos de compra e historial de costos.
@@ -661,6 +696,17 @@ export async function confirmDocument(
       renglones: costed.length,
       estado: report.state,
       vencimiento: dueDate.toISOString().slice(0, 10),
+      /*
+       * Las advertencias quedan escritas en el asiento, no sólo en el informe.
+       *
+       * Un comprobante se puede validar con advertencias —un renglón cuyo
+       * importe no entró en el recorte, centavos conciliados, una relectura que
+       * hizo falta—, y eso está bien: son cosas que no impiden pagar. Pero
+       * tienen que poder buscarse después sin abrir el comprobante uno por uno,
+       * porque son justamente las que uno quiere revisar cuando algo no cuadra
+       * a fin de mes.
+       */
+      advertencias: report.checks.filter((c) => c.severity === 'WARN').map((c) => c.label),
     },
   });
 
@@ -870,4 +916,137 @@ export async function suggestDueDate(supplierId: string, issueDateISO: string) {
     term: conditions.term,
     conditions,
   };
+}
+
+/**
+ * Acepta un comprobante ya leído, con los datos que están guardados.
+ *
+ * Es la salida del callejón sin salida: un comprobante que se leyó bien queda en
+ * REQUIERE_REVISION hasta que alguien lo confirma, y hasta ahora la única forma
+ * de confirmarlo era terminar el asistente de carga. Si esa pantalla se cerraba
+ * —se cambió de pantalla, se cortó la conexión, se dejó para después— el
+ * comprobante quedaba en el detalle con dos botones: rechazar y volver. Un
+ * comprobante correcto no puede tener como única salida tirarlo y sacar la foto
+ * de nuevo.
+ *
+ * No cambia el estado a mano: **vuelve a correr todos los controles** con lo que
+ * está en la base y confirma sólo si cierran. Por eso reconstruye la entrada
+ * desde los renglones y los importes guardados y llama al mismo
+ * `confirmDocument` que usa el asistente: si tuviera su propio camino, dentro de
+ * seis meses habría dos criterios distintos para decidir si una factura cierra,
+ * y el que se aplicaría dependería de por qué pantalla entró el operador.
+ *
+ * Las advertencias no frenan nada y no se pierden: quedan en el informe que se
+ * guarda con el comprobante y en la auditoría. Lo que frena es un error.
+ */
+export async function acceptReadDocument(
+  user: AuthUser,
+  documentId: string,
+): Promise<ConfirmResult> {
+  /*
+   * El permiso primero, antes de mirar el comprobante.
+   *
+   * `confirmDocument` lo vuelve a comprobar —es su responsabilidad y no se le
+   * saca—, pero acá tiene que ir adelante de todo: si no, alguien sin permiso
+   * recibe "falta el proveedor" o "falta la fecha" en vez de "no podés validar
+   * comprobantes", y así se entera de cómo está el comprobante por dentro.
+   */
+  if (!hasPermission(user, PERMISSIONS.COMPROBANTES_VALIDAR)) {
+    throw new ForbiddenError('Tu usuario no puede validar comprobantes.');
+  }
+
+  const document = await prisma.document.findUnique({
+    where: { id: documentId },
+    include: { items: { orderBy: { lineNumber: 'asc' } } },
+  });
+  if (!document) throw new NotFoundError('No encontramos ese comprobante.');
+  assertBranchAccess(user, document.branchId);
+
+  if (document.status === 'VALIDADO') {
+    throw new ConflictError('Este comprobante ya está validado.');
+  }
+  if (document.status === 'ANULADO') {
+    throw new ConflictError('Este comprobante está anulado.');
+  }
+
+  /*
+   * Lo que falta para poder aceptarlo se dice por su nombre.
+   *
+   * Son datos del encabezado que la lectura puede no haber conseguido. Sin
+   * ellos el comprobante no se puede guardar, pero el operador los puede
+   * completar desde el asistente: conviene decirle cuál falta y no un genérico.
+   */
+  if (!document.supplierId) {
+    throw new ValidationError(
+      'El comprobante no tiene proveedor asignado. Abrilo desde la carga para elegirlo.',
+    );
+  }
+  if (!document.issueDate) {
+    throw new ValidationError(
+      'El comprobante no tiene fecha de emisión. Abrilo desde la carga para completarla.',
+    );
+  }
+  if (document.pointOfSale.trim() === '' || document.number.trim() === '') {
+    throw new ValidationError(
+      'El comprobante no tiene punto de venta o número. Abrilo desde la carga para completarlos.',
+    );
+  }
+  if (document.items.length === 0) {
+    throw new ValidationError('El comprobante no tiene ningún artículo cargado.');
+  }
+
+  const conditions = await getSupplierConditions(document.supplierId, document.issueDate);
+  const dueDate =
+    document.appliedDueDate ??
+    (conditions.term ? computeDueDate(document.issueDate, conditions.term) : null) ??
+    toDateOnly(document.issueDate);
+
+  return confirmDocument(user, {
+    documentId,
+    supplierId: document.supplierId,
+    docType: document.docType,
+    letter: document.letter,
+    pointOfSale: document.pointOfSale,
+    number: document.number,
+    issueDate: toISODate(document.issueDate),
+    printed: {
+      grossSubtotal: document.grossSubtotal?.toString() ?? null,
+      discountTotal: document.discountTotal?.toString() ?? null,
+      netTotal: document.netTotal?.toString() ?? null,
+      ivaTotal: document.ivaTotal?.toString() ?? null,
+      perceptionsTotal: document.perceptionsTotal?.toString() ?? null,
+      total: document.total?.toString() ?? null,
+      lineCount: document.printedLineCount,
+      netWeightKg: document.printedNetWeightKg?.toString() ?? null,
+      totalUnits: document.printedTotalUnits?.toString() ?? null,
+    },
+    /*
+     * Los renglones se reconstruyen tal como se guardaron, con una salvedad:
+     * `grossSubtotal` sólo se manda cuando salió impreso del papel.
+     *
+     * Un importe que se calculó como cantidad × precio no es un dato del
+     * comprobante, y mandarlo como si lo fuera lo convertiría en verificado sin
+     * que nadie lo haya verificado. El control tiene que volver a verlo por lo
+     * que es: un renglón que no se pudo contrastar.
+     */
+    items: document.items.map((item) => ({
+      lineNumber: item.lineNumber,
+      supplierCode: item.supplierCode,
+      description: item.description,
+      quantity: item.quantity.toString(),
+      unit: item.unit,
+      pieceCount: item.pieceCount,
+      totalWeightKg: item.totalWeightKg?.toString() ?? undefined,
+      unitNetPrice: item.unitNetPrice.toString(),
+      grossSubtotal: item.grossFromPrint ? item.grossSubtotal.toString() : undefined,
+      discountPct: item.discountPct.toString(),
+      ivaRate: item.ivaRate.toString(),
+    })),
+    payment: {
+      dueDate: toISODate(dueDate),
+      paymentMethod:
+        document.appliedPaymentMethod ?? conditions.term?.paymentMethod ?? 'TRANSFERENCIA',
+      notes: null,
+    },
+  });
 }

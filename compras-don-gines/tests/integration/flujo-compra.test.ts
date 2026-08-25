@@ -3,6 +3,7 @@ import { prisma } from '@/lib/db';
 import { getStorage, buildDocumentKey } from '@/lib/storage';
 import { ForbiddenError } from '@/lib/errors';
 import {
+  acceptReadDocument,
   confirmDocument,
   createDocument,
   rejectDocument,
@@ -1387,5 +1388,197 @@ describe('cuando el detector y el analizador se pierden la misma fila', () => {
     expect(resultado.filasSinResolver).toBe(1);
     expect(resultado.filasEsperadas).toBe(23);
     expect(resultado.zonaSugerida).toBe('BORDE_INFERIOR_TABLA');
+  });
+});
+
+describe('aceptar un comprobante que ya se leyó bien', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * El callejón sin salida.
+   *
+   * Un comprobante leído queda en REQUIERE_REVISION esperando confirmación. Si
+   * la pantalla de carga se cierra —se cambió de pantalla, se cortó la
+   * conexión, se dejó para después— la única forma de volver a él era el
+   * detalle, y ahí sólo había "rechazar" y "volver". Un comprobante correcto no
+   * puede tener como única salida tirarlo y sacar la foto de nuevo.
+   */
+
+  it('la factura real de Errecalde termina en VALIDADO sin rechazarla ni releerla', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    // Se leyó entera y sin errores, pero queda esperando que alguien la acepte.
+    expect(lectura.report.errorCount).toBe(0);
+    expect(lectura.report.canSave).toBe(true);
+    const antes = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    expect(antes.status).toBe('REQUIERE_REVISION');
+
+    // Y ahora se acepta, con lo que está guardado. Sin volver a leer la imagen.
+    const resultado = await acceptReadDocument(escenario.admin, documento.id);
+
+    const despues = await prisma.document.findUniqueOrThrow({
+      where: { id: documento.id },
+      include: { items: true, paymentSchedule: true },
+    });
+    expect(despues.status).toBe('VALIDADO');
+    expect(despues.validatedById).toBe(escenario.admin.id);
+    expect(despues.validatedAt).not.toBeNull();
+
+    // Los números del papel, intactos.
+    expect(despues.items).toHaveLength(23);
+    expect(despues.netTotal!.toFixed(2)).toBe('3830467.37');
+    expect(despues.ivaTotal!.toFixed(2)).toBe('804398.16');
+    expect(despues.perceptionsTotal!.toFixed(2)).toBe('181947.20');
+    expect(despues.total!.toFixed(2)).toBe('4816812.73');
+
+    // Y las dos percepciones siguen discriminadas.
+    const percepciones = await prisma.documentTaxLine.findMany({
+      where: { documentId: documento.id, kind: 'PERCEPCION' },
+      orderBy: { amount: 'desc' },
+    });
+    expect(percepciones.map((p) => p.amount.toFixed(2))).toEqual(['114914.02', '67033.18']);
+
+    // El pago quedó agendado.
+    expect(despues.paymentSchedule).not.toBeNull();
+    expect(resultado.paymentScheduleId).toBe(despues.paymentSchedule!.id);
+    expect(resultado.forced).toBe(false);
+  });
+
+  it('vuelve a correr los controles: no cambia el estado a mano', async () => {
+    /*
+     * La diferencia entre aceptar y "marcar como aceptado".
+     *
+     * Si alguien toca los renglones en la base entre la lectura y la
+     * aceptación, el comprobante ya no cierra y no se puede validar. Aceptar
+     * tiene que volver a hacer la cuenta, no confiar en el informe viejo.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    // Se le borra un renglón por debajo: el detalle deja de dar el neto.
+    const primero = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId: documento.id },
+      orderBy: { lineNumber: 'asc' },
+    });
+    await prisma.documentItem.delete({ where: { id: primero.id } });
+
+    await expect(acceptReadDocument(escenario.admin, documento.id)).rejects.toThrow(
+      /no coincide|no cierra|no se puede guardar/i,
+    );
+
+    const despues = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    expect(despues.status).toBe('REQUIERE_REVISION');
+  });
+
+  it('dice exactamente qué control no cierra', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    const primero = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId: documento.id },
+      orderBy: { lineNumber: 'asc' },
+    });
+    await prisma.documentItem.delete({ where: { id: primero.id } });
+
+    /*
+     * "El comprobante no cierra" no le sirve a nadie parado frente al
+     * proveedor. Los controles en error viajan adentro del error para que la
+     * pantalla pueda decir cuál y con qué diferencia.
+     */
+    const error = await acceptReadDocument(escenario.admin, documento.id).catch((e) => e);
+    const detalles = (error.details as { checks?: { label: string }[] }).checks;
+    expect(detalles).toBeDefined();
+    expect(detalles!.length).toBeGreaterThan(0);
+    expect(detalles!.some((c) => /neto|renglones/i.test(c.label))).toBe(true);
+  });
+
+  it('un usuario sin permiso de validar no puede aceptar', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    // El supervisor mira todo y no toca nada: es el rol que no puede validar.
+    await expect(acceptReadDocument(escenario.supervisor, documento.id)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+  });
+
+  it('no se puede aceptar dos veces', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    await acceptReadDocument(escenario.admin, documento.id);
+    await expect(acceptReadDocument(escenario.admin, documento.id)).rejects.toThrow(
+      /ya está validado/i,
+    );
+  });
+
+  it('las advertencias sobreviven en el informe y en la auditoría', async () => {
+    /*
+     * Una advertencia no impide validar, pero tampoco se borra al validar: es
+     * justo lo que uno quiere poder revisar cuando algo no cuadra a fin de mes.
+     *
+     * Se provoca una de verdad: el recorte de la tabla sin el importe de un
+     * renglón, que se calcula como cantidad × precio y queda sin verificar
+     * contra el papel.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    expect(lectura.report.warningCount).toBeGreaterThan(0);
+    expect(lectura.report.errorCount).toBe(0);
+    const advertencias = lectura.report.checks
+      .filter((c) => c.severity === 'WARN')
+      .map((c) => c.label);
+
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    // En el informe guardado con el comprobante.
+    const guardado = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    const informe = guardado.checkReport as unknown as { checks: { severity: string; label: string }[] };
+    const guardadas = informe.checks.filter((c) => c.severity === 'WARN').map((c) => c.label);
+    expect(guardadas).toEqual(expect.arrayContaining(advertencias));
+
+    // Y en el asiento de auditoría, para poder buscarlas sin abrir cada uno.
+    const asiento = await prisma.auditLog.findFirst({
+      where: { entityId: documento.id, action: 'comprobante.confirmado' },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(asiento).not.toBeNull();
+    const detalle = asiento!.after as unknown as { advertencias?: string[] };
+    expect(detalle.advertencias).toEqual(expect.arrayContaining(advertencias));
   });
 });

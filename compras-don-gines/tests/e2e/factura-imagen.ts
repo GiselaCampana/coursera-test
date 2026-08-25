@@ -109,6 +109,15 @@ function texto(contenido: string, o: OpcionesTexto): string {
 export function svgFactura(
   deterioro: 'nitido' | 'borroso' = 'nitido',
   totalAlterado = false,
+  /**
+   * Número del comprobante, para no chocar con el que siembra el escenario.
+   *
+   * El de fábrica —00212356— es el de la factura que la base ya trae cargada y
+   * validada. Una prueba que lea esta imagen y después intente guardarla choca
+   * contra el control de duplicados, que hace bien su trabajo pero no es lo que
+   * la prueba quería probar.
+   */
+  numero = '00212356',
 ): string {
   const partes: string[] = [];
   const chico = deterioro === 'borroso';
@@ -124,7 +133,7 @@ export function svgFactura(
   partes.push(texto('FACTURA', { x: DERECHA, y: 110, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('A', { x: DERECHA, y: 165, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('Punto de Venta: 0010', { x: DERECHA, y: 215, tamano: 30, anclaje: 'end' }));
-  partes.push(texto('Comp. Nro: 00212356', { x: DERECHA, y: 255, tamano: 30, anclaje: 'end' }));
+  partes.push(texto(`Comp. Nro: ${numero}`, { x: DERECHA, y: 255, tamano: 30, anclaje: 'end' }));
   partes.push(texto('Fecha de Emision: 14/08/2026', { x: DERECHA, y: 295, tamano: 30, anclaje: 'end' }));
 
   partes.push(`<line x1="${IZQUIERDA}" y1="330" x2="${DERECHA}" y2="330" stroke="#111111" stroke-width="3"/>`);
@@ -208,10 +217,18 @@ export async function facturaLosCalvosJpeg(
     rotacionExif?: 1 | 6;
     /** Imprime un total que no coincide con el detalle. */
     totalAlterado?: boolean;
+    /** Número del comprobante, para no chocar con los ya sembrados. */
+    numero?: string;
   } = {},
 ): Promise<Buffer> {
   let imagen = sharp(
-    Buffer.from(svgFactura(opciones.deterioro ?? 'nitido', opciones.totalAlterado ?? false)),
+    Buffer.from(
+      svgFactura(
+        opciones.deterioro ?? 'nitido',
+        opciones.totalAlterado ?? false,
+        opciones.numero ?? '00212356',
+      ),
+    ),
     { density: 96 },
   );
 

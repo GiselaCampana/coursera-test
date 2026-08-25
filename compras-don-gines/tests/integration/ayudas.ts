@@ -54,6 +54,15 @@ export interface Escenario {
   supervisor: AuthUser;
   sucursales: { devoto: string; pueyrredon: string; sanMartin: string };
   proveedorId: string;
+  /**
+   * Distribución Errecalde, el segundo proveedor.
+   *
+   * Hace falta porque las pruebas que corren sobre la foto real de Errecalde
+   * llegan hasta el guardado, y un comprobante no se puede validar sin
+   * proveedor. Sin él, esas pruebas fallaban por una razón que no era la que
+   * estaban probando.
+   */
+  proveedorErrecaldeId: string;
   productos: Record<string, string>;
 }
 
@@ -156,6 +165,33 @@ export async function sembrarEscenario(): Promise<Escenario> {
     },
   });
 
+  const errecalde = await prisma.supplier.create({
+    data: {
+      tradeName: 'Distribución Errecalde',
+      legalName: 'Distribución Errecalde S.A.',
+      cuit: '30-71780890-4',
+      aliases: {
+        create: ['Distribución Errecalde', 'DISTRIBUCION ERRECALDE S.A.'].map((alias) => ({
+          alias,
+          normalized: normalizeText(alias),
+        })),
+      },
+      paymentTerms: {
+        create: {
+          termType: 'SAME_DAY',
+          days: 0,
+          paymentMethod: 'TRANSFERENCIA',
+          validFrom: EPOCH,
+        },
+      },
+      // Errecalde discrimina las percepciones en el comprobante, así que acá no
+      // se configura una tasa: el control las contrasta contra lo impreso.
+      taxRules: {
+        create: { ivaRate: '0.21', iibbRate: '0', otherPerceptions: [], validFrom: EPOCH },
+      },
+    },
+  });
+
   const definiciones = [
     ['1001', 'Longaniza corta', 'LONGANIZA CORTA'],
     ['1002', 'Salame Crespón', 'SALAME CRESPON'],
@@ -220,6 +256,7 @@ export async function sembrarEscenario(): Promise<Escenario> {
     supervisor: usuario(supervisor, rolSupervisor),
     sucursales: { devoto: devoto.id, pueyrredon: pueyrredon.id, sanMartin: sanMartin.id },
     proveedorId: proveedor.id,
+    proveedorErrecaldeId: errecalde.id,
     productos,
   };
 }

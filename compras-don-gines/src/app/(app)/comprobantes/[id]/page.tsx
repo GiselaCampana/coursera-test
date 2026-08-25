@@ -65,6 +65,7 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
 
   const informe = documento.checkReport as unknown as ValidationReport | null;
   const puedeAnular = hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR);
+  const puedeValidar = hasPermission(user, PERMISSIONS.COMPROBANTES_VALIDAR);
 
   return (
     <>
@@ -385,6 +386,14 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
         documentId={documento.id}
         estado={documento.status}
         puedeAnular={puedeAnular}
+        puedeValidar={puedeValidar}
+        /*
+         * Lo que decide es el conteo de errores del informe, no el estado del
+         * semáforo. Un comprobante en amarillo —hizo falta releer, o quedó
+         * alguna advertencia— tiene cero errores y se puede validar; el semáforo
+         * amarillo describe cómo se leyó, no si se puede pagar.
+         */
+        hayErrores={(informe?.errorCount ?? 0) > 0}
       />
     </>
   );

@@ -220,3 +220,78 @@ test.describe('lectura de una foto real de Errecalde', () => {
     await expect(tomate.getByLabel('Piezas', { exact: true })).toHaveValue('');
   });
 });
+
+test.describe('aceptar desde el detalle un comprobante ya leído', () => {
+  test.afterAll(async () => {
+    await limpiarComprobantesLeidos();
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/nueva-compra');
+  });
+
+  test('se valida sin volver a leer la imagen, y la advertencia queda', async ({
+    page,
+  }, testInfo) => {
+    soloEnIphone(test, testInfo.project.name);
+
+    /*
+     * El callejón sin salida que motivó esto.
+     *
+     * Un comprobante leído queda esperando confirmación. Si la pantalla de carga
+     * se cierra —se cambió de pantalla, se cortó la conexión, se dejó para
+     * después— la única forma de volver a él era el detalle, y ahí sólo había
+     * "rechazar" y "volver". Un comprobante correcto no puede tener como única
+     * salida tirarlo y sacar la foto de nuevo.
+     *
+     * Se usa esta factura y no la dibujada porque es la que se lee entera y sin
+     * errores, con una advertencia: el importe de PERNIL TERMOLI no entra en el
+     * recorte y se calcula como cantidad × precio, así que queda sin contrastar
+     * contra el papel. Una advertencia no impide pagar la factura.
+     */
+    await leer(page, await fotoErrecalde());
+
+    await expect(page.locator('.semaforo-ok, .semaforo-aviso')).toBeVisible();
+    await expect(page.locator('.semaforo-error')).toHaveCount(0);
+    // Hay al menos una advertencia: es la situación que hay que poder resolver.
+    await expect(page.locator('.controles li').filter({ hasText: 'Importe impreso' })).toBeVisible();
+
+    // Y ahora se abandona la carga a mitad de camino, sin guardar.
+    await page.goto('/comprobantes');
+    await page.getByText('00008-00002647').first().click();
+    await expect(page.getByRole('heading', { level: 1 })).toContainText('00008-00002647');
+
+    // La advertencia está a la vista antes de aceptar.
+    const advertencia = page.locator('.controles li').filter({ hasText: 'Importe impreso' });
+    await expect(advertencia).toBeVisible();
+
+    // La acción principal existe y se puede usar.
+    const aceptar = page.getByRole('button', { name: 'Aceptar y validar comprobante' });
+    await expect(aceptar).toBeEnabled();
+    await aceptar.click();
+
+    /*
+     * El backend revalidó con los datos guardados y el comprobante quedó
+     * validado. El aviso es el mismo que da el asistente al terminar de
+     * guardar, a propósito: es el mismo hecho, y conviene que se vea igual
+     * entre por donde entre.
+     */
+    await expect(page.getByText('El comprobante se guardó y el pago quedó agendado.')).toBeVisible({
+      timeout: 30_000,
+    });
+
+    // Al recargar, el estado persiste y ya no se ofrece aceptar de nuevo.
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Aceptar y validar comprobante' })).toHaveCount(0);
+
+    // Los números del papel siguen ahí, y la advertencia también: validar no la
+    // borra, que es lo que uno quiere poder revisar a fin de mes.
+    await expect(page.locator('.controles li').filter({ hasText: 'Importe impreso' })).toBeVisible();
+    await expect(page.getByText('$ 4.816.812,73').first()).toBeVisible();
+
+    // Y aparece entre los validados.
+    await page.goto('/comprobantes?estado=VALIDADO');
+    await expect(page.getByText('00008-00002647').first()).toBeVisible();
+  });
+});
