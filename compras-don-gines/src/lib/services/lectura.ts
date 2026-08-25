@@ -547,6 +547,25 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
   controles: ValidationReport['checks'];
   observaciones: string[];
   calculado: ValidationReport['computed'] | null;
+  /**
+   * Los tres números del conteo de filas, que **no** son el mismo número.
+   *
+   * `filasDelDetector` es lo que el lector contó mirando la foto.
+   * `filasSinResolver` son los tramos con forma de fila que el analizador no
+   * pudo identificar. Y `filasEsperadas` es el que de verdad decide: el mayor
+   * entre lo que vio el detector y lo que se entendió más lo que quedó sin
+   * resolver.
+   *
+   * Se informan los tres por separado porque mostrar sólo el del detector es
+   * engañoso: sobre esta factura el detector cuenta 22 y el que manda es 23, y
+   * mirando la pantalla parecía que el control no se estaba disparando cuando
+   * en realidad sí.
+   */
+  filasDelDetector: number | null;
+  filasSinResolver: number;
+  filasEsperadas: number | null;
+  /** Qué franja pediría releer el ciclo de lectura, si es que pediría alguna. */
+  zonaSugerida: ZonaAReleer | null;
 } {
   const candidatos = analizarIntento(paginas, 1);
   if (candidatos.length === 0) {
@@ -557,6 +576,10 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
       controles: [],
       observaciones: ['No se reconoció ningún comprobante en el texto leído.'],
       calculado: null,
+      filasDelDetector: null,
+      filasSinResolver: 0,
+      filasEsperadas: null,
+      zonaSugerida: null,
     };
   }
 
@@ -568,6 +591,10 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
     controles: mejor.informe.checks,
     observaciones: mejor.observaciones,
     calculado: mejor.informe.computed,
+    filasDelDetector: contarFilasVistas(paginas),
+    filasSinResolver: mejor.filasSinResolver,
+    filasEsperadas: mejor.filasEnLaImagen,
+    zonaSugerida: zonaAReleer(mejor),
   };
 }
 

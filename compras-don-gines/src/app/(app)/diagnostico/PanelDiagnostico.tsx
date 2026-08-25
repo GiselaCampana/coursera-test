@@ -49,6 +49,18 @@ interface Resultado {
   textoCompleto: string | null;
   /** Filas que el lector contó en la imagen, antes de interpretar nada. */
   filasDetectadas: number | null;
+  /**
+   * Tramos con forma de fila que el analizador no pudo identificar, y el conteo
+   * que de verdad decide.
+   *
+   * El del detector solo es engañoso: sobre la factura de Errecalde cuenta 22 y
+   * el que manda es 23, así que mirando la pantalla parecía que el control no se
+   * disparaba cuando en realidad sí. Los tres se muestran por separado.
+   */
+  filasSinResolver: number;
+  filasEsperadas: number | null;
+  /** Qué franja pediría releer el ciclo de lectura, si es que pediría alguna. */
+  zonaSugerida: string | null;
   tiempos: { zona: string; ms: number }[];
   errorWorker: string | null;
 }
@@ -138,6 +150,9 @@ export function PanelDiagnostico({
         textoResumen: lectura.paginas[0]?.textoResumen ?? null,
         textoCompleto: lectura.paginas[0]?.textoCompleto ?? null,
         filasDetectadas: lectura.paginas[0]?.regiones?.filasDetectadas ?? null,
+        filasSinResolver: analisis.filasSinResolver ?? 0,
+        filasEsperadas: analisis.filasEsperadas ?? null,
+        zonaSugerida: analisis.zonaSugerida ?? null,
         tiempos: lectura.paginas[0]?.tiempos ?? [],
         errorWorker,
       });
@@ -161,10 +176,19 @@ export function PanelDiagnostico({
    * sobre una tabla de veintitrés no dispara ningún otro control, porque el
    * único renglón que leyó cierra perfecto solo.
    */
-  const filasVistas = resultado?.filasDetectadas ?? null;
+  /*
+   * Y se mira el conteo que decide, no el del detector.
+   *
+   * El del detector puede coincidir con los renglones interpretados y aun así
+   * faltar una fila, porque los dos se pierden la misma: es exactamente lo que
+   * pasa cuando el recorte de la tabla se corta antes de terminar. El que suma
+   * los tramos sin identificar es el único que lo ve.
+   */
+  const filasVistas = resultado?.filasEsperadas ?? resultado?.filasDetectadas ?? null;
   const fallo = resultado
     ? resultado.articulos === 0 ||
       resultado.controles.some((c) => c.severity === 'ERROR') ||
+      (resultado.filasSinResolver ?? 0) > 0 ||
       (filasVistas !== null && filasVistas >= 8 && resultado.articulos < filasVistas * 0.7)
     : false;
   // Si falló, el texto se muestra sin que haya que pedirlo.
@@ -363,7 +387,13 @@ export function PanelDiagnostico({
             {fallo ? (
               <p className="mensaje mensaje-aviso">
                 {resultado.filasDetectadas !== null
-                  ? `En la imagen se contaron ${resultado.filasDetectadas} filas y se interpretaron ${resultado.articulos} renglones. `
+                  ? `El detector contó ${resultado.filasDetectadas} filas en la imagen y se interpretaron ${resultado.articulos} renglones. `
+                  : ''}
+                {resultado.filasSinResolver > 0
+                  ? `Quedaron ${resultado.filasSinResolver} tramo/s con forma de fila sin identificar, así que se esperan ${resultado.filasEsperadas} filas: ése es el número que decide, no el del detector. `
+                  : ''}
+                {resultado.zonaSugerida === 'BORDE_INFERIOR_TABLA'
+                  ? 'Al leer el comprobante de verdad, esto pediría releer el borde inferior de la tabla. '
                   : ''}
                 Abajo está el texto tal cual salió del lector: si la tabla se ve bien escrita, el
                 problema es del analizador; si se ve rota, es de la lectura.

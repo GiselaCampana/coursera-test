@@ -9,7 +9,7 @@ import {
   voidDocument,
   type ConfirmDocumentInput,
 } from '@/lib/services/documents';
-import { registrarLectura } from '@/lib/services/lectura';
+import { analizarSinGuardar, registrarLectura } from '@/lib/services/lectura';
 import { versionEnEjecucion } from '@/lib/version';
 import { confirmPayment } from '@/lib/services/payments';
 import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
@@ -92,6 +92,15 @@ async function leerComprobante(
      * correría de lugar.
      */
     completo?: string;
+    /**
+     * Cuántas filas dice el detector de disposición que vio en la imagen.
+     *
+     * Importa poder fijarlo: el caso que más caro sale es justamente cuando el
+     * detector y el analizador se pierden **la misma** fila y los dos números
+     * coinciden. Sin poder ponerlo a mano, la prueba lo deja en nulo y el
+     * conteo se apoya sólo en lo interpretado, que es el caso fácil.
+     */
+    filasDetectadas?: number;
   } = {},
 ) {
   return registrarLectura(usuario, documentId, {
@@ -118,6 +127,10 @@ async function leerComprobante(
         confianza: 0.88,
         inclinacion: -0.5,
         perspectivaCorregida: true,
+        regiones:
+          opciones.filasDetectadas === undefined
+            ? null
+            : { filasDetectadas: opciones.filasDetectadas },
       },
     ],
   });
@@ -1275,5 +1288,104 @@ describe('cuándo NO corresponde releer el borde', () => {
     expect(lectura.report.canSave).toBe(false);
     // Pero no se manda a releer una franja que no es la que tiene el problema.
     expect(lectura.releer?.zona ?? null).toBeNull();
+  });
+});
+
+describe('cuando el detector y el analizador se pierden la misma fila', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * El caso real, medido en un iPhone sobre la foto de Errecalde.
+   *
+   * El detector de disposición cuenta 22 filas sobre la imagen. El analizador
+   * interpreta 22 renglones. Los dos números coinciden, así que el control de
+   * completitud da "22 de 22" y el comprobante se guardaría en verde con un
+   * artículo de menos.
+   *
+   * Y sin embargo falta uno: en la página completa quedó
+   * "2             0% — 21% $3268324", que es el renglón de TOMATE EN BOTELLA
+   * sin código ni descripción, después del último artículo identificado.
+   *
+   * Ese jirón tiene que valer por sí solo como evidencia de una fila más. Es la
+   * única señal que no depende de ninguno de los dos mecanismos que fallaron.
+   */
+  const RECORTE_SIN_TOMATE = SAFARI_ARTICULOS.split('\n')
+    .filter((linea) => !linea.includes('TOMATE'))
+    .join('\n');
+
+  it('el jirón del final vale por una fila aunque el detector no la haya contado', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: RECORTE_SIN_TOMATE,
+      resumen: SAFARI_RESUMEN,
+      // El detector vio 22, igual que los renglones interpretados.
+      filasDetectadas: 22,
+    });
+
+    const control = lectura.report.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control!.actual).toBe('22');
+    // 22 del detector, pero 22 interpretados + 1 jirón: manda el más alto.
+    expect(control!.expected).toBe('23');
+    expect(control!.severity).toBe('ERROR');
+
+    // Y por lo tanto se pide la relectura del borde, que es lo que no pasaba.
+    expect(lectura.releer?.zona).toBe('BORDE_INFERIOR_TABLA');
+    expect(lectura.report.canSave).toBe(false);
+  });
+
+  it('con la tabla entera, el mismo detector de 22 no inventa una fila de más', async () => {
+    /*
+     * El contraejemplo. Si el jirón se contara siempre, o si se contaran los
+     * pedazos de filas que ya están leídas, este comprobante —que está completo—
+     * quedaría pidiendo una fila que no existe y no se podría guardar nunca.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+
+    const lectura = await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+      filasDetectadas: 22,
+    });
+
+    const control = lectura.report.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control!.actual).toBe('23');
+    expect(control!.expected).toBe('23');
+    expect(control!.severity).toBe('OK');
+    expect(lectura.releer?.zona ?? null).toBeNull();
+    expect(lectura.report.canSave).toBe(true);
+  });
+
+  it('el diagnóstico informa los tres números, no sólo el del detector', async () => {
+    /*
+     * Mirar sólo el conteo del detector desde el teléfono lleva a la conclusión
+     * equivocada: dice "22 filas / 22 renglones" y parece que el control no se
+     * está disparando, cuando el número que decide es 23 y sí se dispara.
+     *
+     * Así que el diagnóstico tiene que informar los tres por separado, y decir
+     * si al leer el comprobante de verdad pediría releer una franja.
+     */
+    const resultado = analizarSinGuardar([
+      {
+        numero: 1,
+        textoCompleto: SAFARI_COMPLETO,
+        textoArticulos: RECORTE_SIN_TOMATE,
+        textoResumen: SAFARI_RESUMEN,
+        regiones: { filasDetectadas: 22 },
+      },
+    ]);
+
+    expect(resultado.filasDelDetector).toBe(22);
+    expect(resultado.articulos).toBe(22);
+    expect(resultado.filasSinResolver).toBe(1);
+    expect(resultado.filasEsperadas).toBe(23);
+    expect(resultado.zonaSugerida).toBe('BORDE_INFERIOR_TABLA');
   });
 });
