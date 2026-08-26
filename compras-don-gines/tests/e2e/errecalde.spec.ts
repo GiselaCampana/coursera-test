@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
-import { ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
+import { elegirOpcion, ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
 import { limpiarComprobantesLeidos } from './entorno';
 
 /**
@@ -309,13 +309,13 @@ test.describe('aceptar desde el detalle un comprobante ya leído', () => {
      * el navegador no lo puede montar.
      */
     await page.goto('/compras?proveedor=');
-    await page.locator('#proveedor').selectOption({ label: 'Distribución Errecalde' });
+    await elegirOpcion(page, '#proveedor', 'Distribución Errecalde');
     await page.getByRole('button', { name: 'Filtrar' }).click();
     await expect(page.locator('table tbody tr')).toHaveCount(23);
 
     // El queso viene asociado por el código del proveedor: sus kilos tienen
     // que estar, no cero.
-    await page.locator('#producto').selectOption({ label: 'Queso Sardo bloque Melincué' });
+    await elegirOpcion(page, '#producto', 'Queso Sardo bloque Melincué');
     await page.getByRole('button', { name: 'Filtrar' }).click();
     const kilos = page
       .locator('.card', { hasText: 'Totales del período' })
@@ -366,7 +366,7 @@ test.describe('lo que queda usable después de validar la factura real', () => {
     const tomate = page.locator('.lista > li').filter({ hasText: 'código ART-01477' });
     const elegirPlu = tomate.locator('select[id^="prod-"]');
     await expect(elegirPlu).toBeVisible();
-    await elegirPlu.selectOption({ label: '2002 · Tomate en botella' });
+    await elegirOpcion(page, `#${await elegirPlu.getAttribute('id')}`, 'Tomate en botella');
 
     /*
      * El queso ya viene asociado, por el código que el proveedor imprime. Son
@@ -410,7 +410,7 @@ test.describe('lo que queda usable después de validar la factura real', () => {
      * Acotado a este proveedor: la base de pruebas tiene otras compras, y lo
      * que se está comprobando es que **esta** factura llegó entera.
      */
-    await page.locator('#proveedor').selectOption({ label: 'Distribución Errecalde' });
+    await elegirOpcion(page, '#proveedor', 'Distribución Errecalde');
     await page.getByRole('button', { name: 'Filtrar' }).click();
 
     // Los 23 renglones de la factura, con su costo real.
@@ -420,13 +420,13 @@ test.describe('lo que queda usable después de validar la factura real', () => {
     await expect(page.locator('table tbody tr')).toHaveCount(23);
 
     // Y por artículo: el queso reconocido solo tiene sus kilos, no cero.
-    await page.locator('#producto').selectOption({ label: 'Queso Sardo bloque Melincué' });
+    await elegirOpcion(page, '#producto', 'Queso Sardo bloque Melincué');
     await page.getByRole('button', { name: 'Filtrar' }).click();
     await expect(total('Kilos')).toContainText('4,75 kg');
     await expect(page.locator('table tbody tr')).toHaveCount(1);
 
     // Y el que se eligió a mano, también.
-    await page.locator('#producto').selectOption({ label: 'Tomate en botella' });
+    await elegirOpcion(page, '#producto', 'Tomate en botella');
     await page.getByRole('button', { name: 'Filtrar' }).click();
     await expect(total('Unidades')).toContainText('32');
 

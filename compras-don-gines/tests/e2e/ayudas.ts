@@ -54,3 +54,19 @@ export function soloEnIphone(test: { skip: (condicion: boolean, motivo: string) 
     'Modifica datos compartidos: corre sólo en el proyecto iphone.',
   );
 }
+
+/**
+ * Elige una opción de un `<select>` por una parte de su texto.
+ *
+ * `selectOption({ label })` exige el texto completo y exacto, así que cualquier
+ * cambio de presentación —agregarle el PLU adelante al nombre del artículo, por
+ * ejemplo— rompe la prueba sin que haya cambiado nada de lo que la prueba
+ * quiere comprobar. Acá se busca por lo que identifica a la opción y se
+ * selecciona por su valor, que es lo que el formulario manda de verdad.
+ */
+export async function elegirOpcion(page: Page, selector: string, texto: string | RegExp) {
+  const opcion = page.locator(`${selector} option`).filter({ hasText: texto }).first();
+  await expect(opcion, `No hay ninguna opción con «${texto}» en ${selector}`).toHaveCount(1);
+  const valor = await opcion.getAttribute('value');
+  await page.locator(selector).selectOption(valor ?? '');
+}

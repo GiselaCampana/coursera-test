@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
+import { elegirOpcion, ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
 
 /**
  * El mantenimiento de asociaciones históricas.
@@ -62,7 +62,7 @@ test.describe('asociaciones históricas', () => {
     await ingresar(page, 'admin');
     await page.goto('/configuracion/productos/asociaciones');
 
-    await page.locator('#proveedor').selectOption({ label: 'Distribución Errecalde' });
+    await elegirOpcion(page, '#proveedor', 'Distribución Errecalde');
     await page.getByRole('button', { name: 'Analizar' }).click();
     await expect(page).toHaveURL(/proveedor=/);
     await expect(page.locator('.resumen-mes')).toBeVisible();
