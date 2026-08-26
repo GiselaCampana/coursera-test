@@ -10,6 +10,17 @@ import { refreshPaymentStatuses } from '@/lib/services/payments';
 
 export interface PurchaseFilters {
   productId?: string | null;
+  /**
+   * Familia de artículos, para preguntar por rubro y no por PLU.
+   *
+   * "Cuánto Sardo compramos" no es una pregunta sobre un producto: son dos
+   * artículos distintos, con dos PLU y dos costos, y la respuesta es la suma de
+   * los dos. Por eso la familia filtra por el producto del movimiento y no por
+   * su descripción: buscar "sardo" en el texto de la factura traería también el
+   * rallado, y dejaría afuera cualquier renglón que el proveedor haya escrito
+   * de otra manera.
+   */
+  familyId?: string | null;
   supplierId?: string | null;
   branchId?: string | null;
   from?: string | null;
@@ -26,6 +37,15 @@ function buildWhere(user: AuthUser, filters: PurchaseFilters): Prisma.PurchaseMo
     where.branchId = filters.branchId;
   }
   if (filters.productId) where.productId = filters.productId;
+  /*
+   * La familia acota por el producto asociado, no lo reemplaza.
+   *
+   * Si vienen los dos, el PLU manda: preguntar por un artículo concreto dentro
+   * de su familia tiene que devolver ese artículo, no la familia entera.
+   */
+  if (filters.familyId && !filters.productId) {
+    where.product = { familyId: filters.familyId };
+  }
   if (filters.supplierId) where.supplierId = filters.supplierId;
 
   const from = filters.from ? parseArDate(filters.from) : null;

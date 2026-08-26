@@ -31,6 +31,8 @@ import {
   segurasDe,
 } from '@/lib/services/backfill-productos';
 import { saveSupplierCode, saveSupplierTerm } from '@/lib/services/admin';
+import { importarCatalogo, buscarEnCatalogo } from '@/lib/services/catalogo';
+import { costItems } from '@/lib/domain/costing';
 import { getSupplierConditions } from '@/lib/services/suppliers';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { arToday, toISODate, dateOnlyFromISO } from '@/lib/datetime';
@@ -173,6 +175,25 @@ function datosConfirmacion(overrides: Partial<ConfirmDocumentInput> = {}): Omit<
     payment: { dueDate: '2026-08-14', paymentMethod: 'TRANSFERENCIA', notes: null },
     ...overrides,
   };
+}
+
+/**
+ * La factura real de Errecalde, leída y validada. Devuelve su identificador.
+ *
+ * Es el punto de partida de todo lo que se prueba sobre un comprobante que ya
+ * está: reparaciones, importaciones de catálogo y reportes por familia tienen
+ * que poder correr sobre una factura ya cerrada sin volver a leer la foto.
+ */
+async function comprobanteErrecaldeValidado(): Promise<string> {
+  const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+  await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+  await leerComprobante(escenario.operadorDevoto, documento.id, {
+    completo: SAFARI_COMPLETO,
+    articulos: SAFARI_ARTICULOS,
+    resumen: SAFARI_RESUMEN,
+  });
+  await acceptReadDocument(escenario.admin, documento.id);
+  return documento.id;
 }
 
 describe('caso de aceptación: factura Los Calvos de punta a punta', () => {
@@ -3394,5 +3415,419 @@ describe('corregir la condición de pago de un proveedor', () => {
     await expect(
       reschedulePayment(escenario.operadorDevoto, agenda.id, '2026-08-28', 'probando'),
     ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe('importar el catálogo interno de Don Ginés', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * Compras no inventa PLU: los toma de Control de Stock.
+   *
+   * El catálogo con los números internos ya existe y es de otro sistema. Lo que
+   * se prueba acá es que copiarlo no lo estropee: que el PLU se conserve exacto,
+   * que nada se renumere por parecido de nombre, que nada se borre y que las
+   * compras que ya están cargadas no se muevan un centímetro.
+   */
+
+  const CATALOGO = [
+    'PLU;Nombre;Familia;Proveedor;Codigo Proveedor;Activo',
+    '1211;Cremoso Punta del Agua;Quesos;Distribución Errecalde;ART-00228;si',
+    '2001;Queso Sardo bloque Melincué;Queso Sardo;Distribución Errecalde;ART-00758;si',
+    '2002;Queso Sardo Don Alfonso;Queso Sardo;Distribución Errecalde;ART-00722;si',
+    '3050;Provoleta entera;Quesos;;;si',
+  ].join('\n');
+
+  it('el informe no escribe nada', async () => {
+    const antes = await prisma.product.count();
+    const informe = await importarCatalogo(escenario.admin, CATALOGO);
+
+    expect(informe.aplicados).toBe(0);
+    expect(informe.nuevos.map((n) => n.plu)).toContain('3050');
+    expect(await prisma.product.count()).toBe(antes);
+    expect(await prisma.productFamily.count()).toBe(0);
+  });
+
+  it('hace upsert por PLU: actualiza el que está y crea el que falta', async () => {
+    const informe = await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+
+    // El 3050 no estaba: se crea con su PLU tal cual.
+    const nuevo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '3050' } });
+    expect(nuevo.normalizedName).toBe('Provoleta entera');
+
+    // El 1211 ya estaba: se actualiza, no se duplica.
+    expect(await prisma.product.count({ where: { internalCode: '1211' } })).toBe(1);
+    const cremoso = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(cremoso.id).toBe(escenario.productos['1211']);
+    expect(cremoso.catalogSyncedAt).not.toBeNull();
+
+    expect(informe.nuevos).toHaveLength(1);
+    expect(informe.conflictos).toEqual([]);
+
+    // Correrlo de nuevo no crea nada: la segunda vez ya están todos.
+    const segunda = await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+    expect(segunda.nuevos).toHaveLength(0);
+    expect(await prisma.product.count({ where: { internalCode: '3050' } })).toBe(1);
+  });
+
+  it('no renumera un artículo porque el nombre coincida', async () => {
+    /*
+     * El caso peligroso: el archivo trae con otro PLU un artículo que acá ya
+     * existe. Cambiarle el número le movería encima todo su historial de
+     * compras y de precios, y eso no lo decide una coincidencia de texto.
+     */
+    const archivo = ['PLU,Nombre', '9999,Cremoso Punta del Agua'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.conflictos).toHaveLength(1);
+    expect(informe.conflictos[0].motivo).toContain('1211');
+    // Ni se renumeró el viejo ni se creó el nuevo.
+    const cremoso = await prisma.product.findUniqueOrThrow({
+      where: { id: escenario.productos['1211'] },
+    });
+    expect(cremoso.internalCode).toBe('1211');
+    expect(await prisma.product.findUnique({ where: { internalCode: '9999' } })).toBeNull();
+  });
+
+  it('un PLU repetido en el archivo con dos nombres no entra', async () => {
+    const archivo = ['PLU,Nombre', '4000,Una cosa', '4000,Otra cosa distinta'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.conflictos[0].motivo).toContain('dos veces');
+    expect(await prisma.product.findUnique({ where: { internalCode: '4000' } })).toBeNull();
+  });
+
+  it('no borra lo que no viene en el archivo, y avisa si tiene compras', async () => {
+    const documento = await comprobanteErrecaldeValidado();
+    void documento;
+
+    const archivo = ['PLU,Nombre', '1211,Cremoso Punta del Agua'].join('\n');
+    const antes = await prisma.product.count();
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(await prisma.product.count()).toBe(antes);
+    const sardo = informe.soloEnCompras.find((p) => p.plu === '2001');
+    expect(sardo, 'el Sardo quedó fuera del informe de sobrantes').toBeDefined();
+    // Y se dice cuáles tienen compras cargadas: borrar ésos no tendría vuelta.
+    expect(sardo!.conMovimientos).toBe(true);
+  });
+
+  it('aprende el código del proveedor, y con eso la próxima factura entra sola', async () => {
+    /*
+     * Errecalde · ART-00228 → Don Ginés · PLU 1211.
+     *
+     * Es la relación que se busca. Una vez cargada, el reconocimiento no
+     * depende de cómo salga la descripción del OCR: entra por identificación.
+     */
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+
+    const alias = await prisma.productAlias.findFirstOrThrow({
+      where: { supplierId: escenario.proveedorErrecaldeId, supplierCode: 'ART-00228' },
+    });
+    expect(alias.productId).toBe(escenario.productos['1211']);
+
+    const [resultado] = await matchItemsToProducts(
+      costItems(
+        [
+          {
+            lineNumber: 1,
+            supplierCode: 'ART-00228',
+            // Una descripción que no se parece: lo que manda es el código.
+            description: 'CREM PDA X HORMA',
+            quantity: '1',
+            unit: 'KG',
+            unitNetPrice: '100',
+            discountPct: '0',
+            ivaRate: '0.21',
+          },
+        ],
+        { netTotal: '100', ivaTotal: '21', perceptionsTotal: '0' },
+      ),
+      escenario.proveedorErrecaldeId,
+    );
+    expect(resultado.method).toBe('SUPPLIER_CODE');
+    expect(resultado.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('no le roba a otro PLU un código de proveedor ya asignado', async () => {
+    // ART-00228 ya es del 1211; el archivo quiere dárselo al 3050.
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+
+    const archivo = [
+      'PLU;Nombre;Proveedor;Codigo Proveedor',
+      '3050;Provoleta entera;Distribución Errecalde;ART-00228',
+    ].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.conflictos[0].motivo).toContain('1211');
+    const alias = await prisma.productAlias.findFirstOrThrow({
+      where: { supplierId: escenario.proveedorErrecaldeId, supplierCode: 'ART-00228' },
+    });
+    expect(alias.productId, 'el código cambió de artículo solo').toBe(escenario.productos['1211']);
+  });
+
+  it('no toca las compras, los impuestos ni los pagos ya cargados', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+
+    const foto = async () =>
+      JSON.stringify({
+        comprobante: await prisma.document.findUnique({
+          where: { id: documentId },
+          select: { total: true, netTotal: true, ivaTotal: true, status: true },
+        }),
+        renglones: await prisma.documentItem.findMany({
+          where: { documentId },
+          orderBy: { lineNumber: 'asc' },
+          select: { quantity: true, netAmount: true, ivaAmount: true, totalCost: true },
+        }),
+        movimientos: await prisma.purchaseMovement.count({ where: { documentId } }),
+        agenda: await prisma.paymentSchedule.findUnique({
+          where: { documentId },
+          select: { dueDate: true, plannedAmount: true },
+        }),
+      });
+
+    const antes = await foto();
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+    expect(await foto()).toBe(antes);
+  });
+
+  it('no pisa el margen ni el redondeo, que son de Compras y no de Stock', async () => {
+    await prisma.product.update({
+      where: { id: escenario.productos['1211'] },
+      data: { targetMarginPct: '0.62', roundingRule: 'NEAREST_50' },
+    });
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+
+    const cremoso = await prisma.product.findUniqueOrThrow({
+      where: { id: escenario.productos['1211'] },
+    });
+    expect(cremoso.targetMarginPct.toString()).toBe('0.62');
+    expect(cremoso.roundingRule).toBe('NEAREST_50');
+  });
+
+  it('no la corre quien no administra productos', async () => {
+    await expect(importarCatalogo(escenario.operadorDevoto, CATALOGO, { aplicar: true }))
+      .rejects.toBeInstanceOf(ForbiddenError);
+    expect(await prisma.product.findUnique({ where: { internalCode: '3050' } })).toBeNull();
+  });
+
+  it('queda auditada', async () => {
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+    const auditoria = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'catalogo.importado' },
+    });
+    expect(auditoria.userId).toBe(escenario.admin.id);
+    expect((auditoria.after as Record<string, unknown>).creados).toBe(1);
+  });
+});
+
+describe('familias de artículos', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * "Cuánto Sardo compramos" no es una pregunta sobre un producto.
+   *
+   * El Sardo Bloque Melincué y el Sardo Don Alfonso son dos artículos
+   * distintos, con dos PLU, dos costos y dos precios. La familia existe para
+   * poder sumarlos sin fundirlos en uno solo: el reporte por familia da el
+   * total, y el reporte por PLU sigue hablando de uno.
+   */
+
+  it('la familia suma los PLU que la componen, y el PLU sigue siendo uno', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+    void documentId;
+
+    await importarCatalogo(
+      escenario.admin,
+      [
+        'PLU;Nombre;Familia',
+        '2001;Queso Sardo bloque Melincué;Queso Sardo',
+        '2002;Queso Sardo Don Alfonso;Queso Sardo',
+      ].join('\n'),
+      { aplicar: true },
+    );
+
+    const familia = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Queso Sardo' } });
+
+    // Los dos Sardo de la factura de Errecalde: 4,75 kg + 28,90 kg.
+    const total = await getPurchaseReport(escenario.admin, { familyId: familia.id });
+    expect(total.totals.kilos).toBe('33.65');
+    expect(total.rows).toHaveLength(2);
+
+    // Y cada uno por separado sigue siendo el suyo.
+    const bloque = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    expect(bloque.totals.kilos).toBe('4.75');
+    const alfonso = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2002'],
+    });
+    expect(alfonso.totals.kilos).toBe('28.90');
+  });
+
+  it('si se piden familia y PLU a la vez, manda el PLU', async () => {
+    /*
+     * El caso que lo prueba de verdad es un PLU que **no** pertenece a la
+     * familia elegida: si los dos filtros se aplicaran juntos no quedaría nada,
+     * y quien acaba de elegir un artículo concreto vería la pantalla vacía sin
+     * entender que le quedó puesto un filtro de más.
+     */
+    await comprobanteErrecaldeValidado();
+    await importarCatalogo(
+      escenario.admin,
+      [
+        'PLU;Nombre;Familia',
+        '2001;Queso Sardo bloque Melincué;Queso Sardo',
+        '2002;Queso Sardo Don Alfonso;Queso Sardo',
+      ].join('\n'),
+      { aplicar: true },
+    );
+    const familia = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Queso Sardo' } });
+
+    // El cremoso no está en la familia Queso Sardo.
+    const uno = await getPurchaseReport(escenario.admin, {
+      familyId: familia.id,
+      productId: escenario.productos['1211'],
+    });
+    expect(uno.rows.length).toBeGreaterThan(0);
+    expect(uno.rows.every((r) => r.productName?.includes('Cremoso'))).toBe(true);
+  });
+
+  it('un artículo sin familia no se cuela en ninguna', async () => {
+    await comprobanteErrecaldeValidado();
+    await importarCatalogo(
+      escenario.admin,
+      ['PLU;Nombre;Familia', '2001;Queso Sardo bloque Melincué;Queso Sardo'].join('\n'),
+      { aplicar: true },
+    );
+    const familia = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Queso Sardo' } });
+
+    const reporte = await getPurchaseReport(escenario.admin, { familyId: familia.id });
+    expect(reporte.totals.kilos).toBe('4.75');
+  });
+});
+
+describe('la factura de Errecalde contra el catálogo interno', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * El caso completo, en el orden en que pasó de verdad.
+   *
+   * La factura se cargó y se validó cuando Compras todavía no tenía el catálogo
+   * de Don Ginés: sus renglones quedaron sin PLU, y para el reporte por artículo
+   * esa compra no existía. Después llega el catálogo desde Control de Stock, y a
+   * partir de ahí hay que poder recuperar la factura **sin OCR y sin volver a
+   * cargarla**: asociar sus renglones y sus movimientos a los PLU internos y
+   * completar el historial de costos.
+   *
+   * Lo que no puede cambiar en todo el recorrido es un solo importe.
+   */
+
+  it('se recupera entera después de importar el catálogo, sin volver a leer la foto', async () => {
+    // 1. El catálogo todavía no existe.
+    await prisma.product.deleteMany({});
+    const documentId = await comprobanteErrecaldeValidado();
+
+    const antes = await prisma.documentItem.findMany({
+      where: { documentId },
+      orderBy: { lineNumber: 'asc' },
+      select: { quantity: true, netAmount: true, ivaAmount: true, totalCost: true },
+    });
+    expect(await prisma.documentItem.count({ where: { documentId, productId: null } })).toBe(23);
+    expect(await prisma.costHistory.count({ where: { documentId } })).toBe(0);
+
+    // El total general está —la compra se hizo— pero no hay nada por artículo.
+    const general = await getPurchaseReport(escenario.admin, {});
+    expect(general.totals.costoTotal).toBe('4816812.73');
+
+    // 2. Llega el catálogo, con los códigos que usa Errecalde.
+    await importarCatalogo(
+      escenario.admin,
+      [
+        'PLU;Nombre;Familia;Proveedor;Codigo Proveedor',
+        '2001;Queso Sardo bloque Melincué;Queso Sardo;Distribución Errecalde;ART-00758',
+        '2002;Queso Sardo Don Alfonso;Queso Sardo;Distribución Errecalde;ART-00722',
+        '1211;Cremoso Punta del Agua;Quesos;Distribución Errecalde;ART-00228',
+      ].join('\n'),
+      { aplicar: true },
+    );
+
+    // 3. Backfill sobre lo que ya está cargado, sin tocar la factura.
+    const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
+    expect(informe.aplicadas).toBeGreaterThan(0);
+
+    // 4. Y se completa lo derivado que faltaba: el historial de costos.
+    const reparacion = await repararDerivados(escenario.admin, documentId);
+    expect(reparacion.costosCreados).toBeGreaterThan(0);
+
+    // --- Compras muestra cantidades por artículo --------------------------
+    const sardoBloque = await prisma.product.findUniqueOrThrow({
+      where: { internalCode: '2001' },
+    });
+    const sardoAlfonso = await prisma.product.findUniqueOrThrow({
+      where: { internalCode: '2002' },
+    });
+    expect((await getPurchaseReport(escenario.admin, { productId: sardoBloque.id })).totals.kilos)
+      .toBe('4.75');
+    expect((await getPurchaseReport(escenario.admin, { productId: sardoAlfonso.id })).totals.kilos)
+      .toBe('28.90');
+
+    // --- Y la familia los suma -------------------------------------------
+    const familia = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Queso Sardo' } });
+    const porFamilia = await getPurchaseReport(escenario.admin, { familyId: familia.id });
+    expect(porFamilia.totals.kilos).toBe('33.65');
+
+    // --- Precios tiene costo para lo asociado ----------------------------
+    expect(await getLatestCost(sardoBloque.id)).not.toBeNull();
+    expect(await getLatestCost(sardoAlfonso.id)).not.toBeNull();
+
+    // --- Y ningún importe se movió ---------------------------------------
+    const despues = await prisma.documentItem.findMany({
+      where: { documentId },
+      orderBy: { lineNumber: 'asc' },
+      select: { quantity: true, netAmount: true, ivaAmount: true, totalCost: true },
+    });
+    expect(JSON.stringify(despues)).toBe(JSON.stringify(antes));
+    expect((await getPurchaseReport(escenario.admin, {})).totals.costoTotal).toBe('4816812.73');
+    // Ni se duplicó ningún movimiento, ni se tocó el pago.
+    expect(await prisma.purchaseMovement.count({ where: { documentId } })).toBe(23);
+    expect(await prisma.paymentSchedule.count({ where: { documentId } })).toBe(1);
+  });
+
+  it('el catálogo se encuentra por PLU, por nombre y por código de proveedor', async () => {
+    await importarCatalogo(
+      escenario.admin,
+      [
+        'PLU;Nombre;Familia;Proveedor;Codigo Proveedor',
+        '1211;Cremoso Punta del Agua;Quesos;Distribución Errecalde;ART-00228',
+      ].join('\n'),
+      { aplicar: true },
+    );
+
+    /*
+     * Las tres maneras tienen que llegar al mismo artículo: depende de dónde
+     * esté parado quien busca. Frente a la balanza se sabe el PLU; frente a la
+     * factura, el código del proveedor; hablando con alguien, el nombre.
+     */
+    for (const termino of ['1211', 'cremoso', 'ART-00228']) {
+      const encontrados = await buscarEnCatalogo(escenario.admin, termino);
+      expect(encontrados.map((a) => a.plu), `no se encontró por «${termino}»`).toContain('1211');
+    }
+
+    const [cremoso] = await buscarEnCatalogo(escenario.admin, '1211');
+    expect(cremoso.familia).toBe('Quesos');
+    expect(cremoso.codigos).toEqual([
+      { proveedor: 'Distribución Errecalde', codigo: 'ART-00228' },
+    ]);
   });
 });

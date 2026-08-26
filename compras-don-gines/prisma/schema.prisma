@@ -230,12 +230,43 @@ enum MarginBasis {
   SOBRE_VENTA
 }
 
+/// Agrupación de artículos para consultar por rubro, no para identificarlos.
+///
+/// "Queso Sardo" es una familia; el Sardo Bloque Melincué y el Sardo Don Alfonso
+/// son dos productos distintos, cada uno con su PLU, su costo y su precio. La
+/// familia existe para poder preguntar cuánto Sardo se compró en total sin
+/// perder de vista que son dos artículos: el reporte por familia suma todos los
+/// PLU que cuelgan de ella, y el reporte por PLU sigue hablando de uno solo.
+///
+/// No reemplaza al PLU ni compite con él. Un producto puede no tener familia.
+model ProductFamily {
+  id        String    @id @default(cuid())
+  /// Código de la familia en el catálogo de origen, si lo trae.
+  code      String?   @unique
+  name      String    @unique
+  normalized String
+  active    Boolean   @default(true)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  products  Product[]
+
+  @@index([normalized])
+  @@map("product_families")
+}
+
 model Product {
   id                String       @id @default(cuid())
   /// Código interno o PLU
   internalCode      String       @unique
   normalizedName    String
   category          String?
+  /// Subtipo del catálogo de origen, cuando lo trae. Es informativo.
+  subtype           String?
+  familyId          String?
+  family            ProductFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  /// Cuándo se actualizó por última vez desde el catálogo de Control de Stock.
+  catalogSyncedAt   DateTime?
   purchaseUnit      PurchaseUnit @default(KG)
   saleMode          SaleMode     @default(FETEABLE)
   /// Peso habitual de la pieza u horma, en kg.
@@ -262,6 +293,7 @@ model Product {
   salesMovements    SalesMovement[]
 
   @@index([normalizedName])
+  @@index([familyId])
   @@map("products")
 }
 

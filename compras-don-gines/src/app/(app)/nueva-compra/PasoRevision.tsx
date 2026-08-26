@@ -813,15 +813,25 @@ export function PasoRevision({
                 */}
                 <div className="fila-dato-meta">
                   <span>
-                    Proveedor: <strong>{articulo.codigo ?? 'sin código'}</strong>
+                    Código proveedor: <strong>{articulo.codigo ?? 'sin código'}</strong>
                   </span>
                   <span>
-                    PLU Don Ginés:{' '}
+                    Producto Don Ginés:{' '}
                     <strong>
-                      {articulo.productoId
-                        ? (productos.find((p) => p.id === articulo.productoId)?.codigo ??
-                          'Sin asociar')
-                        : 'Sin asociar'}
+                      {(() => {
+                        /*
+                          El PLU con su nombre, no el número solo.
+                          
+                          "PLU 1211" no alcanza para saber si es el artículo
+                          correcto: quien revisa la factura está mirando
+                          "CREMOSO PUNTA DEL AGUA" en el papel y necesita ver
+                          contra qué se lo está asociando.
+                        */
+                        const elegido = productos.find((p) => p.id === articulo.productoId);
+                        return elegido
+                          ? `PLU ${elegido.codigo} · ${elegido.nombre}`
+                          : 'Sin asociar';
+                      })()}
                     </strong>
                   </span>
                   {articulo.asociacionOriginal === 'SUPPLIER_CODE' ? (

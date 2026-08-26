@@ -14,6 +14,7 @@ export const dynamic = 'force-dynamic';
 interface Props {
   searchParams: Promise<{
     producto?: string;
+    familia?: string;
     proveedor?: string;
     sucursal?: string;
     desde?: string;
@@ -27,9 +28,10 @@ export default async function PaginaCompras({ searchParams }: Props) {
   if (!hasPermission(user, PERMISSIONS.REPORTES_VER)) redirect('/');
 
   const filtros = await searchParams;
-  const [reporte, productos, proveedores, sucursales] = await Promise.all([
+  const [reporte, productos, familias, proveedores, sucursales] = await Promise.all([
     getPurchaseReport(user, {
       productId: filtros.producto ?? null,
+      familyId: filtros.familia ?? null,
       supplierId: filtros.proveedor ?? null,
       branchId: filtros.sucursal ?? null,
       from: filtros.desde ?? null,
@@ -38,7 +40,11 @@ export default async function PaginaCompras({ searchParams }: Props) {
     }),
     prisma.product.findMany({
       orderBy: { normalizedName: 'asc' },
-      select: { id: true, normalizedName: true },
+      select: { id: true, internalCode: true, normalizedName: true },
+    }),
+    prisma.productFamily.findMany({
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true },
     }),
     prisma.supplier.findMany({
       orderBy: { tradeName: 'asc' },
@@ -69,10 +75,25 @@ export default async function PaginaCompras({ searchParams }: Props) {
               <option value="">Todos</option>
               {productos.map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.normalizedName}
+                  {p.internalCode} · {p.normalizedName}
                 </option>
               ))}
             </select>
+          </div>
+          <div className="campo">
+            <label htmlFor="familia">Familia</label>
+            <select id="familia" name="familia" defaultValue={filtros.familia ?? ''}>
+              <option value="">Todas</option>
+              {familias.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.name}
+                </option>
+              ))}
+            </select>
+            <p className="ayuda">
+              Suma todos los artículos del rubro. «Queso Sardo» son dos PLU distintos y la familia
+              da el total de los dos; si además elegís un PLU, manda el PLU.
+            </p>
           </div>
           <div className="campo">
             <label htmlFor="proveedor">Proveedor</label>

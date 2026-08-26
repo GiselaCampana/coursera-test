@@ -218,6 +218,9 @@ export default async function PaginaProductos({
       <h1>Productos y alias</h1>
 
       <div className="acciones">
+        <a href="/configuracion/catalogo" className="boton boton-secundario">
+          Catálogo Don Ginés
+        </a>
         <a href="/configuracion/productos/asociaciones" className="boton boton-secundario">
           Asociaciones históricas
         </a>

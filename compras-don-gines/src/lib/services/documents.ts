@@ -962,7 +962,7 @@ export async function verificarDerivados(
  * producto con tres formas de escribirse tendría tres filas con el mismo código
  * y el índice no se podría crear.
  */
-async function learnProductAlias(
+export async function learnProductAlias(
   tx: Prisma.TransactionClient,
   input: {
     productId: string;

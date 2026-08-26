@@ -57,6 +57,14 @@ export default async function PaginaConfiguracion() {
       visible: hasPermission(user, PERMISSIONS.PROVEEDORES_GESTIONAR),
     },
     {
+      href: '/configuracion/catalogo',
+      titulo: 'Catálogo Don Ginés',
+      texto:
+        'Los artículos con su PLU interno y su familia, tal como los define Control de Stock. ' +
+        'Se importan desde ahí: Compras no numera artículos.',
+      visible: hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR),
+    },
+    {
       href: '/configuracion/productos',
       titulo: 'Productos y alias',
       texto: `${productos} productos, con márgenes, descuentos y redondeos.`,

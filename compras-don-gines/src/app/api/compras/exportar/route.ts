@@ -14,6 +14,7 @@ export async function GET(request: Request) {
       user,
       {
         productId: params.get('producto'),
+        familyId: params.get('familia'),
         supplierId: params.get('proveedor'),
         branchId: params.get('sucursal'),
         from: params.get('desde'),

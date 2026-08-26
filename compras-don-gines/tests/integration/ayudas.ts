@@ -17,7 +17,7 @@ export async function limpiarBase() {
       audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
       sale_price_history, pricing_rules, sales_movements,
       document_items, document_tax_lines, ocr_attempts, document_files, documents,
-      product_aliases, products,
+      product_aliases, products, product_families,
       supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
       sessions, users, roles, branches
     RESTART IDENTITY CASCADE;
