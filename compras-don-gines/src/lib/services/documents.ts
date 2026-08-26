@@ -348,6 +348,15 @@ export async function createTaxLines(
 
 export interface ConfirmItemInput extends RawItem {
   productId?: string | null;
+  /**
+   * Cómo se llegó a esa asociación, cuando ya viene resuelta.
+   *
+   * Importa conservarlo: un renglón que se asoció por el código del proveedor o
+   * a mano no es lo mismo que uno que coincidió por parecido de descripción, y
+   * esa distinción es la que después permite revisar de dónde salió cada
+   * clasificación.
+   */
+  matchMethod?: string | null;
   /** Si el usuario asoció la descripción a mano, se aprende como alias. */
   learnAlias?: boolean;
 }
@@ -560,7 +569,12 @@ export async function confirmDocument(
     return reconocido && reconocido.productId ? reconocido.productId : null;
   });
   const metodoDeCadaRenglon = input.items.map((source, i) => {
-    if (source.productId) return source.learnAlias ? 'MANUAL' : 'ALIAS';
+    if (source.productId) {
+      if (source.learnAlias) return 'MANUAL';
+      // El método con el que ya venía, si lo trae: no se degrada a "ALIAS" por
+      // haber pasado otra vez por acá.
+      return source.matchMethod || 'ALIAS';
+    }
     return reconocidos[i]?.productId ? (reconocidos[i].method ?? 'NONE') : 'NONE';
   });
 
@@ -727,6 +741,21 @@ export async function confirmDocument(
       },
     });
 
+    /*
+     * Antes de cerrar: que lo derivado haya quedado completo.
+     *
+     * Un comprobante VALIDADO cuyas estructuras derivadas quedaron a medias es
+     * lo peor de los dos mundos: existe, se puede pagar, aparece en los
+     * listados, y para Compras, Precios o la agenda no existe. Nadie lo nota
+     * hasta que alguien busca un artículo y le dan cero kilos sobre una compra
+     * que sí hizo.
+     *
+     * Se comprueba acá adentro, con la transacción abierta, para que fallar
+     * signifique no guardar nada. Guardar y avisar después dejaría exactamente
+     * el estado que esto viene a impedir.
+     */
+    await verificarDerivados(tx, document.id, costed.length, toDecimal(report.computed.totalCost));
+
     return { scheduleId: schedule.id };
   });
 
@@ -827,6 +856,96 @@ async function writeCostHistory(
       deltaPct: deltaPct?.toDecimalPlaces(6).toString() ?? null,
     },
   });
+}
+
+/**
+ * Que lo que la confirmación deriva del comprobante haya quedado entero.
+ *
+ * Son las cinco cosas de las que dependen las otras pantallas. Ninguna es una
+ * comprobación teórica: cada una corresponde a una forma concreta en que la
+ * factura quedaría invisible para una parte de la aplicación.
+ */
+export async function verificarDerivados(
+  tx: Prisma.TransactionClient,
+  documentId: string,
+  renglonesEsperados: number,
+  totalDelComprobante: Decimal,
+): Promise<void> {
+  const falla = (motivo: string): never => {
+    throw new AppError(
+      `El comprobante no se guardó: ${motivo}. No se registró nada, para no dejarlo ` +
+        'validado a medias.',
+      { status: 500, code: 'DERIVADOS_INCOMPLETOS' },
+    );
+  };
+
+  const renglones = await tx.documentItem.findMany({
+    where: { documentId },
+    select: { id: true, productId: true },
+  });
+  if (renglones.length !== renglonesEsperados) {
+    falla(`se esperaban ${renglonesEsperados} renglones y quedaron ${renglones.length}`);
+  }
+
+  // 1. Un movimiento de compra por renglón: es lo que lee Compras.
+  const movimientos = await tx.purchaseMovement.findMany({
+    where: { documentId },
+    select: { documentItemId: true, productId: true, totalCost: true },
+  });
+  if (movimientos.length !== renglones.length) {
+    falla(
+      `hay ${renglones.length} renglones y ${movimientos.length} movimientos de compra`,
+    );
+  }
+
+  // 2. Y el producto de cada movimiento es el de su renglón: el reporte mira el
+  //    movimiento y la pantalla del comprobante mira el renglón, y no pueden
+  //    decir cosas distintas.
+  const productoDelRenglon = new Map(renglones.map((r) => [r.id, r.productId]));
+  for (const movimiento of movimientos) {
+    const esperado = productoDelRenglon.get(movimiento.documentItemId ?? '');
+    if (esperado !== movimiento.productId) {
+      falla('un movimiento de compra quedó con un producto distinto al de su renglón');
+    }
+  }
+
+  // 3. Historial de costos para todo lo que quedó asociado: es lo que lee
+  //    Precios. Sin esto el artículo existe y no tiene costo.
+  const asociados = renglones.filter((r) => r.productId).length;
+  const costos = await tx.costHistory.count({ where: { documentId } });
+  if (costos !== asociados) {
+    falla(`hay ${asociados} renglones con producto y ${costos} entradas de costo`);
+  }
+
+  // 4. Exactamente una agenda de pago: es lo que lee Pagos.
+  const agendas = await tx.paymentSchedule.count({ where: { documentId } });
+  if (agendas !== 1) {
+    falla(`quedaron ${agendas} agendas de pago y tiene que haber una`);
+  }
+
+  /*
+   * 5. Y la suma de los movimientos es el total del comprobante.
+   *
+   * Se compara contra el total **calculado** y no contra el impreso. Cuando el
+   * comprobante cierra son el mismo número; cuando un administrador lo fuerza
+   * son distintos a propósito —de eso se trata forzar— y comparar contra el
+   * impreso haría fallar justamente el caso que la anulación administrativa
+   * existe para permitir. Lo que se quiere detectar acá es un movimiento que
+   * falta o que se duplicó, y para eso el calculado es la referencia correcta.
+   *
+   * El reparto de impuestos entre artículos deja un residuo de centavos que se
+   * asigna de forma determinística, así que la tolerancia es de un peso.
+   */
+  const suma = movimientos.reduce(
+    (acc, m) => acc.plus(toDecimal(m.totalCost.toString())),
+    new Decimal(0),
+  );
+  if (suma.minus(totalDelComprobante).abs().gt(1)) {
+    falla(
+      `los movimientos suman ${suma.toFixed(2)} y el comprobante es de ` +
+        `${totalDelComprobante.toFixed(2)}`,
+    );
+  }
 }
 
 /**
@@ -1152,6 +1271,21 @@ export async function acceptReadDocument(
       grossSubtotal: item.grossFromPrint ? item.grossSubtotal.toString() : undefined,
       discountPct: item.discountPct.toString(),
       ivaRate: item.ivaRate.toString(),
+      /*
+       * El producto ya asociado viaja de vuelta, y con él cómo se llegó a serlo.
+       *
+       * Sin esto, aceptar desde el detalle deshacía la clasificación: el
+       * renglón volvía sin producto, el reconocimiento automático corría de
+       * nuevo, y lo que una persona había asociado a mano quedaba en nulo. Con
+       * ello se iban el movimiento de compra y el historial de costos, así que
+       * el comprobante quedaba VALIDADO y no existía para Compras ni para
+       * Precios.
+       *
+       * Revalidar importes es una cosa y clasificar artículos es otra. La
+       * segunda no puede deshacerse por hacer la primera.
+       */
+      productId: item.productId,
+      matchMethod: item.matchMethod,
     })),
     payment: {
       dueDate: toISODate(dueDate),

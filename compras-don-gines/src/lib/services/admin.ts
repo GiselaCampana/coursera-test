@@ -336,11 +336,29 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
   const supplier = await prisma.supplier.findUnique({ where: { id: supplierId } });
   if (!supplier) throw new NotFoundError('No encontramos ese proveedor.');
 
+  let reemplazadas = 0;
   await prisma.$transaction(async (tx) => {
+    // La condición anterior se cierra el día antes: las facturas viejas
+    // conservan el plazo que regía cuando se cargaron.
     await tx.supplierPaymentTerm.updateMany({
       where: { supplierId, validTo: null, validFrom: { lt: validFrom } },
       data: { validTo: new Date(validFrom.getTime() - 86_400_000) },
     });
+
+    /*
+     * Y la que empieza el mismo día se reemplaza, no se acumula.
+     *
+     * Es el caso de corregir lo que se acaba de cargar mal: el proveedor no era
+     * a 30 días sino factura contra factura. Cerrarla el día antes daría una
+     * vigencia que termina antes de empezar, y dejarla abierta dejaría dos
+     * condiciones vigentes el mismo día con la misma fecha de inicio: cuál de
+     * las dos gana no lo decidiría nadie. Lo que ya se cargó con la vieja no se
+     * pierde, porque cada comprobante guarda el plazo que se le aplicó.
+     */
+    const borradas = await tx.supplierPaymentTerm.deleteMany({
+      where: { supplierId, validTo: null, validFrom },
+    });
+    reemplazadas = borradas.count;
     await tx.supplierPaymentTerm.create({
       data: {
         supplierId,
@@ -375,6 +393,7 @@ export async function saveSupplierTerm(user: AuthUser, form: FormData) {
       dias: days,
       desde: validFrom.toISOString().slice(0, 10),
       proximaFactura: proximaFactura ? proximaFactura.toISOString().slice(0, 10) : null,
+      reemplazadas,
     },
   });
 }

@@ -23,10 +23,12 @@ export function Proximos({
   dias,
   hoy,
   puedeConfirmar,
+  puedeReprogramar,
 }: {
   dias: DiaDelCalendario[];
   hoy: string;
   puedeConfirmar: boolean;
+  puedeReprogramar: boolean;
 }) {
   if (dias.length === 0) {
     return (
@@ -78,6 +80,9 @@ export function Proximos({
                       importePendiente={pago.saldo}
                       formaDePago={pago.paymentMethod}
                       hoy={hoy}
+                      vence={dia.fecha}
+                      puedeReprogramar={puedeReprogramar}
+                      provisoria={pago.provisoria}
                     />
                   ) : null}
                 </div>

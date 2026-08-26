@@ -8,9 +8,12 @@ import {
   createDocument,
   matchItemsToProducts,
   rejectDocument,
+  verificarDerivados,
   voidDocument,
   type ConfirmDocumentInput,
 } from '@/lib/services/documents';
+import { diagnosticarDerivados, repararDerivados } from '@/lib/services/reparar-derivados';
+import { toDecimal } from '@/lib/money';
 import { analizarSinGuardar, registrarLectura } from '@/lib/services/lectura';
 import { versionEnEjecucion } from '@/lib/version';
 import {
@@ -27,7 +30,8 @@ import {
   backfillProductLinks,
   segurasDe,
 } from '@/lib/services/backfill-productos';
-import { saveSupplierCode } from '@/lib/services/admin';
+import { saveSupplierCode, saveSupplierTerm } from '@/lib/services/admin';
+import { getSupplierConditions } from '@/lib/services/suppliers';
 import { computeDueDate, computePaymentStatus } from '@/lib/domain/payments';
 import { arToday, toISODate, dateOnlyFromISO } from '@/lib/datetime';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
@@ -2753,6 +2757,642 @@ describe('el mantenimiento de asociaciones históricas', () => {
     ).rejects.toBeInstanceOf(ForbiddenError);
     await expect(
       asociarRenglonHistorico(escenario.operadorDevoto, 'x', 'y', {}),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+});
+
+describe('lo que la confirmación deja listo para el resto de la aplicación', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * Un comprobante VALIDADO no sirve de nada si Compras, Precios y Pagos no lo
+   * ven. Las tres pantallas leen estructuras distintas —movimientos, historial
+   * de costos y agenda— pero las tres salen del mismo momento: la confirmación.
+   * Si esa escritura queda a medias, el comprobante existe y la aplicación se
+   * comporta como si no.
+   */
+
+  it('revalidar los importes no puede desclasificar productos', async () => {
+    /*
+     * El defecto, en su forma mínima.
+     *
+     * `acceptReadDocument` reconstruye los renglones desde la base para volver a
+     * pasarlos por los controles, y en esa reconstrucción se perdía el producto.
+     * Al aceptar desde el detalle, una asociación que ya estaba hecha —por una
+     * persona o por el reconocimiento— volvía a quedar en nulo, y con ella se
+     * iban el movimiento de compra y el historial de costos.
+     *
+     * Revalidar importes es una cosa y clasificar artículos es otra: la segunda
+     * no puede deshacerse por hacer la primera.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+
+    // Una persona asocia a mano un renglón que el reconocimiento no resolvió.
+    const pernil = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId: documento.id, description: { contains: 'PERNIL' } },
+    });
+    await prisma.documentItem.update({
+      where: { id: pernil.id },
+      data: { productId: escenario.productos['1211'], matchMethod: 'MANUAL' },
+    });
+
+    // Se abandona el asistente y se acepta desde el detalle.
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    const despues = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId: documento.id, description: { contains: 'PERNIL' } },
+    });
+    expect(
+      despues.productId,
+      'la asociación hecha a mano se perdió al aceptar desde el detalle',
+    ).toBe(escenario.productos['1211']);
+
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentItemId: despues.id },
+    });
+    expect(movimiento.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('aceptar desde el detalle deja movimientos, costos y agenda', async () => {
+    /*
+     * La prueba que faltaba. Hasta ahora se verificaba que el comprobante
+     * quedara VALIDADO, no que el resto de la aplicación pudiera usarlo.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    // Un movimiento por renglón, ni uno más.
+    const renglones = await prisma.documentItem.count({ where: { documentId: documento.id } });
+    const movimientos = await prisma.purchaseMovement.count({ where: { documentId: documento.id } });
+    expect(renglones).toBe(23);
+    expect(movimientos).toBe(23);
+
+    // Compras ve la factura entera.
+    const compras = await getPurchaseReport(escenario.admin, {});
+    expect(compras.rows).toHaveLength(23);
+    expect(compras.totals.costoTotal).toBe('4816812.73');
+
+    // Y por producto: los dos Sardo, con sus kilos.
+    const bloque = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    expect(bloque.totals.kilos).toBe('4.75');
+
+    // Precios tiene costo para lo que quedó asociado.
+    const asociados = await prisma.documentItem.count({
+      where: { documentId: documento.id, productId: { not: null } },
+    });
+    expect(asociados).toBeGreaterThan(0);
+    const costos = await prisma.costHistory.count({ where: { documentId: documento.id } });
+    expect(costos).toBe(asociados);
+
+    // Y la agenda, exactamente un pago.
+    const agenda = await prisma.paymentSchedule.count({ where: { documentId: documento.id } });
+    expect(agenda).toBe(1);
+  });
+});
+
+describe('reparar los derivados de un comprobante validado', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * La reparación existe por los comprobantes que ya están rotos.
+   *
+   * La invariante que corre dentro de la transacción impide que uno nuevo quede
+   * así, pero no puede arreglar los que se validaron antes: esos ya están
+   * guardados, ya se pagaron, y volver a cargarlos significaría sacarle la foto
+   * otra vez a una factura de hace un mes. Así que hay que poder reconstruir lo
+   * derivado desde lo que quedó guardado, sin tocar un solo importe.
+   */
+
+  /** Deja la factura de Errecalde validada: el punto de partida de todo esto. */
+  async function errecaldeValidado(): Promise<string> {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+    return documento.id;
+  }
+
+  /**
+   * El daño, tal como se vio en producción.
+   *
+   * El comprobante quedó VALIDADO con sus renglones y sus importes completos, y
+   * sin nada de lo que derivaba de él: para Compras, Precios y Pagos no existe.
+   */
+  async function romperDerivados(documentId: string) {
+    await prisma.purchaseMovement.deleteMany({ where: { documentId } });
+    await prisma.costHistory.deleteMany({ where: { documentId } });
+    await prisma.paymentSchedule.deleteMany({ where: { documentId } });
+  }
+
+  it('reconstruye compras, precios y pagos sin volver a cargar la factura', async () => {
+    const documentId = await errecaldeValidado();
+    await romperDerivados(documentId);
+
+    // Así se veía el problema: la factura está y la aplicación da cero.
+    const antes = await getPurchaseReport(escenario.admin, {});
+    expect(antes.rows).toHaveLength(0);
+    const diagnostico = await diagnosticarDerivados(documentId);
+    expect(diagnostico.length).toBeGreaterThan(0);
+
+    const reparacion = await repararDerivados(escenario.admin, documentId);
+    expect(reparacion.movimientosCreados).toBe(23);
+    expect(reparacion.agendaCreada).toBe(true);
+    expect(reparacion.costosCreados).toBeGreaterThan(0);
+    expect(reparacion.hallazgos.length).toBeGreaterThan(0);
+
+    // Compras ve la factura entera, con el total impreso.
+    const compras = await getPurchaseReport(escenario.admin, {});
+    expect(compras.rows).toHaveLength(23);
+    expect(compras.totals.costoTotal).toBe('4816812.73');
+
+    // Y el artículo que daba cero kilos ahora tiene los suyos.
+    const sardo = await getPurchaseReport(escenario.admin, {
+      productId: escenario.productos['2001'],
+    });
+    expect(sardo.totals.kilos).toBe('4.75');
+
+    // Precios tiene costo para todo lo que quedó asociado.
+    const asociados = await prisma.documentItem.count({
+      where: { documentId, productId: { not: null } },
+    });
+    const costos = await prisma.costHistory.count({ where: { documentId } });
+    expect(costos).toBe(asociados);
+    expect(await getLatestCost(escenario.productos['2001'])).not.toBeNull();
+
+    // Y la agenda, exactamente un pago por el total del comprobante.
+    const agenda = await prisma.paymentSchedule.findMany({ where: { documentId } });
+    expect(agenda).toHaveLength(1);
+    expect(agenda[0].plannedAmount.toString()).toBe('4816812.73');
+
+    // Después de reparar no queda nada que reparar.
+    expect(await diagnosticarDerivados(documentId)).toEqual([]);
+  });
+
+  it('correrla dos veces deja exactamente lo mismo que correrla una', async () => {
+    /*
+     * La idempotencia no es una comodidad: es lo que hace que se pueda apretar
+     * el botón sin miedo. Un movimiento duplicado contaría la compra dos veces
+     * en todos los reportes, que es peor que el problema que se vino a arreglar.
+     */
+    const documentId = await errecaldeValidado();
+    await romperDerivados(documentId);
+
+    await repararDerivados(escenario.admin, documentId);
+    const primera = await prisma.purchaseMovement.findMany({
+      where: { documentId },
+      orderBy: { id: 'asc' },
+      select: { id: true, documentItemId: true, productId: true, totalCost: true },
+    });
+
+    const segunda = await repararDerivados(escenario.admin, documentId);
+    expect(segunda.movimientosCreados).toBe(0);
+    expect(segunda.costosCreados).toBe(0);
+    expect(segunda.agendaCreada).toBe(false);
+    expect(segunda.hallazgos).toEqual([]);
+
+    const despues = await prisma.purchaseMovement.findMany({
+      where: { documentId },
+      orderBy: { id: 'asc' },
+      select: { id: true, documentItemId: true, productId: true, totalCost: true },
+    });
+    // Los mismos movimientos, no otros iguales: mismos identificadores.
+    expect(despues.map((m) => m.id)).toEqual(primera.map((m) => m.id));
+    expect(despues.map((m) => m.totalCost.toString())).toEqual(
+      primera.map((m) => m.totalCost.toString()),
+    );
+    expect(await prisma.costHistory.count({ where: { documentId } })).toBe(
+      await prisma.documentItem.count({ where: { documentId, productId: { not: null } } }),
+    );
+    expect(await prisma.paymentSchedule.count({ where: { documentId } })).toBe(1);
+  });
+
+  it('no modifica ningún importe del comprobante', async () => {
+    /*
+     * Reparar es reconstruir lo derivado, no recalcular la factura. Los números
+     * los revisó una persona contra el papel y los aceptó: si la reparación los
+     * volviera a computar, un cambio en el cálculo reescribiría en silencio una
+     * factura ya validada.
+     */
+    const documentId = await errecaldeValidado();
+
+    const foto = async () =>
+      JSON.stringify(
+        await prisma.documentItem.findMany({
+          where: { documentId },
+          orderBy: { lineNumber: 'asc' },
+          select: {
+            lineNumber: true,
+            quantity: true,
+            totalWeightKg: true,
+            unitNetPrice: true,
+            discountAmount: true,
+            netAmount: true,
+            ivaAmount: true,
+            perceptionAmount: true,
+            unitCost: true,
+            totalCost: true,
+          },
+        }),
+      );
+
+    const antes = await foto();
+    await romperDerivados(documentId);
+    await repararDerivados(escenario.admin, documentId);
+    expect(await foto()).toBe(antes);
+
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: documentId } });
+    expect(documento.total?.toString()).toBe('4816812.73');
+    expect(documento.status).toBe('VALIDADO');
+  });
+
+  it('completa las asociaciones que falten y deja las dudosas como están', async () => {
+    const documentId = await errecaldeValidado();
+
+    // Un renglón que sí se sabe qué artículo es, y que quedó sin asociar.
+    const sardo = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, productId: escenario.productos['2001'] },
+    });
+    await prisma.documentItem.update({
+      where: { id: sardo.id },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+
+    // Y uno que no se parece a nada del catálogo: ése no se puede adivinar.
+    const desconocido = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, productId: null },
+    });
+
+    await repararDerivados(escenario.admin, documentId);
+
+    const reasociado = await prisma.documentItem.findUniqueOrThrow({ where: { id: sardo.id } });
+    expect(reasociado.productId).toBe(escenario.productos['2001']);
+    // Y el movimiento acompaña: es lo que lee el reporte por artículo.
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentItemId: sardo.id },
+    });
+    expect(movimiento.productId).toBe(escenario.productos['2001']);
+
+    const sigueSinProducto = await prisma.documentItem.findUniqueOrThrow({
+      where: { id: desconocido.id },
+    });
+    expect(sigueSinProducto.productId).toBeNull();
+  });
+
+  it('limpia los movimientos que quedaron colgando de renglones que ya no existen', async () => {
+    /*
+     * Al reconfirmar, los renglones se rehacen y cambian de identificador. Un
+     * movimiento que sobreviviera apuntando al renglón viejo sumaría de nuevo la
+     * misma compra.
+     */
+    const documentId = await errecaldeValidado();
+    const modelo = await prisma.purchaseMovement.findFirstOrThrow({ where: { documentId } });
+    await prisma.purchaseMovement.create({
+      data: {
+        documentId,
+        /*
+         * El huérfano: apunta a un renglón que ya no existe.
+         *
+         * Es lo que queda cuando el comprobante se vuelve a confirmar: los
+         * renglones se borran y se rehacen con identificadores nuevos, y un
+         * movimiento que sobreviva al viejo suma otra vez la misma compra.
+         */
+        documentItemId: 'renglon-que-ya-no-existe',
+        productId: modelo.productId,
+        supplierId: modelo.supplierId,
+        branchId: modelo.branchId,
+        date: modelo.date,
+        description: modelo.description,
+        quantity: modelo.quantity.toString(),
+        unit: modelo.unit,
+        unitNetPrice: modelo.unitNetPrice.toString(),
+        discountAmount: modelo.discountAmount.toString(),
+        netAmount: modelo.netAmount.toString(),
+        ivaAmount: modelo.ivaAmount.toString(),
+        perceptionAmount: modelo.perceptionAmount.toString(),
+        totalCost: modelo.totalCost.toString(),
+        unitCost: modelo.unitCost.toString(),
+      },
+    });
+    expect(await prisma.purchaseMovement.count({ where: { documentId } })).toBe(24);
+
+    const reparacion = await repararDerivados(escenario.admin, documentId);
+    expect(await prisma.purchaseMovement.count({ where: { documentId } })).toBe(23);
+    expect(reparacion.hallazgos.join(' ')).toContain('ya no existen');
+
+    const compras = await getPurchaseReport(escenario.admin, {});
+    expect(compras.totals.costoTotal).toBe('4816812.73');
+  });
+
+  it('sólo se repara lo que está validado', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    // Todavía en REQUIERE_REVISION: se termina de cargar por el camino normal.
+    await expect(repararDerivados(escenario.admin, documento.id)).rejects.toThrow(
+      /validados/,
+    );
+    expect(await diagnosticarDerivados(documento.id)).toEqual([]);
+  });
+
+  it('no la puede correr quien no puede validar comprobantes', async () => {
+    const documentId = await errecaldeValidado();
+    await romperDerivados(documentId);
+    await expect(repararDerivados(escenario.supervisor, documentId)).rejects.toBeInstanceOf(
+      ForbiddenError,
+    );
+    // Y no escribió nada por el camino.
+    expect(await prisma.purchaseMovement.count({ where: { documentId } })).toBe(0);
+  });
+
+  it('queda auditada, con qué se reconstruyó y quién lo hizo', async () => {
+    const documentId = await errecaldeValidado();
+    await romperDerivados(documentId);
+    await repararDerivados(escenario.admin, documentId);
+
+    const auditoria = await prisma.auditLog.findFirstOrThrow({
+      where: { entityId: documentId, action: 'comprobante.derivados_reparados' },
+    });
+    expect(auditoria.userId).toBe(escenario.admin.id);
+    const despues = auditoria.after as Record<string, unknown>;
+    expect(despues.movimientosCreados).toBe(23);
+    expect(despues.agendaCreada).toBe(true);
+    expect(Array.isArray(despues.hallazgos)).toBe(true);
+  });
+});
+
+describe('la invariante que impide validar a medias', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * `verificarDerivados` corre dentro de la transacción de la confirmación, y
+   * por eso acá se la llama directamente sobre un comprobante ya guardado: es
+   * la única manera de romper cada estructura por separado y comprobar que la
+   * que falla es la que se rompió. Si no discriminara, la confirmación seguiría
+   * pudiendo guardar un comprobante que ninguna otra pantalla puede usar.
+   */
+  async function errecaldeValidado(): Promise<string> {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+    return documento.id;
+  }
+
+  const TOTAL = toDecimal('4816812.73');
+
+  it('un comprobante entero la pasa', async () => {
+    const documentId = await errecaldeValidado();
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).resolves.toBeUndefined();
+  });
+
+  it('falla si falta un movimiento de compra', async () => {
+    const documentId = await errecaldeValidado();
+    const uno = await prisma.purchaseMovement.findFirstOrThrow({ where: { documentId } });
+    await prisma.purchaseMovement.delete({ where: { id: uno.id } });
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
+      /23 renglones y 22 movimientos/,
+    );
+  });
+
+  it('falla si un movimiento quedó con otro producto que su renglón', async () => {
+    const documentId = await errecaldeValidado();
+    const movimiento = await prisma.purchaseMovement.findFirstOrThrow({
+      where: { documentId, productId: { not: null } },
+    });
+    await prisma.purchaseMovement.update({
+      where: { id: movimiento.id },
+      data: { productId: escenario.productos['1005'] },
+    });
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
+      /producto distinto al de su renglón/,
+    );
+  });
+
+  it('falla si falta el costo de un producto asociado', async () => {
+    const documentId = await errecaldeValidado();
+    const costo = await prisma.costHistory.findFirstOrThrow({ where: { documentId } });
+    await prisma.costHistory.delete({ where: { id: costo.id } });
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
+      /entradas de costo/,
+    );
+  });
+
+  it('falla si no quedó la agenda de pago', async () => {
+    const documentId = await errecaldeValidado();
+    await prisma.paymentSchedule.deleteMany({ where: { documentId } });
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
+      /agendas de pago/,
+    );
+  });
+
+  it('falla si los movimientos no suman el total del comprobante', async () => {
+    const documentId = await errecaldeValidado();
+    const uno = await prisma.purchaseMovement.findFirstOrThrow({ where: { documentId } });
+    await prisma.purchaseMovement.update({
+      where: { id: uno.id },
+      data: { totalCost: '0' },
+    });
+    await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
+      /y el comprobante es de/,
+    );
+  });
+});
+
+describe('corregir la condición de pago de un proveedor', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * El caso real: Errecalde quedó cargado a 30 días y en realidad cobra factura
+   * contra factura. Son dos correcciones distintas y hay que poder hacer las
+   * dos: la condición del proveedor, para las próximas facturas, y el
+   * vencimiento de la factura que ya está cargada, para ésta.
+   *
+   * Lo que **no** puede pasar es que corregir la condición reescriba hacia
+   * atrás lo que ya se validó: cada comprobante guarda el plazo que se le
+   * aplicó, y una factura ya conciliada no puede cambiar de vencimiento sola.
+   */
+
+  function formularioDePlazo(campos: Record<string, string>): FormData {
+    const form = new FormData();
+    for (const [clave, valor] of Object.entries(campos)) form.append(clave, valor);
+    return form;
+  }
+
+  it('cambiar la condición el mismo día reemplaza, no acumula', async () => {
+    const supplierId = escenario.proveedorErrecaldeId;
+    const hoy = toISODate(arToday());
+
+    await saveSupplierTerm(
+      escenario.admin,
+      formularioDePlazo({
+        supplierId,
+        termType: 'DAYS',
+        days: '30',
+        paymentMethod: 'TRANSFERENCIA',
+        validFrom: hoy,
+      }),
+    );
+    // Y se corrige: era factura contra factura.
+    await saveSupplierTerm(
+      escenario.admin,
+      formularioDePlazo({
+        supplierId,
+        termType: 'NEXT_INVOICE',
+        days: '0',
+        paymentMethod: 'TRANSFERENCIA',
+        validFrom: hoy,
+        nextInvoiceDate: '2026-08-28',
+      }),
+    );
+
+    /*
+     * Una sola condición vigente. Con dos abiertas desde el mismo día, cuál de
+     * las dos rige lo decidiría el orden en que la base devuelva las filas.
+     */
+    const vigentes = await prisma.supplierPaymentTerm.findMany({
+      where: { supplierId, validTo: null },
+    });
+    expect(vigentes).toHaveLength(1);
+    expect(vigentes[0].termType).toBe('NEXT_INVOICE');
+
+    const condiciones = await getSupplierConditions(supplierId, arToday());
+    expect(condiciones.term?.termType).toBe('NEXT_INVOICE');
+    expect(condiciones.proximaFactura && toISODate(condiciones.proximaFactura)).toBe('2026-08-28');
+  });
+
+  it('la condición nueva no cambia el vencimiento de lo ya validado', async () => {
+    const supplierId = escenario.proveedorErrecaldeId;
+
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    const antes = await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { documentId: documento.id },
+    });
+
+    await saveSupplierTerm(
+      escenario.admin,
+      formularioDePlazo({
+        supplierId,
+        termType: 'NEXT_INVOICE',
+        days: '0',
+        paymentMethod: 'TRANSFERENCIA',
+        validFrom: toISODate(arToday()),
+        nextInvoiceDate: '2026-08-28',
+      }),
+    );
+
+    // La factura ya cargada no se mueve sola: su plazo es el que se le aplicó.
+    const despues = await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { documentId: documento.id },
+    });
+    expect(toISODate(despues.dueDate)).toBe(toISODate(antes.dueDate));
+  });
+
+  it('el vencimiento de una factura ya validada se corrige sin tocar la compra', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { documentId: documento.id },
+    });
+    const comprasAntes = await getPurchaseReport(escenario.admin, {});
+
+    await reschedulePayment(
+      escenario.admin,
+      agenda.id,
+      '2026-08-28',
+      'La condición es factura contra factura, no a 30 días.',
+    );
+
+    const despues = await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { documentId: documento.id },
+    });
+    expect(toISODate(despues.dueDate)).toBe('2026-08-28');
+    // El importe agendado es el mismo: se movió la fecha, no la deuda.
+    expect(despues.plannedAmount.toString()).toBe(agenda.plannedAmount.toString());
+
+    // Y la compra quedó intacta.
+    const comprasDespues = await getPurchaseReport(escenario.admin, {});
+    expect(comprasDespues.totals.costoTotal).toBe(comprasAntes.totals.costoTotal);
+    expect(comprasDespues.rows).toHaveLength(comprasAntes.rows.length);
+    const comprobante = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
+    expect(comprobante.status).toBe('VALIDADO');
+    expect(comprobante.total?.toString()).toBe('4816812.73');
+
+    // El cambio queda en el historial del pago, con su motivo.
+    const evento = await prisma.paymentEvent.findFirstOrThrow({
+      where: { scheduleId: agenda.id, kind: 'REPROGRAMACION' },
+    });
+    expect(evento.notes).toContain('factura contra factura');
+    expect(evento.userId).toBe(escenario.admin.id);
+  });
+
+  it('no reprograma quien no tiene el permiso', async () => {
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, SAFARI_COMPLETO);
+    await leerComprobante(escenario.operadorDevoto, documento.id, {
+      completo: SAFARI_COMPLETO,
+      articulos: SAFARI_ARTICULOS,
+      resumen: SAFARI_RESUMEN,
+    });
+    await acceptReadDocument(escenario.admin, documento.id);
+    const agenda = await prisma.paymentSchedule.findUniqueOrThrow({
+      where: { documentId: documento.id },
+    });
+
+    await expect(
+      reschedulePayment(escenario.operadorDevoto, agenda.id, '2026-08-28', 'probando'),
     ).rejects.toBeInstanceOf(ForbiddenError);
   });
 });

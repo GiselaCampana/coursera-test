@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getDocumentForReview } from '@/lib/services/documents';
+import { diagnosticarDerivados } from '@/lib/services/reparar-derivados';
 import { getStorage } from '@/lib/storage';
 import { NotFoundError } from '@/lib/errors';
 import { formatARS, formatQty, formatRate } from '@/lib/money';
@@ -18,19 +19,44 @@ import {
   Semaforo,
 } from '@/components/Estado';
 import { AccionesComprobante } from './AccionesComprobante';
+import { RepararDerivados } from './RepararDerivados';
 
 export const metadata: Metadata = { title: 'Comprobante' };
 export const dynamic = 'force-dynamic';
 
 interface Props {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ guardado?: string }>;
+  searchParams: Promise<{
+    guardado?: string;
+    reparado?: string;
+    mov?: string;
+    cos?: string;
+    aso?: string;
+    age?: string;
+  }>;
+}
+
+/** El detalle de lo que la reparación arregló, para poder decirlo y no sólo "listo". */
+function resumenDeReparacion(p: {
+  mov?: string;
+  cos?: string;
+  aso?: string;
+  age?: string;
+}): string {
+  const partes: string[] = [];
+  const n = (v?: string) => Number(v ?? '0') || 0;
+  if (n(p.aso) > 0) partes.push(`${n(p.aso)} renglón/es asociados a su producto`);
+  if (n(p.mov) > 0) partes.push(`${n(p.mov)} movimiento/s de compra`);
+  if (n(p.cos) > 0) partes.push(`${n(p.cos)} costo/s en el historial`);
+  if (p.age === '1') partes.push('la agenda de pago');
+  if (partes.length === 0) return 'No hacía falta cambiar nada: ya estaba completo.';
+  return `Se reconstruyó: ${partes.join(', ')}.`;
 }
 
 export default async function PaginaComprobante({ params, searchParams }: Props) {
   const user = await requireUserOrRedirect();
   const { id } = await params;
-  const { guardado } = await searchParams;
+  const { guardado, reparado, mov, cos, aso, age } = await searchParams;
 
   let documento;
   try {
@@ -67,11 +93,27 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
   const puedeAnular = hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR);
   const puedeValidar = hasPermission(user, PERMISSIONS.COMPROBANTES_VALIDAR);
 
+  /*
+   * ¿Este comprobante validado dejó todo lo que tenía que dejar?
+   *
+   * Se pregunta sólo a quien podría repararlo: al resto no le sirve enterarse
+   * de un problema que no puede resolver. La invariante que corre dentro de la
+   * transacción impide que un comprobante nuevo quede así; esto es para los que
+   * se validaron antes de que existiera.
+   */
+  const faltantes = puedeValidar ? await diagnosticarDerivados(documento.id) : [];
+
   return (
     <>
       {guardado ? (
         <p className="mensaje mensaje-ok" role="status">
           El comprobante se guardó y el pago quedó agendado.
+        </p>
+      ) : null}
+
+      {reparado ? (
+        <p className="mensaje mensaje-ok" role="status">
+          {resumenDeReparacion({ mov, cos, aso, age })} Los importes del comprobante no se tocaron.
         </p>
       ) : null}
 
@@ -95,6 +137,10 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
       ) : null}
 
       <Semaforo report={informe} />
+
+      {faltantes.length > 0 ? (
+        <RepararDerivados documentId={documento.id} hallazgos={faltantes} />
+      ) : null}
 
       <div className="card">
         <h2>Datos del comprobante</h2>

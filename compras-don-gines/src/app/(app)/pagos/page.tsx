@@ -13,7 +13,7 @@ import { prisma } from '@/lib/db';
 import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL, PAYMENT_STATUS_LABEL } from '@/lib/domain/payments';
 import { Calendario } from './Calendario';
 import { Proximos } from './Proximos';
-import { arTodayISO, formatDateAr } from '@/lib/datetime';
+import { arTodayISO, formatDateAr, toISODate } from '@/lib/datetime';
 import { formatARS, toDecimal } from '@/lib/money';
 import { EtiquetaPago } from '@/components/Estado';
 import { FichaPago } from './FichaPago';
@@ -57,6 +57,14 @@ export default async function PaginaPagos({
   const parametros = await searchParams;
   const { grupo, confirmado } = parametros;
   const puedeConfirmar = hasPermission(user, PERMISSIONS.PAGOS_CONFIRMAR);
+  /*
+   * Mover el vencimiento es otro permiso que confirmar el pago.
+   *
+   * Confirmar registra un hecho —se pagó—; reprogramar cambia lo que la agenda
+   * va a mostrar de acá en adelante, y de eso depende con qué plata se cuenta
+   * cada semana.
+   */
+  const puedeReprogramar = hasPermission(user, PERMISSIONS.PAGOS_REPROGRAMAR);
   const hoy = arTodayISO();
 
   const vista = (VISTAS.find((v) => v.clave === parametros.vista)?.clave ?? 'lista') as Vista;
@@ -153,6 +161,7 @@ export default async function PaginaPagos({
             calendario={await getPaymentCalendar(user, mes, filtros)}
             hoy={hoy}
             puedeConfirmar={puedeConfirmar}
+            puedeReprogramar={puedeReprogramar}
             filtros={filtrosEnLaUrl}
           />
         ) : (
@@ -160,6 +169,7 @@ export default async function PaginaPagos({
             dias={await getProximosPagos(user, 7, filtros)}
             hoy={hoy}
             puedeConfirmar={puedeConfirmar}
+            puedeReprogramar={puedeReprogramar}
           />
         )}
       </>
@@ -281,6 +291,9 @@ export default async function PaginaPagos({
                         .toFixed(2)}
                       formaDePago={schedule.plannedPaymentMethod}
                       hoy={hoy}
+                      vence={toISODate(schedule.dueDate)}
+                      puedeReprogramar={puedeReprogramar}
+                      provisoria={schedule.dueDateProvisional}
                     />
                   ) : null}
                 </div>

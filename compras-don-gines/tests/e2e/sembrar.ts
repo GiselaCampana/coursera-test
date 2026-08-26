@@ -109,7 +109,7 @@ async function sembrarCon(prisma: PrismaClient) {
 
   // Distribución Errecalde, para la prueba de aceptación con la foto real. Se
   // lo da de alta con su CUIT, que es por donde lo reconoce la lectura.
-  await prisma.supplier.create({
+  const errecalde = await prisma.supplier.create({
     data: {
       tradeName: 'Distribución Errecalde',
       legalName: 'Distribución Errecalde S.A.',
@@ -128,6 +128,62 @@ async function sembrarCon(prisma: PrismaClient) {
         // alícuota: se toman de lo impreso.
         create: { ivaRate: '0.21', iibbRate: '0', otherPerceptions: [], validFrom: EPOCH },
       },
+    },
+  });
+
+  /*
+   * Dos artículos de la factura de Errecalde, para la prueba de punta a punta.
+   *
+   * Sin ellos el circuito posterior a la validación no se puede probar: una
+   * factura cuyos renglones no se asocian a ningún artículo no deja costos en
+   * Precios ni kilos por producto en Compras, y la prueba pasaría por no tener
+   * nada contra qué comparar.
+   *
+   * Van uno de cada tipo a propósito. El queso trae su alias, así que lo
+   * reconoce la aplicación sola; el tomate no, y hay que elegirle el PLU a
+   * mano en la revisión. Las dos formas de asociar tienen que terminar en lo
+   * mismo del otro lado.
+   */
+  await prisma.product.create({
+    data: {
+      internalCode: '2001',
+      normalizedName: 'Queso Sardo bloque Melincué',
+      category: 'Quesos',
+      purchaseUnit: 'KG',
+      saleMode: 'FETEABLE',
+      avgPieceWeightKg: '4.000',
+      defaultSupplierId: errecalde.id,
+      targetMarginPct: '0.45',
+      marginBasis: 'SOBRE_COSTO',
+      cashDiscountPct: '0.10',
+      roundingRule: 'NEAREST_100',
+      aliases: {
+        create: {
+          supplierId: errecalde.id,
+          // Con el código del proveedor: así se reconoce por identificación y
+          // no por cómo haya salido la descripción del OCR, que es
+          // precisamente para lo que sirve haber aprendido el código.
+          supplierCode: 'ART-00758',
+          alias: 'SARDO BLOQUE MELINCUE',
+          normalized: normalizeText('SARDO BLOQUE MELINCUE'),
+          origin: 'MANUAL',
+        },
+      },
+    },
+  });
+
+  await prisma.product.create({
+    data: {
+      internalCode: '2002',
+      normalizedName: 'Tomate en botella',
+      category: 'Conservas',
+      purchaseUnit: 'UNIT',
+      saleMode: 'AL_CORTE',
+      defaultSupplierId: errecalde.id,
+      targetMarginPct: '0.35',
+      marginBasis: 'SOBRE_COSTO',
+      cashDiscountPct: '0.10',
+      roundingRule: 'NEAREST_100',
     },
   });
 

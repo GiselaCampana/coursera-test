@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
 import { ValidationError, toUserMessage } from '@/lib/errors';
 import { acceptReadDocument, rejectDocument, voidDocument } from '@/lib/services/documents';
+import { repararDerivados } from '@/lib/services/reparar-derivados';
 
 export interface ResultadoAccion {
   ok?: boolean;
@@ -88,6 +89,47 @@ export async function aceptarComprobante(
    * catch y lo mostraría como si fuera un error.
    */
   redirect(`/comprobantes/${documentId}?guardado=1`);
+}
+
+/**
+ * Reconstruye lo que la confirmación tenía que haber dejado.
+ *
+ * No vuelve a leer la foto ni recalcula un peso: rehace los movimientos de
+ * compra, el historial de costos y la agenda a partir de los renglones que ya
+ * están guardados. Se puede apretar dos veces sin miedo —la segunda no cambia
+ * nada— y por eso no hace falta esconderlo detrás de una confirmación.
+ */
+export async function repararComprobante(
+  _prev: ResultadoAccion,
+  formData: FormData,
+): Promise<ResultadoAccion> {
+  const documentId = String(formData.get('documentId') ?? '');
+  let reparacion;
+  try {
+    const user = await requireUser();
+    reparacion = await repararDerivados(user, documentId);
+    revalidatePath(`/comprobantes/${documentId}`);
+    /*
+     * Se refrescan las tres pantallas que dependían de esto. Son las que el
+     * comprobante roto dejaba en cero, y son el motivo de la reparación: que
+     * quede reparado en la base y siga mostrando cero sería lo mismo que nada.
+     */
+    revalidatePath('/compras');
+    revalidatePath('/precios');
+    revalidatePath('/pagos');
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
+
+  // Fuera del try: `redirect` funciona lanzando.
+  const params = new URLSearchParams({
+    reparado: '1',
+    mov: String(reparacion.movimientosCreados),
+    cos: String(reparacion.costosCreados),
+    aso: String(reparacion.productosAsociados),
+    age: reparacion.agendaCreada ? '1' : '0',
+  });
+  redirect(`/comprobantes/${documentId}?${params.toString()}`);
 }
 
 /** Los controles en error que viajan adentro de una ValidationError. */

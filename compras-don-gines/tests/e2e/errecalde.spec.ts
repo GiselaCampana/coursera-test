@@ -293,5 +293,162 @@ test.describe('aceptar desde el detalle un comprobante ya leído', () => {
     // Y aparece entre los validados.
     await page.goto('/comprobantes?estado=VALIDADO');
     await expect(page.getByText('00008-00002647').first()).toBeVisible();
+
+    /*
+     * Y —lo que faltaba— el resto de la aplicación puede usarlo.
+     *
+     * Que quede VALIDADO no es lo mismo que quede usable: por este camino la
+     * factura se aceptaba, quedaba bien, y Compras daba cero kilos, Precios
+     * decía que no había ningún costo cargado y la agenda no la mostraba.
+     *
+     * Acá se comprueba el circuito entero desde este segundo camino de
+     * validación, que es el que se probaba sólo hasta el estado. Lo que sí
+     * discrimina el defecto puntual —que revalidar los importes desclasificaba
+     * los productos ya asociados— es la prueba de integración, porque necesita
+     * una asociación hecha a mano que sobreviva a abandonar el asistente, y eso
+     * el navegador no lo puede montar.
+     */
+    await page.goto('/compras?proveedor=');
+    await page.locator('#proveedor').selectOption({ label: 'Distribución Errecalde' });
+    await page.getByRole('button', { name: 'Filtrar' }).click();
+    await expect(page.locator('table tbody tr')).toHaveCount(23);
+
+    // El queso viene asociado por el código del proveedor: sus kilos tienen
+    // que estar, no cero.
+    await page.locator('#producto').selectOption({ label: 'Queso Sardo bloque Melincué' });
+    await page.getByRole('button', { name: 'Filtrar' }).click();
+    const kilos = page
+      .locator('.card', { hasText: 'Totales del período' })
+      .locator('.dato')
+      .filter({ has: page.locator('dt', { hasText: /^Kilos$/ }) })
+      .locator('dd');
+    await expect(kilos).toContainText('4,75 kg');
+
+    // Precios tiene el costo, y la agenda el pago.
+    await page.goto('/precios');
+    await expect(page.getByText('Todavía no hay costos cargados')).toHaveCount(0);
+    await expect(page.getByText('Queso Sardo bloque Melincué').first()).toBeVisible();
+
+    await page.goto('/pagos?grupo=proximos');
+    await expect(page.getByText('00008-00002647').first()).toBeVisible();
+  });
+});
+
+test.describe('lo que queda usable después de validar la factura real', () => {
+  test.afterAll(async () => {
+    await limpiarComprobantesLeidos();
+  });
+
+  /*
+   * La prueba que faltaba.
+   *
+   * Hasta acá se verificaba que el comprobante quedara VALIDADO. Eso no es lo
+   * mismo que verificar que el resto de la aplicación pueda usarlo: la factura
+   * se validó, quedó bien, se pagó, y Compras daba cero kilos, Precios decía
+   * que no había ningún costo cargado y el calendario de agosto mostraba cero.
+   *
+   * Compras, Precios y Pagos leen tres estructuras distintas, pero las tres
+   * salen del mismo momento: la confirmación. Por eso se prueban juntas y de
+   * una sola pasada, sin ningún mantenimiento por el medio: si hiciera falta
+   * pasar por Asociaciones históricas para que los números aparezcan, la
+   * confirmación no habría hecho su trabajo.
+   */
+  test('de la foto a Compras, Precios y Pagos sin ningún arreglo por el medio', async ({
+    page,
+  }, testInfo) => {
+    soloEnIphone(test, testInfo.project.name);
+
+    await ingresar(page, 'admin');
+    await page.goto('/nueva-compra');
+    await leer(page, await fotoErrecalde());
+
+    // --- Revisión: se asocia a mano lo que no se reconoció solo -----------
+    const tomate = page.locator('.lista > li').filter({ hasText: 'código ART-01477' });
+    const elegirPlu = tomate.locator('select[id^="prod-"]');
+    await expect(elegirPlu).toBeVisible();
+    await elegirPlu.selectOption({ label: '2002 · Tomate en botella' });
+
+    /*
+     * El queso ya viene asociado, por el código que el proveedor imprime. Son
+     * las dos maneras de llegar a lo mismo —la que reconoce la aplicación y la
+     * que elige una persona— y las dos tienen que dejar lo mismo del otro lado.
+     */
+    const sardo = page.locator('.lista > li').filter({ hasText: 'código ART-00758' }).first();
+    await expect(sardo.locator('select[id^="prod-"]')).not.toHaveValue('');
+
+    // --- Guardar y agendar ------------------------------------------------
+    await page.getByRole('button', { name: 'Continuar al pago' }).click();
+    await expect(page.getByRole('heading', { name: 'Guardar y agendar el pago' })).toBeVisible();
+    await page.getByRole('button', { name: 'Guardar y agendar el pago' }).click();
+
+    await expect(page.getByText('El comprobante se guardó y el pago quedó agendado.')).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.locator('.estado-ok', { hasText: 'Confirmado' }).first()).toBeVisible();
+
+    /*
+     * Y acá está el punto: a partir de este momento no se toca nada más. No se
+     * pasa por Asociaciones históricas, no se repara nada, no se vuelve a
+     * confirmar. Lo que sigue tiene que estar por haber validado, y por nada
+     * más.
+     */
+    await expect(
+      page.getByRole('button', { name: 'Reparar derivados del comprobante' }),
+      'el comprobante recién validado quedó incompleto',
+    ).toHaveCount(0);
+
+    // --- Compras ----------------------------------------------------------
+    await page.goto('/compras');
+    const totales = page.locator('.card', { hasText: 'Totales del período' });
+    const total = (etiqueta: string) =>
+      totales
+        .locator('.dato')
+        .filter({ has: page.locator('dt', { hasText: new RegExp(`^${etiqueta}$`) }) })
+        .locator('dd');
+
+    /*
+     * Acotado a este proveedor: la base de pruebas tiene otras compras, y lo
+     * que se está comprobando es que **esta** factura llegó entera.
+     */
+    await page.locator('#proveedor').selectOption({ label: 'Distribución Errecalde' });
+    await page.getByRole('button', { name: 'Filtrar' }).click();
+
+    // Los 23 renglones de la factura, con su costo real.
+    await expect(total('Costo total')).toContainText('4.816.812,73');
+    await expect(total('Kilos')).toContainText('480,34');
+    await expect(total('Unidades')).toContainText('71');
+    await expect(page.locator('table tbody tr')).toHaveCount(23);
+
+    // Y por artículo: el queso reconocido solo tiene sus kilos, no cero.
+    await page.locator('#producto').selectOption({ label: 'Queso Sardo bloque Melincué' });
+    await page.getByRole('button', { name: 'Filtrar' }).click();
+    await expect(total('Kilos')).toContainText('4,75 kg');
+    await expect(page.locator('table tbody tr')).toHaveCount(1);
+
+    // Y el que se eligió a mano, también.
+    await page.locator('#producto').selectOption({ label: 'Tomate en botella' });
+    await page.getByRole('button', { name: 'Filtrar' }).click();
+    await expect(total('Unidades')).toContainText('32');
+
+    // --- Precios ----------------------------------------------------------
+    await page.goto('/precios');
+    await expect(page.getByText('Todavía no hay costos cargados')).toHaveCount(0);
+    // Los dos artículos de la factura, el reconocido y el elegido a mano.
+    await expect(page.getByText('Queso Sardo bloque Melincué').first()).toBeVisible();
+    await expect(page.getByText('Tomate en botella').first()).toBeVisible();
+
+    // --- Pagos ------------------------------------------------------------
+    /*
+     * En "Próximos" y no en la pestaña por omisión: la condición cargada para
+     * este proveedor es a 30 días, así que la factura del 22/08 vence más
+     * adelante. Lo que se comprueba acá es que el pago exista y por cuánto; en
+     * qué fecha cae depende de la condición del proveedor, que es otra cosa y
+     * se corrige desde Pagos sin tocar la compra.
+     */
+    await page.goto('/pagos?grupo=proximos');
+    await expect(page.getByText('00008-00002647').first()).toBeVisible();
+    await expect(page.getByText('$ 4.816.812,73').first()).toBeVisible();
+
+    await sinScrollHorizontal(page);
   });
 });

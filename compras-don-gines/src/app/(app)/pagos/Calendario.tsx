@@ -83,12 +83,14 @@ export function Calendario({
   calendario,
   hoy,
   puedeConfirmar,
+  puedeReprogramar,
   filtros,
 }: {
   calendario: CalendarioDePagos;
   /** "YYYY-MM-DD" de hoy, calculado en el servidor con la zona horaria de acá. */
   hoy: string;
   puedeConfirmar: boolean;
+  puedeReprogramar: boolean;
   /** Los filtros vigentes, para conservarlos al cambiar de mes. */
   filtros: string;
 }) {
@@ -260,6 +262,9 @@ export function Calendario({
                       importePendiente={pago.saldo}
                       formaDePago={pago.paymentMethod}
                       hoy={hoy}
+                      vence={diaAbierto.fecha}
+                      puedeReprogramar={puedeReprogramar}
+                      provisoria={pago.provisoria}
                     />
                   ) : null}
                 </div>

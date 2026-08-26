@@ -217,15 +217,31 @@ export default async function PaginaProveedores() {
             </ul>
 
             <FormularioConfig
-              titulo="Nueva condición de pago"
+              titulo="Cambiar la condición de pago"
               textoBoton="Cambiar la condición de pago"
               accion={guardarPlazo}
             >
+              {/*
+                * El formulario arranca con lo que hoy rige, no en blanco.
+                *
+                * Casi siempre se entra acá para corregir una condición mal
+                * cargada, no para inventar una desde cero: si el proveedor
+                * quedó a 30 días y en realidad es factura contra factura, hay
+                * que cambiar un campo y no volver a completar los cuatro.
+                *
+                * Guardar con la misma fecha de vigencia reemplaza a la del día;
+                * con una fecha posterior la cierra y abre una nueva, y las
+                * facturas ya cargadas conservan el plazo que se les aplicó.
+                */}
               <input type="hidden" name="supplierId" value={proveedor.id} />
               <div className="fila fila-2">
                 <div className="campo">
                   <label htmlFor={`tt-${proveedor.id}`}>Tipo de plazo</label>
-                  <select id={`tt-${proveedor.id}`} name="termType" defaultValue="DAYS">
+                  <select
+                    id={`tt-${proveedor.id}`}
+                    name="termType"
+                    defaultValue={plazoVigente?.termType ?? 'DAYS'}
+                  >
                     <option value="SAME_DAY">En el día</option>
                     <option value="DAYS">A x días</option>
                     <option value="NEXT_INVOICE">Factura contra factura</option>
@@ -239,14 +255,18 @@ export default async function PaginaProveedores() {
                     name="days"
                     type="text"
                     inputMode="numeric"
-                    defaultValue="0"
+                    defaultValue={String(plazoVigente?.days ?? 0)}
                   />
                 </div>
               </div>
               <div className="fila fila-2">
                 <div className="campo">
                   <label htmlFor={`pm-${proveedor.id}`}>Forma de pago habitual</label>
-                  <select id={`pm-${proveedor.id}`} name="paymentMethod" defaultValue="TRANSFERENCIA">
+                  <select
+                    id={`pm-${proveedor.id}`}
+                    name="paymentMethod"
+                    defaultValue={plazoVigente?.paymentMethod ?? 'TRANSFERENCIA'}
+                  >
                     {PAYMENT_METHODS.map((m) => (
                       <option key={m} value={m}>
                         {PAYMENT_METHOD_LABEL[m]}
@@ -257,6 +277,11 @@ export default async function PaginaProveedores() {
                 <div className="campo">
                   <label htmlFor={`vf-${proveedor.id}`}>Vigente desde</label>
                   <input id={`vf-${proveedor.id}`} name="validFrom" type="date" defaultValue={hoy} />
+                  <p className="ayuda">
+                    Con la fecha de hoy se corrige la condición vigente. Los comprobantes ya
+                    cargados no cambian: cada uno guardó el plazo que se le aplicó, y si hay que
+                    mover un vencimiento se hace desde Pagos.
+                  </p>
                 </div>
               </div>
               <div className="campo">

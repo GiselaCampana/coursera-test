@@ -28,7 +28,16 @@ export async function getSupplierConditions(
         validFrom: { lte: atDate },
         OR: [{ validTo: null }, { validTo: { gte: atDate } }],
       },
-      orderBy: { validFrom: 'desc' },
+      /*
+       * La más reciente que ya estaba vigente, y ante empate la última cargada.
+       *
+       * El desempate por `createdAt` no es decorativo: sin él, dos condiciones
+       * que empiezan el mismo día dejan la elección librada al orden en que la
+       * base devuelva las filas, y el proveedor tendría un plazo distinto según
+       * el día. Guardar una condición ya reemplaza a la del mismo día, así que
+       * esto cubre lo que haya quedado cargado antes de esa regla.
+       */
+      orderBy: [{ validFrom: 'desc' }, { createdAt: 'desc' }],
     }),
     prisma.supplierTaxRule.findFirst({
       where: {
