@@ -261,7 +261,24 @@ async function main() {
     });
   }
 
-  // --- Catálogo de productos ---------------------------------------------
+  /*
+   * --- Catálogo de productos -----------------------------------------------
+   *
+   * El catálogo de Don Ginés **no** se siembra. Los PLU son de Control de
+   * Stock, que es la fuente, y entran por Configuración → Catálogo Don Ginés.
+   *
+   * Los artículos de acá abajo son de demostración y tienen números inventados.
+   * Sembrarlos en una base real significa ocupar PLU que en Control de Stock
+   * pertenecen a otro artículo: cuando después se importa el catálogo de
+   * verdad, ese PLU ya está tomado y lo que entra por el importador se lee como
+   * un cambio de nombre de un artículo que quizá ya tiene compras cargadas.
+   *
+   * Por eso hay que pedirlos explícitamente con SEED_CATALOGO_DEMO=1. Sin esa
+   * variable la aplicación arranca con el catálogo vacío, que es lo correcto:
+   * está esperando el de Stock.
+   */
+  const sembrarCatalogoDemo = process.env.SEED_CATALOGO_DEMO === '1';
+
   const products: {
     internalCode: string;
     name: string;
@@ -287,7 +304,15 @@ async function main() {
     { internalCode: '2002', name: 'Queso Reggianito', category: 'Quesos', saleMode: 'AL_CORTE', unit: 'KG', pieceKg: '4.000', margin: '0.48', aliases: ['QUESO REGGIANITO'] },
   ];
 
-  for (const p of products) {
+  if (!sembrarCatalogoDemo) {
+    console.log(
+      'Catálogo: no se siembra ningún artículo. Los PLU vienen de Control de Stock ' +
+        '(Configuración → Catálogo Don Ginés). Para los datos de demostración, ' +
+        'SEED_CATALOGO_DEMO=1.',
+    );
+  }
+
+  for (const p of sembrarCatalogoDemo ? products : []) {
     const product = await prisma.product.upsert({
       where: { internalCode: p.internalCode },
       update: {},

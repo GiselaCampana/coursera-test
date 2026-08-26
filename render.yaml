@@ -40,6 +40,11 @@ services:
     # que correrlo en cada despliegue es inofensivo. NO es `migrate reset`: no
     # borra ni una fila.
     #
+    # Lo que el seed **no** crea es el catálogo de artículos. Los PLU son de
+    # Control de Stock y entran por Configuración → Catálogo Don Ginés; sembrar
+    # artículos de demostración acá ocuparía números que allá pertenecen a otro
+    # artículo. Los de demostración se piden aparte, con SEED_CATALOGO_DEMO=1.
+    #
     # El build copia además los archivos del lector a public/ocr/.
     buildCommand: npm ci --include=dev && npx prisma migrate deploy && npm run db:seed && npm run build
     startCommand: npm run start

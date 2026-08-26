@@ -50,10 +50,19 @@ export interface LecturaDeCatalogo {
  */
 const COLUMNAS: Record<keyof Omit<FilaDeCatalogo, 'linea'>, string[]> = {
   plu: ['plu', 'codigo interno', 'codigointerno', 'internal code', 'internalcode', 'sku', 'codigo'],
-  nombre: ['nombre', 'producto', 'descripcion', 'name', 'nombre producto', 'articulo'],
+  nombre: [
+    // "Artículo" es como se llama la columna en la Hoja 1 de Control de Stock.
+    'articulo',
+    'nombre',
+    'producto',
+    'descripcion',
+    'name',
+    'nombre producto',
+  ],
   familia: ['familia', 'family', 'rubro', 'grupo'],
-  categoria: ['categoria', 'category'],
-  subtipo: ['subtipo', 'subtype', 'tipo', 'type'],
+  // "Tipo de Artículo" y "Subtipo de Artículo", los dos niveles de Hoja 1.
+  categoria: ['tipo de articulo', 'tipo articulo', 'categoria', 'category', 'tipo', 'type'],
+  subtipo: ['subtipo de articulo', 'subtipo articulo', 'subtipo', 'subtype'],
   proveedor: ['proveedor', 'supplier', 'proveedor habitual'],
   codigoProveedor: [
     'codigo proveedor',

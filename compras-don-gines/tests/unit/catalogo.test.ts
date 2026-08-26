@@ -130,3 +130,58 @@ describe('leer el archivo del catálogo', () => {
     expect(problemas).toEqual([]);
   });
 });
+
+/**
+ * La Hoja 1 de Control de Stock, con sus encabezados tal cual.
+ *
+ * Es la fuente real del catálogo, así que sus columnas tienen que entrar sin
+ * que nadie tenga que renombrarlas antes: PLU, Artículo, Proveedor, Tipo de
+ * Artículo, Subtipo de Artículo y URL Imagen.
+ */
+describe('la Hoja 1 de Control de Stock', () => {
+  const HOJA1 = [
+    'PLU,Artículo,Proveedor,Tipo de Artículo,Subtipo de Artículo,URL Imagen',
+    '1211,Cremoso Punta del Agua,Distribución Errecalde,Quesos,Queso Cremoso,https://ejemplo/1211.jpg',
+    '1305,Sardo Bloque Melincué,Distribución Errecalde,Quesos,Queso Sardo,https://ejemplo/1305.jpg',
+  ].join('\n');
+
+  it('entra con los encabezados de la planilla, sin renombrar nada', () => {
+    const { filas, problemas } = leerCatalogo(HOJA1);
+    expect(problemas).toEqual([]);
+    expect(filas).toHaveLength(2);
+
+    const cremoso = filas[0];
+    expect(cremoso.plu).toBe('1211');
+    // "Artículo" es el nombre interno.
+    expect(cremoso.nombre).toBe('Cremoso Punta del Agua');
+    expect(cremoso.proveedor).toBe('Distribución Errecalde');
+    // Los dos niveles quedan separados y no se pisan.
+    expect(cremoso.categoria).toBe('Quesos');
+    expect(cremoso.subtipo).toBe('Queso Cremoso');
+  });
+
+  it('«Tipo de Artículo» no se lee como subtipo ni al revés', () => {
+    /*
+     * Los dos encabezados terminan en "de Artículo" y empiezan casi igual. Si
+     * se cruzaran, la familia saldría del nivel equivocado y agruparía todos
+     * los quesos juntos —o ninguno con ninguno—.
+     */
+    const { filas } = leerCatalogo(HOJA1);
+    expect(filas[1].categoria).toBe('Quesos');
+    expect(filas[1].subtipo).toBe('Queso Sardo');
+  });
+
+  it('la columna de la imagen no estorba', () => {
+    // No se usa, pero su presencia no puede correr las demás columnas.
+    const { filas, problemas } = leerCatalogo(HOJA1);
+    expect(problemas).toEqual([]);
+    expect(filas[1].nombre).toBe('Sardo Bloque Melincué');
+  });
+
+  it('el PLU se conserva como texto, no como número', () => {
+    const { filas } = leerCatalogo(
+      ['PLU,Artículo', '0007,Con ceros adelante', '7,Sin ceros'].join('\n'),
+    );
+    expect(filas.map((f) => f.plu)).toEqual(['0007', '7']);
+  });
+});

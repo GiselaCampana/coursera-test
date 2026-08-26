@@ -4,13 +4,26 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireUser } from '@/lib/auth/session';
 import { toUserMessage } from '@/lib/errors';
-import { importarCatalogo, type InformeDeCatalogo } from '@/lib/services/catalogo';
+import {
+  importarCatalogo,
+  type InformeDeCatalogo,
+  type OrigenDeFamilia,
+} from '@/lib/services/catalogo';
 
 export interface ResultadoImportacion {
   informe?: InformeDeCatalogo;
   /** El archivo leído, para poder aplicarlo después sin volver a subirlo. */
   texto?: string;
+  /** De qué columna se propuso la familia, para aplicar lo mismo que se miró. */
+  familiaDesde?: OrigenDeFamilia;
   error?: string;
+}
+
+const ORIGENES: OrigenDeFamilia[] = ['auto', 'tipo', 'subtipo', 'ninguna'];
+
+function leerOrigen(valor: FormDataEntryValue | null): OrigenDeFamilia {
+  const v = String(valor ?? 'auto') as OrigenDeFamilia;
+  return ORIGENES.includes(v) ? v : 'auto';
 }
 
 /**
@@ -25,13 +38,14 @@ export async function analizarCatalogo(
   formData: FormData,
 ): Promise<ResultadoImportacion> {
   const texto = String(formData.get('texto') ?? '');
+  const familiaDesde = leerOrigen(formData.get('familiaDesde'));
   if (texto.trim() === '') {
     return { error: 'Elegí el archivo del catálogo o pegá su contenido.' };
   }
   try {
     const user = await requireUser();
-    const informe = await importarCatalogo(user, texto);
-    return { informe, texto };
+    const informe = await importarCatalogo(user, texto, { familiaDesde });
+    return { informe, texto, familiaDesde };
   } catch (error) {
     return { error: toUserMessage(error) };
   }
@@ -43,10 +57,16 @@ export async function aplicarCatalogo(
   formData: FormData,
 ): Promise<ResultadoImportacion> {
   const texto = String(formData.get('texto') ?? '');
+  /*
+   * Se aplica con el mismo origen de familia con el que se hizo la vista
+   * previa. Si acá se recalculara con otro, lo que se escribe no sería lo que
+   * la persona miró y confirmó.
+   */
+  const familiaDesde = leerOrigen(formData.get('familiaDesde'));
   let informe: InformeDeCatalogo;
   try {
     const user = await requireUser();
-    informe = await importarCatalogo(user, texto, { aplicar: true });
+    informe = await importarCatalogo(user, texto, { aplicar: true, familiaDesde });
     revalidatePath('/configuracion/catalogo');
     revalidatePath('/configuracion/productos');
     // El catálogo cambia lo que se puede filtrar en Compras y lo que Precios
@@ -64,6 +84,7 @@ export async function aplicarCatalogo(
     act: String(informe.actualizables.length),
     cod: String(informe.codigosPorAprender.length),
     conf: String(informe.conflictos.length),
+    fam: String(informe.familiasNuevas.length),
   });
   redirect(`/configuracion/catalogo?${params.toString()}`);
 }

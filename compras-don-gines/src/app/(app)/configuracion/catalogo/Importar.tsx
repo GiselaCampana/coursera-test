@@ -138,6 +138,22 @@ export function Importar() {
           />
         </div>
 
+        <div className="campo">
+          <label htmlFor="familiaDesde">Familia a partir de</label>
+          <select id="familiaDesde" name="familiaDesde" defaultValue="auto">
+            <option value="auto">El nivel más fino que traiga el archivo</option>
+            <option value="subtipo">Subtipo de Artículo</option>
+            <option value="tipo">Tipo de Artículo</option>
+            <option value="ninguna">No agrupar en familias</option>
+          </select>
+          <p className="ayuda">
+            La familia es lo que permite preguntar «cuánto Sardo compramos» y que sume los dos PLU
+            de Sardo. Control de Stock trae dos niveles y cuál sirve depende de cómo estén
+            cargados: elegí uno, mirá abajo qué familias saldrían, y cambialo si no es el que
+            agrupa bien.
+          </p>
+        </div>
+
         {previa.error ? (
           <p className="mensaje mensaje-error" role="alert">
             {previa.error}
@@ -190,6 +206,58 @@ export function Importar() {
               <p className="ayuda">Columnas reconocidas: {informe.columnas.join(', ')}.</p>
             ) : null}
           </div>
+
+          {/*
+            Los renombres sobre PLU que ya tienen compras van arriba y sin
+            plegar. Es la única categoría donde confirmar sin mirar cambia el
+            pasado: reetiqueta compras ya validadas.
+          */}
+          {informe.renombresConCompras.length > 0 ? (
+            <div className="card">
+              <h3>Cambian de nombre y ya tienen compras cargadas</h3>
+              <div className="mensaje mensaje-error" role="alert">
+                <p>
+                  Estos PLU ya están usados en facturas validadas. Cambiarles el nombre reetiqueta
+                  esas compras hacia atrás. Casi siempre significa que el número está ocupado por
+                  otro artículo —de demostración, o cargado a mano— y que en Control de Stock ese
+                  mismo número es otra cosa. Miralos uno por uno antes de confirmar.
+                </p>
+                <ul>
+                  {informe.renombresConCompras.map((r) => (
+                    <li key={r.plu}>
+                      <strong>{r.plu}</strong> ·{' '}
+                      {r.cambios.map((c) => `${c.campo}: ${c.antes} → ${c.despues}`).join(' · ')}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          ) : null}
+
+          {informe.proveedoresDesconocidos.length > 0 ? (
+            <div className="card">
+              <h3>Proveedores del archivo que no están en Compras</h3>
+              <p className="chico medio mb0">
+                El catálogo entra igual: el proveedor de la Hoja 1 es informativo y sólo se usa
+                como proveedor habitual del artículo. Si querés que quede vinculado, dalos de alta
+                en Proveedores y volvé a importar.{' '}
+                <strong>{informe.proveedoresDesconocidos.join(', ')}</strong>
+              </p>
+            </div>
+          ) : null}
+
+          {informe.familiasNuevas.length > 0 ? (
+            <details className="card">
+              <summary>
+                <strong>Familias que se crean</strong> · {informe.familiasNuevas.length}
+              </summary>
+              <p className="chico medio">
+                Salen de la columna que elegiste arriba. Si ves una familia por cada artículo, el
+                nivel es demasiado fino; si ves una sola para todo, es demasiado grueso.
+              </p>
+              <p className="chico mb0">{informe.familiasNuevas.join(' · ')}</p>
+            </details>
+          ) : null}
 
           {informe.problemas.length > 0 ? (
             <div className="card">
@@ -256,6 +324,7 @@ export function Importar() {
           <form action={accionAplicar} className="card">
             <h2>3. Confirmar</h2>
             <input type="hidden" name="texto" value={previa.texto ?? ''} />
+            <input type="hidden" name="familiaDesde" value={previa.familiaDesde ?? 'auto'} />
             <p className="mensaje mensaje-aviso">
               Se van a crear {informe.nuevos.length} artículo/s y actualizar{' '}
               {informe.actualizables.length}. No se borra ninguno, no se renumera ninguno y no se

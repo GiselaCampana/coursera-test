@@ -55,12 +55,28 @@ export interface ConflictoDeCatalogo {
   motivo: string;
 }
 
+/** De qué columna sale la familia con la que se agrupan los artículos. */
+export type OrigenDeFamilia = 'auto' | 'tipo' | 'subtipo' | 'ninguna';
+
 export interface InformeDeCatalogo {
   totalLeidas: number;
   nuevos: ProductoDelInforme[];
   actualizables: ProductoDelInforme[];
   sinCambios: ProductoDelInforme[];
+  /**
+   * Artículos que cambiarían de nombre y **ya tienen compras cargadas**.
+   *
+   * Van aparte porque son los únicos donde equivocarse tiene consecuencias
+   * hacia atrás: el PLU ya está usado en facturas validadas, y renombrarlo
+   * reetiqueta esas compras. Casi siempre significa que ese número está ocupado
+   * por otro artículo del que Control de Stock no sabe nada.
+   */
+  renombresConCompras: ProductoDelInforme[];
   conflictos: ConflictoDeCatalogo[];
+  /** Las familias que se crearían, para poder mirarlas antes de aplicar. */
+  familiasNuevas: string[];
+  /** Proveedores nombrados en el archivo que no están dados de alta en Compras. */
+  proveedoresDesconocidos: string[];
   /** Artículos que están en Compras y no vinieron en el archivo. No se borran. */
   soloEnCompras: { plu: string; nombre: string; conMovimientos: boolean }[];
   /** Códigos de proveedor que el archivo trae y quedarían aprendidos. */
@@ -83,7 +99,7 @@ const SIN_FAMILIA = '—';
 export async function importarCatalogo(
   user: AuthUser,
   texto: string,
-  opciones: { aplicar?: boolean } = {},
+  opciones: { aplicar?: boolean; familiaDesde?: OrigenDeFamilia } = {},
 ): Promise<InformeDeCatalogo> {
   if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
     throw new ForbiddenError('Tu usuario no puede administrar el catálogo.');
@@ -95,7 +111,10 @@ export async function importarCatalogo(
     nuevos: [],
     actualizables: [],
     sinCambios: [],
+    renombresConCompras: [],
     conflictos: [],
+    familiasNuevas: [],
+    proveedoresDesconocidos: [],
     soloEnCompras: [],
     codigosPorAprender: [],
     problemas: [...lectura.problemas],
@@ -154,15 +173,45 @@ export async function importarCatalogo(
     }
   }
 
-  // --- Familias que hacen falta --------------------------------------------
+  /*
+   * --- De qué columna sale la familia --------------------------------------
+   *
+   * La Hoja 1 de Control de Stock trae dos niveles, «Tipo de Artículo» y
+   * «Subtipo de Artículo», y cuál de los dos sirve como familia depende de cómo
+   * estén cargados: si el Tipo es "Quesos" y el Subtipo "Queso Sardo", la
+   * familia que agrupa al Sardo Bloque con el Sardo Don Alfonso es el Subtipo.
+   * Al revés también puede pasar.
+   *
+   * No se adivina: se elige antes de importar y se ve el resultado en la vista
+   * previa. Por omisión gana el nivel más fino que el archivo traiga, que es el
+   * que agrupa sin mezclar.
+   */
+  const origen: OrigenDeFamilia = opciones.familiaDesde ?? 'auto';
+  const nombreDeFamilia = (fila: FilaDeCatalogo): string | null => {
+    const elegido =
+      origen === 'ninguna'
+        ? null
+        : origen === 'subtipo'
+          ? fila.subtipo
+          : origen === 'tipo'
+            ? (fila.familia ?? fila.categoria)
+            : (fila.familia ?? fila.subtipo ?? fila.categoria);
+    return elegido ? elegido.trim() : null;
+  };
+
   const familiasDelArchivo = new Map<string, string>();
   for (const fila of porPlu.values()) {
-    const nombre = fila.familia ?? fila.categoria;
-    if (nombre) familiasDelArchivo.set(normalizeText(nombre), nombre.trim());
+    const nombre = nombreDeFamilia(fila);
+    if (nombre) familiasDelArchivo.set(normalizeText(nombre), nombre);
   }
 
   const familiasExistentes = await prisma.productFamily.findMany();
   const familiaPorNombre = new Map(familiasExistentes.map((f) => [f.normalized, f]));
+
+  informe.familiasNuevas = [...familiasDelArchivo.entries()]
+    .filter(([normal]) => !familiaPorNombre.has(normal))
+    .map(([, nombre]) => nombre)
+    .sort();
 
   if (opciones.aplicar) {
     for (const [normal, nombre] of familiasDelArchivo) {
@@ -175,14 +224,23 @@ export async function importarCatalogo(
   }
 
   const idDeFamilia = (fila: FilaDeCatalogo): string | null => {
-    const nombre = fila.familia ?? fila.categoria;
+    const nombre = nombreDeFamilia(fila);
     if (!nombre) return null;
     return familiaPorNombre.get(normalizeText(nombre))?.id ?? null;
   };
-  const nombreDeFamilia = (fila: FilaDeCatalogo): string | null => {
-    const nombre = fila.familia ?? fila.categoria;
-    return nombre ? nombre.trim() : null;
-  };
+
+  /*
+   * Qué artículos ya tienen compras cargadas.
+   *
+   * Se necesita para dos cosas: avisar cuál de los renombres es peligroso, y
+   * decir cuáles de los que no vienen en el archivo no se podrían dar de baja
+   * sin perder historial.
+   */
+  const conCompras = await prisma.purchaseMovement.groupBy({
+    by: ['productId'],
+    _count: { _all: true },
+  });
+  const tienenCompras = new Set(conCompras.map((c) => c.productId).filter(Boolean) as string[]);
 
   // --- Fila por fila --------------------------------------------------------
   const vistos = new Set<string>();
@@ -266,19 +324,40 @@ export async function importarCatalogo(
           despues: fila.activo ? 'sí' : 'no',
         });
       }
-      if (resumen.cambios.length > 0) informe.actualizables.push(resumen);
-      else informe.sinCambios.push(resumen);
+      /*
+       * Un cambio de nombre sobre un PLU que ya tiene compras va aparte.
+       *
+       * Renombrar un artículo reetiqueta hacia atrás todo lo que se le compró.
+       * Cuando eso pasa, casi siempre es que ese número estaba ocupado por otro
+       * artículo —uno de demostración, o cargado a mano— y Control de Stock lo
+       * usa para otra cosa. No se bloquea, porque también puede ser una
+       * corrección legítima de ortografía; se separa para que se mire.
+       */
+      const cambiaDeNombre = resumen.cambios.some((c) => c.campo === 'Nombre');
+      if (cambiaDeNombre && tienenCompras.has(existente.id)) {
+        informe.renombresConCompras.push(resumen);
+      } else if (resumen.cambios.length > 0) {
+        informe.actualizables.push(resumen);
+      } else {
+        informe.sinCambios.push(resumen);
+      }
     }
 
     // --- El código del proveedor que venga en la fila ----------------------
     const proveedor = fila.proveedor
       ? proveedorPorNombre.get(normalizeText(fila.proveedor))
       : undefined;
+    /*
+     * El proveedor de la Hoja 1 es de quién se compra habitualmente el
+     * artículo, no un código. Que no esté dado de alta en Compras no es un
+     * conflicto —el catálogo entra igual— así que se anota una vez y no una
+     * por fila: un archivo de quinientos artículos de treinta proveedores
+     * llenaría el informe de ruido y taparía lo que sí hay que mirar.
+     */
     if (fila.proveedor && !proveedor) {
-      informe.conflictos.push({
-        plu: fila.plu,
-        motivo: `El proveedor «${fila.proveedor}» no está dado de alta en Compras.`,
-      });
+      if (!informe.proveedoresDesconocidos.includes(fila.proveedor)) {
+        informe.proveedoresDesconocidos.push(fila.proveedor);
+      }
     }
     if (proveedor && fila.codigoProveedor) {
       const llave = `${proveedor.id}|${normalizarCodigo(fila.codigoProveedor)}`;
@@ -308,6 +387,10 @@ export async function importarCatalogo(
       normalizedName: fila.nombre,
       familyId: idDeFamilia(fila) ?? existente?.familyId ?? null,
       catalogSyncedAt: new Date(),
+      // El proveedor de la Hoja 1 queda como proveedor habitual del artículo,
+      // que es el campo que ya existía para eso. Si no se lo reconoce, se
+      // conserva el que hubiera.
+      ...(proveedor ? { defaultSupplierId: proveedor.id } : {}),
       ...(fila.categoria ? { category: fila.categoria } : {}),
       ...(fila.subtipo ? { subtype: fila.subtipo } : {}),
       ...(fila.unidad ? { purchaseUnit: fila.unidad } : {}),
@@ -356,20 +439,13 @@ export async function importarCatalogo(
   }
 
   // --- Lo que está en Compras y no vino en el archivo -----------------------
-  const sobrantes = existentes.filter((p) => !vistos.has(p.internalCode));
-  if (sobrantes.length > 0) {
-    const conCompras = await prisma.purchaseMovement.groupBy({
-      by: ['productId'],
-      where: { productId: { in: sobrantes.map((p) => p.id) } },
-      _count: { _all: true },
-    });
-    const tienenMovimientos = new Set(conCompras.map((c) => c.productId));
-    informe.soloEnCompras = sobrantes.map((p) => ({
+  informe.soloEnCompras = existentes
+    .filter((p) => !vistos.has(p.internalCode))
+    .map((p) => ({
       plu: p.internalCode,
       nombre: p.normalizedName,
-      conMovimientos: tienenMovimientos.has(p.id),
+      conMovimientos: tienenCompras.has(p.id),
     }));
-  }
 
   if (opciones.aplicar) {
     await recordAudit({
@@ -383,6 +459,9 @@ export async function importarCatalogo(
         actualizados: informe.actualizables.length,
         sinCambios: informe.sinCambios.length,
         conflictos: informe.conflictos.length,
+        renombresConCompras: informe.renombresConCompras.length,
+        familiasCreadas: informe.familiasNuevas.length,
+        familiaDesde: origen,
         codigosAprendidos: informe.codigosPorAprender.length,
         soloEnCompras: informe.soloEnCompras.length,
       },

@@ -3831,3 +3831,128 @@ describe('la factura de Errecalde contra el catálogo interno', () => {
     ]);
   });
 });
+
+describe('el catálogo tal como lo exporta la Hoja 1', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * La Hoja 1 de Control de Stock trae dos niveles de clasificación, «Tipo de
+   * Artículo» y «Subtipo de Artículo», y ninguno de los dos es la familia por
+   * decreto: depende de cómo estén cargados. Si el Tipo es "Quesos" y el
+   * Subtipo "Queso Sardo", la familia que agrupa a los dos Sardo sin arrastrar
+   * al cremoso es el Subtipo. Por eso se elige y se ve el resultado antes.
+   */
+
+  const HOJA1 = [
+    'PLU,Artículo,Proveedor,Tipo de Artículo,Subtipo de Artículo,URL Imagen',
+    '1211,Cremoso Punta del Agua,Distribución Errecalde,Quesos,Queso Cremoso,https://x/1.jpg',
+    '2001,Queso Sardo bloque Melincué,Distribución Errecalde,Quesos,Queso Sardo,https://x/2.jpg',
+    '2002,Queso Sardo Don Alfonso,Distribución Errecalde,Quesos,Queso Sardo,https://x/3.jpg',
+  ].join('\n');
+
+  it('el Subtipo agrupa los dos Sardo sin arrastrar el cremoso', async () => {
+    await comprobanteErrecaldeValidado();
+    await importarCatalogo(escenario.admin, HOJA1, { aplicar: true, familiaDesde: 'subtipo' });
+
+    const sardo = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Queso Sardo' } });
+    const reporte = await getPurchaseReport(escenario.admin, { familyId: sardo.id });
+    expect(reporte.totals.kilos).toBe('33.65');
+
+    // Y el cremoso quedó en la suya, no en la del Sardo.
+    const cremoso = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(cremoso.familyId).not.toBe(sardo.id);
+  });
+
+  it('el Tipo agrupa más grueso, y se elige antes de aplicar', async () => {
+    await comprobanteErrecaldeValidado();
+    await importarCatalogo(escenario.admin, HOJA1, { aplicar: true, familiaDesde: 'tipo' });
+
+    // Con el nivel grueso hay una sola familia y entran los tres.
+    expect(await prisma.productFamily.count()).toBe(1);
+    const quesos = await prisma.productFamily.findFirstOrThrow({ where: { name: 'Quesos' } });
+    expect(await prisma.product.count({ where: { familyId: quesos.id } })).toBe(3);
+  });
+
+  it('el informe dice qué familias saldrían, sin escribir ninguna', async () => {
+    const informe = await importarCatalogo(escenario.admin, HOJA1, { familiaDesde: 'subtipo' });
+    expect(informe.familiasNuevas).toEqual(['Queso Cremoso', 'Queso Sardo']);
+    expect(await prisma.productFamily.count()).toBe(0);
+  });
+
+  it('los dos niveles se guardan aunque sólo uno arme la familia', async () => {
+    await importarCatalogo(escenario.admin, HOJA1, { aplicar: true, familiaDesde: 'subtipo' });
+    const sardo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '2001' } });
+    expect(sardo.category).toBe('Quesos');
+    expect(sardo.subtype).toBe('Queso Sardo');
+  });
+
+  it('el Proveedor de la planilla queda como proveedor habitual', async () => {
+    await importarCatalogo(escenario.admin, HOJA1, { aplicar: true });
+    const cremoso = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(cremoso.defaultSupplierId).toBe(escenario.proveedorErrecaldeId);
+  });
+
+  it('un proveedor que no está en Compras se avisa una vez, no una por fila', async () => {
+    /*
+     * El Proveedor de la Hoja 1 es informativo. Un catálogo entero de un
+     * proveedor que todavía no se dio de alta llenaría el informe de
+     * conflictos repetidos y taparía lo que sí hay que mirar.
+     */
+    const archivo = [
+      'PLU,Artículo,Proveedor',
+      '5001,Uno,Lácteos del Sur',
+      '5002,Dos,Lácteos del Sur',
+      '5003,Tres,Lácteos del Sur',
+    ].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.proveedoresDesconocidos).toEqual(['Lácteos del Sur']);
+    expect(informe.conflictos).toEqual([]);
+    // Y los artículos entraron igual: el proveedor no es condición para existir.
+    expect(await prisma.product.count({ where: { internalCode: { startsWith: '500' } } })).toBe(3);
+  });
+
+  it('avisa aparte cuando un PLU con compras cambiaría de nombre', async () => {
+    /*
+     * El caso que motiva el aviso: un PLU ocupado por un artículo de
+     * demostración que en Control de Stock es otra cosa. Cambiarle el nombre
+     * reetiqueta hacia atrás las compras ya validadas.
+     */
+    await comprobanteErrecaldeValidado();
+
+    const archivo = ['PLU,Artículo', '2001,Manteca La Serenísima'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo);
+
+    expect(informe.renombresConCompras).toHaveLength(1);
+    expect(informe.renombresConCompras[0].plu).toBe('2001');
+    // No se mezcla con los cambios inofensivos.
+    expect(informe.actualizables).toHaveLength(0);
+    // Y como es sólo el informe, nada se escribió.
+    const sardo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '2001' } });
+    expect(sardo.normalizedName).toBe('Queso Sardo bloque Melincué');
+  });
+
+  it('un PLU sin compras que cambia de nombre es un cambio común', async () => {
+    // Sin historial detrás, renombrar no reetiqueta nada.
+    const archivo = ['PLU,Artículo', '2001,Sardo Melincué'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo);
+    expect(informe.renombresConCompras).toHaveLength(0);
+    expect(informe.actualizables).toHaveLength(1);
+  });
+
+  it('una factura con artículos desconocidos no da de alta ningún PLU', async () => {
+    /*
+     * La regla de fondo: Compras no numera artículos. Si la factura trae algo
+     * que el catálogo no tiene, el renglón queda sin asociar y se resuelve a
+     * mano contra el catálogo real; nunca se inventa un PLU nuevo.
+     */
+    await prisma.product.deleteMany({});
+    await comprobanteErrecaldeValidado();
+
+    expect(await prisma.product.count()).toBe(0);
+    expect(await prisma.productAlias.count()).toBe(0);
+  });
+});
