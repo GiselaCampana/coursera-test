@@ -490,6 +490,15 @@ export async function saveProduct(user: AuthUser, form: FormData) {
   }
 
   const pesoPieza = texto(form.get('avgPieceWeightKg'));
+  const pesoUnidadCompra = texto(form.get('purchaseUnitWeightKg'));
+  const purchaseUnit = texto(form.get('purchaseUnit')) === 'UNIT' ? ('UNIT' as const) : ('KG' as const);
+
+  if (pesoUnidadCompra) {
+    const peso = toDecimal(pesoUnidadCompra);
+    if (peso.lte(0)) {
+      throw new ValidationError('El peso neto de la unidad de compra tiene que ser mayor a cero.');
+    }
+  }
 
   const duplicado = await prisma.product.findFirst({
     where: { internalCode, ...(id ? { id: { not: id } } : {}) },
@@ -500,9 +509,12 @@ export async function saveProduct(user: AuthUser, form: FormData) {
     internalCode,
     normalizedName,
     category: texto(form.get('category')) || null,
-    purchaseUnit: texto(form.get('purchaseUnit')) === 'UNIT' ? ('UNIT' as const) : ('KG' as const),
+    purchaseUnit,
     saleMode: texto(form.get('saleMode')) === 'AL_CORTE' ? ('AL_CORTE' as const) : ('FETEABLE' as const),
     avgPieceWeightKg: pesoPieza ? toDecimal(pesoPieza).toString() : null,
+    purchaseUnitWeightKg: purchaseUnit === 'UNIT' && pesoUnidadCompra
+      ? toDecimal(pesoUnidadCompra).toString()
+      : null,
     defaultSupplierId: texto(form.get('defaultSupplierId')) || null,
     targetMarginPct: margen.toString(),
     marginBasis,
