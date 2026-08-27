@@ -6,7 +6,7 @@ test.describe('precios por kilo', () => {
     await ingresar(page, 'admin');
     await page.goto('/precios');
 
-    await expect(page.getByRole('heading', { name: 'Precios' })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Precios' })).toBeVisible();
     await expect(page.getByText('Último costo por kilo').first()).toBeVisible();
     await expect(page.getByText('Precio por kilo sugerido · pago digital').first()).toBeVisible();
     await expect(page.getByText('Precio por kilo · efectivo').first()).toBeVisible();
