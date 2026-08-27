@@ -122,11 +122,15 @@ export default async function PaginaPrecios({
               <div className="fila-dato-cabecera">
                 <span className="fila-dato-titulo">{fila.name}</span>
                 <span className="fila-dato-importe">
-                  {fila.approvedPricePerKg
-                    ? formatARS(fila.approvedPricePerKg)
-                    : fila.suggestedPricePerKg
-                      ? formatARS(fila.suggestedPricePerKg)
-                      : '—'}
+                  {fila.soldByUnit
+                    ? fila.wholeUnitTotal
+                      ? formatARS(fila.wholeUnitTotal)
+                      : '—'
+                    : fila.approvedPricePerKg
+                      ? formatARS(fila.approvedPricePerKg)
+                      : fila.suggestedPricePerKg
+                        ? formatARS(fila.suggestedPricePerKg)
+                        : '—'}
                 </span>
               </div>
               <div className="fila-dato-meta">
@@ -144,10 +148,12 @@ export default async function PaginaPrecios({
                   </div>
                 ) : null}
 
-                <div className="dato">
-                  <dt>Último costo por kilo</dt>
-                  <dd>{fila.lastUnitCost ? formatARS(fila.lastUnitCost) : '—'}</dd>
-                </div>
+                {!fila.soldByUnit ? (
+                  <div className="dato">
+                    <dt>Último costo por kilo</dt>
+                    <dd>{fila.lastUnitCost ? formatARS(fila.lastUnitCost) : '—'}</dd>
+                  </div>
+                ) : null}
 
                 {fila.purchaseUnit === 'UNIT' && fila.purchaseUnitWeightKg ? (
                   <div className="dato">
@@ -178,7 +184,12 @@ export default async function PaginaPrecios({
                   </div>
                 ) : null}
 
-                {fila.saleMode === 'AL_CORTE' ? (
+                {fila.soldByUnit ? (
+                  <div className="dato destacado">
+                    <dt>Precio por unidad</dt>
+                    <dd>{fila.wholeUnitTotal ? formatARS(fila.wholeUnitTotal) : '—'}</dd>
+                  </div>
+                ) : fila.saleMode === 'AL_CORTE' ? (
                   <>
                     <div className="dato destacado">
                       <dt>Por kilo</dt>
@@ -218,7 +229,7 @@ export default async function PaginaPrecios({
                   </>
                 )}
 
-                {fila.purchaseUnit === 'UNIT' && fila.purchaseUnitWeightKg ? (
+                {!fila.soldByUnit && fila.purchaseUnit === 'UNIT' && fila.purchaseUnitWeightKg ? (
                   <div className="dato">
                     <dt>Unidad/lata/cajón entero</dt>
                     <dd>{fila.wholeUnitTotal ? formatARS(fila.wholeUnitTotal) : '—'}</dd>
@@ -254,7 +265,7 @@ export default async function PaginaPrecios({
                 />
               ) : null}
 
-              {puedeAprobar && fila.suggestedPricePerKg ? (
+              {puedeAprobar && !fila.soldByUnit && fila.suggestedPricePerKg ? (
                 <FichaPrecio
                   productId={fila.productId}
                   nombre={fila.name}
