@@ -361,9 +361,15 @@ export async function importarCatalogo(
     }
 
     // --- El código del proveedor que venga en la fila ----------------------
-    const proveedor = fila.proveedor
-      ? proveedorPorNombre.get(normalizeText(fila.proveedor))
-      : undefined;
+    const proveedorNormal = fila.proveedor ? normalizeText(fila.proveedor) : '';
+    let proveedor = proveedorNormal ? proveedorPorNombre.get(proveedorNormal) : undefined;
+    if (!proveedor && proveedorNormal) {
+      const candidatosProveedor = proveedores.filter((p) => {
+        const nombre = normalizeText(p.tradeName);
+        return nombre.includes(proveedorNormal) || proveedorNormal.includes(nombre);
+      });
+      if (candidatosProveedor.length === 1) proveedor = candidatosProveedor[0];
+    }
     /*
      * El proveedor de la Hoja 1 es de quién se compra habitualmente el
      * artículo, no un código. Que no esté dado de alta en Compras no es un
