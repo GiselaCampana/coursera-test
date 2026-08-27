@@ -68,6 +68,34 @@ test.describe('asociaciones históricas', () => {
     await expect(page.locator('.resumen-mes')).toBeVisible();
   });
 
+  test('permite revisar un mapeo código de proveedor a PLU antes de aplicarlo', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/productos/asociaciones');
+
+    await elegirOpcion(page, '#proveedor', 'Distribución Errecalde');
+    await page.getByRole('button', { name: 'Analizar' }).click();
+    await expect(page).toHaveURL(/proveedor=/);
+
+    await expect(page.getByRole('heading', { name: /Códigos confirmados de Distribución Errecalde/ })).toBeVisible();
+
+    // El preset queda cargado de una vez; la prueba no presupone que el
+    // catálogo E2E tenga los 16 PLU reales de producción.
+    await page.getByRole('button', { name: 'Cargar 16 códigos verificados de Errecalde' }).click();
+    await expect(page.getByLabel('CSV o texto')).toContainText('ART-00228;1211');
+    await expect(page.getByLabel('CSV o texto')).toContainText('ART-00758;1551');
+
+    // Para probar la vista previa con un caso aplicable usamos un PLU que sí
+    // existe en la semilla E2E y todavía no tiene código del proveedor.
+    await page
+      .getByLabel('CSV o texto')
+      .fill('Código proveedor;PLU\nART-01477;2002');
+    await page.getByRole('button', { name: 'Ver propuesta' }).click();
+
+    await expect(page.getByText('ART-01477')).toBeVisible();
+    await expect(page.getByText('Tomate en botella')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Aplicar 1 código/s' })).toBeVisible();
+  });
+
   test('un operador no llega a esta pantalla', async ({ page }) => {
     await ingresar(page, 'operador');
     await page.goto('/configuracion/productos/asociaciones');
