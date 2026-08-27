@@ -3901,9 +3901,15 @@ describe('la factura de Errecalde contra el catálogo interno', () => {
     const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
     expect(informe.aplicadas).toBeGreaterThan(0);
 
-    // 4. Y se completa lo derivado que faltaba: el historial de costos.
+    // 4. El propio backfill deja listo el historial de costos para Precios.
+    const costosTrasBackfill = await prisma.costHistory.count({ where: { documentId } });
+    expect(costosTrasBackfill).toBeGreaterThan(0);
+
+    // Reparar derivados queda como red de seguridad e idempotencia: si el
+    // backfill ya hizo su trabajo, no tiene que duplicar costos.
     const reparacion = await repararDerivados(escenario.admin, documentId);
-    expect(reparacion.costosCreados).toBeGreaterThan(0);
+    expect(reparacion.costosCreados).toBe(0);
+    expect(await prisma.costHistory.count({ where: { documentId } })).toBe(costosTrasBackfill);
 
     // --- Compras muestra cantidades por artículo --------------------------
     const sardoBloque = await prisma.product.findUniqueOrThrow({
@@ -3923,8 +3929,8 @@ describe('la factura de Errecalde contra el catálogo interno', () => {
     expect(porFamilia.totals.kilos).toBe('33.65');
 
     // --- Precios tiene costo para lo asociado ----------------------------
-    expect(await getLatestCost(sardoBloque.id)).not.toBeNull();
-    expect(await getLatestCost(sardoAlfonso.id)).not.toBeNull();
+    expect((await getLatestCost(sardoBloque.id)).unitCost).not.toBeNull();
+    expect((await getLatestCost(sardoAlfonso.id)).unitCost).not.toBeNull();
 
     // --- Y ningún importe se movió ---------------------------------------
     const despues = await prisma.documentItem.findMany({
