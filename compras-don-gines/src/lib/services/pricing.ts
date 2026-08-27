@@ -102,7 +102,14 @@ export interface PriceSuggestion {
   productId: string;
   productName: string;
   saleMode: SaleMode;
+  purchaseUnit: 'KG' | 'UNIT';
+  purchaseUnitWeightKg: string | null;
   cost: ProductCostSnapshot;
+  /** Costo comparable para vender por kilo. */
+  costPerKg: Decimal | null;
+  previousCostPerKg: Decimal | null;
+  /** Falta el peso neto para convertir una compra por unidad a costo por kilo. */
+  needsPurchaseUnitWeight: boolean;
   prices: SalePrices | null;
   rule: Awaited<ReturnType<typeof resolvePricingRule>>;
   approved: {
@@ -127,13 +134,34 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
     include: { approvedBy: { select: { name: true } } },
   });
 
+  const purchaseUnit = rule.product.purchaseUnit as 'KG' | 'UNIT';
+  const purchaseUnitWeightKg = rule.product.purchaseUnitWeightKg?.toString() ?? null;
+  const pesoUnidad = purchaseUnitWeightKg ? toDecimal(purchaseUnitWeightKg) : null;
+  const needsPurchaseUnitWeight =
+    purchaseUnit === 'UNIT' && Boolean(cost.unitCost) && (!pesoUnidad || pesoUnidad.lte(0));
+
+  const convertirAKg = (valor: Decimal | null): Decimal | null => {
+    if (!valor) return null;
+    if (purchaseUnit === 'KG') return valor;
+    if (!pesoUnidad || pesoUnidad.lte(0)) return null;
+    return money(valor.div(pesoUnidad));
+  };
+
+  const costPerKg = convertirAKg(cost.unitCost);
+  const previousCostPerKg = convertirAKg(cost.previousUnitCost);
+
   return {
     productId,
     productName: rule.product.normalizedName,
     saleMode: rule.saleMode,
+    purchaseUnit,
+    purchaseUnitWeightKg,
     cost,
-    prices: cost.unitCost
-      ? computeSalePrices(cost.unitCost, {
+    costPerKg,
+    previousCostPerKg,
+    needsPurchaseUnitWeight,
+    prices: costPerKg
+      ? computeSalePrices(costPerKg, {
           marginBasis: rule.marginBasis,
           targetMarginPct: rule.targetMarginPct,
           cashDiscountPct: rule.cashDiscountPct,
@@ -171,6 +199,11 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
       'Todavía no hay ninguna compra de este producto, así que no hay costo sobre el cual fijar el precio.',
     );
   }
+  if (!suggestion.costPerKg) {
+    throw new ValidationError(
+      'Este producto se compra por unidad y se vende por kilo. Indicá cuántos kilos trae cada unidad comprada antes de aprobar el precio.',
+    );
+  }
 
   const approved = money(input.approvedPricePerKg);
   if (approved.lte(0)) throw new ValidationError('El precio aprobado tiene que ser mayor a cero.');
@@ -186,7 +219,7 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
   const created = await prisma.salePriceHistory.create({
     data: {
       productId: input.productId,
-      costBasis: suggestion.cost.unitCost.toString(),
+      costBasis: suggestion.costPerKg.toString(),
       marginBasis: rule.marginBasis,
       marginPct: rule.targetMarginPct,
       suggestedPricePerKg: suggestion.prices!.pricePerKg.toString(),
@@ -211,7 +244,7 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
     entityId: input.productId,
     after: {
       producto: suggestion.productName,
-      costoUnitario: suggestion.cost.unitCost.toString(),
+      costoPorKilo: suggestion.costPerKg.toString(),
       precioSugerido: suggestion.prices!.pricePerKg.toString(),
       precioAprobado: approved.toString(),
       vigenciaDesde: validFrom.toISOString().slice(0, 10),
@@ -227,6 +260,9 @@ export interface PriceBoardRow {
   name: string;
   category: string | null;
   saleMode: SaleMode;
+  purchaseUnit: 'KG' | 'UNIT';
+  purchaseUnitWeightKg: string | null;
+  purchaseUnitCost: string | null;
   lastUnitCost: string | null;
   previousUnitCost: string | null;
   deltaAmount: string | null;
@@ -235,11 +271,17 @@ export interface PriceBoardRow {
   supplierName: string | null;
   branchName: string | null;
   suggestedPricePerKg: string | null;
+  pricePerKgCash: string | null;
   pricePer100g: string | null;
   pricePerQuarter: string | null;
   pricePerPieceDigital: string | null;
   pricePerPieceCash: string | null;
   approvedPricePerKg: string | null;
+  targetMarginPct: string;
+  marginBasis: MarginBasis;
+  cashDiscountPct: string;
+  roundingRule: RoundingRule;
+  needsPurchaseUnitWeight: boolean;
   /** true si el último costo subió más que el umbral configurado. */
   alert: boolean;
 }
@@ -271,19 +313,31 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       name: product.normalizedName,
       category: product.category,
       saleMode: product.saleMode as SaleMode,
-      lastUnitCost: cost.unitCost?.toFixed(2) ?? null,
-      previousUnitCost: cost.previousUnitCost?.toFixed(2) ?? null,
-      deltaAmount: cost.deltaAmount?.toFixed(2) ?? null,
+      purchaseUnit: suggestion.purchaseUnit,
+      purchaseUnitWeightKg: suggestion.purchaseUnitWeightKg,
+      purchaseUnitCost: cost.unitCost?.toFixed(2) ?? null,
+      lastUnitCost: suggestion.costPerKg?.toFixed(2) ?? null,
+      previousUnitCost: suggestion.previousCostPerKg?.toFixed(2) ?? null,
+      deltaAmount:
+        suggestion.costPerKg && suggestion.previousCostPerKg
+          ? suggestion.costPerKg.minus(suggestion.previousCostPerKg).toFixed(2)
+          : null,
       deltaPct: cost.deltaPct?.toString() ?? null,
       lastCostDate: cost.date,
       supplierName: cost.supplierName,
       branchName: cost.branchName,
       suggestedPricePerKg: prices?.pricePerKg.toFixed(2) ?? null,
+      pricePerKgCash: prices?.pricePerKgCash.toFixed(2) ?? null,
       pricePer100g: prices?.pricePer100g.toFixed(2) ?? null,
       pricePerQuarter: prices?.pricePerQuarter.toFixed(2) ?? null,
       pricePerPieceDigital: prices?.pricePerPieceDigital?.toFixed(2) ?? null,
       pricePerPieceCash: prices?.pricePerPieceCash?.toFixed(2) ?? null,
       approvedPricePerKg: suggestion.approved?.pricePerKg ?? null,
+      targetMarginPct: suggestion.rule.targetMarginPct,
+      marginBasis: suggestion.rule.marginBasis,
+      cashDiscountPct: suggestion.rule.cashDiscountPct,
+      roundingRule: suggestion.rule.roundingRule,
+      needsPurchaseUnitWeight: suggestion.needsPurchaseUnitWeight,
       alert: cost.deltaPct ? cost.deltaPct.gte(PRICE_ALERT_THRESHOLD) : false,
     });
   }
