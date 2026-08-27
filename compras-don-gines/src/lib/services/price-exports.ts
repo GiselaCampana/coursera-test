@@ -92,6 +92,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     '1/4 kg · $/kg',
     'Pieza digital · $/kg',
     'Pieza efectivo · $/kg',
+    'Precio por unidad',
     'Unidad/lata/cajón entero',
     'Precio base aprobado/kg',
     'Fecha último costo',
@@ -128,13 +129,14 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
       n(r.feteadoQuarterKg),
       n(r.feteadoPieceDigitalKg),
       n(r.feteadoPieceCashKg),
-      n(r.wholeUnitTotal),
+      r.soldByUnit ? n(r.wholeUnitTotal) : null,
+      !r.soldByUnit ? n(r.wholeUnitTotal) : null,
       n(r.approvedPricePerKg),
       r.lastCostDate ? formatDateAr(r.lastCostDate) : '',
     ]),
   ];
 
-  const moneyColumns = new Set([10, 11, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+  const moneyColumns = new Set([10, 11, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
   const pctColumns = new Set([12, 13, 14, 15, 16, 17, 18, 19, 20]);
 
   const rowsXml = data
@@ -293,6 +295,9 @@ function filtersLabel(filters: PriceExportFilters): string {
 }
 
 function employeePriceText(r: PriceExportRow): string[] {
+  if (r.soldByUnit) {
+    return [`Unidad: ${r.wholeUnitTotal ? formatARS(r.wholeUnitTotal) : '-'}`];
+  }
   if (r.saleMode === 'AL_CORTE') {
     return [
       `Kilo: ${r.salePricePerKg ? formatARS(r.salePricePerKg) : '-'}`,
@@ -375,14 +380,24 @@ export function priceRowsToManagementPdf(
       const ident = r.usesPlu ? r.internalCode : r.barcode ?? r.internalCode;
       const nombre = r.name.length > 27 ? r.name.slice(0, 26) + '...' : r.name;
       const prov = (r.supplierName ?? '').length > 16 ? (r.supplierName ?? '').slice(0, 15) + '...' : (r.supplierName ?? '');
-      const modality1 = r.saleMode === 'AL_CORTE' ? r.alCorteHormaDigitalKg : r.feteado100gKg;
-      const modality2 = r.saleMode === 'AL_CORTE' ? r.alCorteHormaCashKg : r.feteadoPieceCashKg;
+      const modality1 = r.soldByUnit
+        ? null
+        : r.saleMode === 'AL_CORTE'
+          ? r.alCorteHormaDigitalKg
+          : r.feteado100gKg;
+      const modality2 = r.soldByUnit
+        ? null
+        : r.saleMode === 'AL_CORTE'
+          ? r.alCorteHormaCashKg
+          : r.feteadoPieceCashKg;
+      const costo = r.soldByUnit ? r.purchaseUnitCost : r.lastUnitCost;
+      const ventaBase = r.soldByUnit ? r.wholeUnitTotal : r.salePricePerKg;
       const vals = [
         ident,
         nombre,
         prov,
-        r.lastUnitCost ? formatARS(r.lastUnitCost) : '-',
-        r.salePricePerKg ? formatARS(r.salePricePerKg) : '-',
+        costo ? formatARS(costo) : '-',
+        ventaBase ? formatARS(ventaBase) : '-',
         modality1 ? formatARS(modality1) : '-',
         modality2 ? formatARS(modality2) : '-',
         formatRate(r.targetMarginPct),
