@@ -59,13 +59,20 @@ export default async function PaginaCatalogo({
       </p>
 
       {importado ? (
-        <p className="mensaje mensaje-ok" role="status">
-          Catálogo importado: {nuevos} artículo/s nuevos, {act} actualizado/s y {cod} código/s de
-          proveedor aprendidos.
-          {Number(conf) > 0
-            ? ` Quedaron ${conf} conflicto/s sin aplicar: volvé a importar el archivo para verlos en detalle.`
-            : ''}
-        </p>
+        <>
+          <p className="mensaje mensaje-ok" role="status">
+            Catálogo importado: {nuevos} artículo/s nuevos, {act} actualizado/s y {cod} código/s de
+            proveedor aprendidos.
+            {Number(conf) > 0
+              ? ` Quedaron ${conf} conflicto/s sin aplicar: volvé a importar el archivo para verlos en detalle.`
+              : ''}
+          </p>
+          <div className="acciones">
+            <Link href="/configuracion/productos/asociaciones" className="boton">
+              Continuar con asociaciones históricas
+            </Link>
+          </div>
+        </>
       ) : null}
 
       <div className="card card-compacta">
