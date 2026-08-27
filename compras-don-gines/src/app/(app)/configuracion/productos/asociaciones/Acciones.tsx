@@ -20,6 +20,30 @@ function Boton({ texto, cargando }: { texto: string; cargando: string }) {
   );
 }
 
+const MAPEO_ERRECALDE_VERIFICADO = [
+  ['ART-00873', '1149'],
+  ['ART-00177', '3001'],
+  ['ART-81221', '1141'],
+  ['ART-00228', '1211'],
+  ['ART-00293', '1603'],
+  ['ART-00327', '2125'],
+  ['ART-81559', '2341'],
+  ['ART-60487', '2313'],
+  ['ART-00495', '1316'],
+  ['ART-01611', '1317'],
+  ['ART-82444', '1317'],
+  ['ART-00704', '1530'],
+  ['ART-00714', '1702'],
+  ['ART-00721', '1611'],
+  ['ART-80719', '1612'],
+  ['ART-00758', '1551'],
+] as const;
+
+const textoMapeoErrecalde = [
+  'Código proveedor;PLU',
+  ...MAPEO_ERRECALDE_VERIFICADO.map(([codigo, plu]) => `${codigo};${plu}`),
+].join('\n');
+
 /**
  * El segundo paso: aplicar lo que el análisis dio por seguro.
  *
@@ -132,6 +156,18 @@ export function ImportarMapeoCodigos({
         <strong> Código proveedor</strong> y <strong>PLU</strong>. Primero se muestra la vista previa;
         recién después se aplica.
       </p>
+
+      {supplierName.toLowerCase().includes('errecalde') ? (
+        <div className="acciones">
+          <button
+            type="button"
+            className="boton boton-secundario"
+            onClick={() => setTexto(textoMapeoErrecalde)}
+          >
+            Cargar 16 códigos verificados de Errecalde
+          </button>
+        </div>
+      ) : null}
 
       <form action={accionPrevia}>
         <input type="hidden" name="supplierId" value={supplierId} />
