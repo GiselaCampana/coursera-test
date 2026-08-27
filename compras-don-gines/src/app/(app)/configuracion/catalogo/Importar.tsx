@@ -312,6 +312,15 @@ export function Importar() {
           />
 
           <Grupo
+            titulo="Datos demo antiguos que se desactivan"
+            ayuda="Son PLU inventados por versiones viejas del seed, no aparecen en el catálogo real y no tienen historial. Se desactivan para que dejen de aparecer en Productos y Precios; no se borra ningún registro."
+            filas={informe.demosDesactivables.map((p) => ({
+              plu: p.plu,
+              nombre: p.nombre,
+            }))}
+          />
+
+          <Grupo
             titulo="Sólo en Compras"
             ayuda="Están acá y no vinieron en el archivo. No se borra ninguno: puede que la exportación esté incompleta, y los que tienen compras cargadas se llevarían el historial puesto."
             filas={informe.soloEnCompras.map((p) => ({
@@ -328,8 +337,11 @@ export function Importar() {
             <p className="mensaje mensaje-aviso">
               Se van a crear {informe.nuevos.length} artículo/s y actualizar{' '}
               {informe.actualizables.length}. No se borra ninguno, no se renumera ninguno y no se
-              tocan las compras, los impuestos ni los pagos ya cargados. Queda registrado en la
-              auditoría con tu usuario.
+              tocan las compras, los impuestos ni los pagos ya cargados.
+              {informe.demosDesactivables.length > 0
+                ? ` Además, se desactivan ${informe.demosDesactivables.length} artículo/s demo antiguos sin historial.`
+                : ''}
+              Queda registrado en la auditoría con tu usuario.
             </p>
             {aplicado.error ? (
               <p className="mensaje mensaje-error" role="alert">
