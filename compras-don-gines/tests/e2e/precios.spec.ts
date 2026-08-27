@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises';
 import { test, expect } from '@playwright/test';
 import { ingresar, sinScrollHorizontal } from './ayudas';
 
@@ -24,19 +25,27 @@ test.describe('precios por kilo', () => {
     await expect(page.getByRole('link', { name: 'Exportar PDF' })).toBeVisible();
     await expect(page.getByRole('link', { name: 'Exportar Excel' })).toBeVisible();
 
-    const pdf = await page.request.get('/api/precios/exportar?formato=pdf');
-    if (!pdf.ok()) {
-      throw new Error(`Exportar PDF respondió ${pdf.status()}: ${await pdf.text()}`);
-    }
-    expect(pdf.headers()['content-type']).toContain('application/pdf');
-    expect((await pdf.body()).subarray(0, 4).toString()).toBe('%PDF');
+    // Se prueba como lo usa una persona: tocando el enlace desde la página.
+    // Así el navegador manda la misma sesión que usa la interfaz.
+    const [pdfDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: 'Exportar PDF' }).click(),
+    ]);
+    expect(pdfDownload.suggestedFilename()).toMatch(/\.pdf$/i);
+    const pdfPath = await pdfDownload.path();
+    expect(pdfPath).not.toBeNull();
+    const pdf = await readFile(pdfPath!);
+    expect(pdf.subarray(0, 4).toString()).toBe('%PDF');
 
-    const xlsx = await page.request.get('/api/precios/exportar?formato=xlsx');
-    if (!xlsx.ok()) {
-      throw new Error(`Exportar Excel respondió ${xlsx.status()}: ${await xlsx.text()}`);
-    }
-    expect(xlsx.headers()['content-type']).toContain('spreadsheetml');
-    expect((await xlsx.body()).subarray(0, 2).toString()).toBe('PK');
+    const [xlsxDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('link', { name: 'Exportar Excel' }).click(),
+    ]);
+    expect(xlsxDownload.suggestedFilename()).toMatch(/\.xlsx$/i);
+    const xlsxPath = await xlsxDownload.path();
+    expect(xlsxPath).not.toBeNull();
+    const xlsx = await readFile(xlsxPath!);
+    expect(xlsx.subarray(0, 2).toString()).toBe('PK');
 
     await sinScrollHorizontal(page);
   });
