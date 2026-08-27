@@ -465,10 +465,21 @@ export async function saveProduct(user: AuthUser, form: FormData) {
   assert(user, PERMISSIONS.PRODUCTOS_GESTIONAR);
 
   const id = texto(form.get('id'));
-  const internalCode = texto(form.get('internalCode'));
   const normalizedName = texto(form.get('normalizedName'));
-  if (!internalCode || !normalizedName) {
-    throw new ValidationError('El producto necesita un código interno y un nombre.');
+  const usesPlu = form.get('usesPlu') !== 'off';
+  const barcode = texto(form.get('barcode'));
+  let internalCode = texto(form.get('internalCode'));
+  if (!normalizedName) {
+    throw new ValidationError('El producto necesita un nombre.');
+  }
+  if (usesPlu && !internalCode) {
+    throw new ValidationError('Si el producto usa PLU, escribí el PLU.');
+  }
+  if (!usesPlu && !barcode) {
+    throw new ValidationError('Si el producto no usa PLU, cargá el código de barras.');
+  }
+  if (!usesPlu && !internalCode) {
+    internalCode = `BC-${barcode}`;
   }
 
   const roundingRule = texto(form.get('roundingRule')) as RoundingRule;
@@ -477,10 +488,6 @@ export async function saveProduct(user: AuthUser, form: FormData) {
   }
 
   const margen = parseTasa(texto(form.get('targetMarginPct')), 'margen');
-  const descuentoEfectivo = parseTasa(
-    texto(form.get('cashDiscountPct')) || '0',
-    'descuento por efectivo',
-  );
   const marginBasis = texto(form.get('marginBasis')) as 'SOBRE_COSTO' | 'SOBRE_VENTA';
   if (!['SOBRE_COSTO', 'SOBRE_VENTA'].includes(marginBasis)) {
     throw new ValidationError('Elegí si el margen es sobre el costo o sobre la venta.');
@@ -504,6 +511,14 @@ export async function saveProduct(user: AuthUser, form: FormData) {
     where: { internalCode, ...(id ? { id: { not: id } } : {}) },
   });
   if (duplicado) throw new ConflictError(`Ya existe un producto con el código ${internalCode}.`);
+  if (barcode) {
+    const barcodeDuplicado = await prisma.product.findFirst({
+      where: { barcode, ...(id ? { id: { not: id } } : {}) },
+    });
+    if (barcodeDuplicado) {
+      throw new ConflictError(`El código de barras ${barcode} ya pertenece a ${barcodeDuplicado.normalizedName}.`);
+    }
+  }
 
   const data = {
     internalCode,
@@ -518,7 +533,9 @@ export async function saveProduct(user: AuthUser, form: FormData) {
     defaultSupplierId: texto(form.get('defaultSupplierId')) || null,
     targetMarginPct: margen.toString(),
     marginBasis,
-    cashDiscountPct: descuentoEfectivo.toString(),
+    cashDiscountPct: '0',
+    usesPlu,
+    barcode: barcode || null,
     roundingRule,
     active: form.get('active') === 'on',
   };
