@@ -154,8 +154,25 @@ export async function importarCatalogo(
   const existentePorPlu = new Map(existentes.map((p) => [p.internalCode, p]));
   const existentePorNombre = new Map(existentes.map((p) => [normalizeText(p.normalizedName), p]));
 
-  const proveedores = await prisma.supplier.findMany({ select: { id: true, tradeName: true } });
-  const proveedorPorNombre = new Map(proveedores.map((s) => [normalizeText(s.tradeName), s]));
+  const proveedores = await prisma.supplier.findMany({
+    select: {
+      id: true,
+      tradeName: true,
+      aliases: { select: { normalized: true } },
+    },
+  });
+  /*
+   * Control de Stock puede decir "Errecalde" y Compras tenerlo dado de alta
+   * como "Distribución Errecalde". El proveedor habitual no tiene que fallar
+   * por esa diferencia si el nombre corto está cargado como alias.
+   */
+  const proveedorPorNombre = new Map<string, (typeof proveedores)[number]>();
+  for (const proveedor of proveedores) {
+    proveedorPorNombre.set(normalizeText(proveedor.tradeName), proveedor);
+    for (const alias of proveedor.aliases) {
+      proveedorPorNombre.set(alias.normalized, proveedor);
+    }
+  }
 
   /*
    * A qué producto apunta hoy cada código de proveedor.
@@ -344,9 +361,15 @@ export async function importarCatalogo(
     }
 
     // --- El código del proveedor que venga en la fila ----------------------
-    const proveedor = fila.proveedor
-      ? proveedorPorNombre.get(normalizeText(fila.proveedor))
-      : undefined;
+    const proveedorNormal = fila.proveedor ? normalizeText(fila.proveedor) : '';
+    let proveedor = proveedorNormal ? proveedorPorNombre.get(proveedorNormal) : undefined;
+    if (!proveedor && proveedorNormal) {
+      const candidatosProveedor = proveedores.filter((p) => {
+        const nombre = normalizeText(p.tradeName);
+        return nombre.includes(proveedorNormal) || proveedorNormal.includes(nombre);
+      });
+      if (candidatosProveedor.length === 1) proveedor = candidatosProveedor[0];
+    }
     /*
      * El proveedor de la Hoja 1 es de quién se compra habitualmente el
      * artículo, no un código. Que no esté dado de alta en Compras no es un
