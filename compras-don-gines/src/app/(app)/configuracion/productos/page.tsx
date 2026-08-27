@@ -40,6 +40,7 @@ export default async function PaginaProductos({
     ? {
         OR: [
           { internalCode: { contains: busqueda, mode: 'insensitive' as const } },
+          { barcode: { contains: busqueda, mode: 'insensitive' as const } },
           { normalizedName: { contains: busqueda, mode: 'insensitive' as const } },
           {
             aliases: {
@@ -71,14 +72,15 @@ export default async function PaginaProductos({
     <>
       <div className="fila fila-2">
         <div className="campo">
-          <label htmlFor={`${prefijo}-code`}>Código interno o PLU</label>
+          <label htmlFor={`${prefijo}-code`}>PLU</label>
           <input
             id={`${prefijo}-code`}
             name="internalCode"
             type="text"
-            defaultValue={p?.internalCode ?? ''}
-            required
+            defaultValue={p?.usesPlu === false ? '' : p?.internalCode ?? ''}
+            placeholder="Ej. 1211"
           />
+          <p className="ayuda">Si el artículo no usa PLU, dejalo vacío y cargá el código de barras.</p>
         </div>
         <div className="campo">
           <label htmlFor={`${prefijo}-name`}>Nombre normalizado</label>
@@ -89,6 +91,24 @@ export default async function PaginaProductos({
             defaultValue={p?.normalizedName ?? ''}
             required
           />
+        </div>
+      </div>
+
+      <div className="fila fila-2">
+        <div className="campo">
+          <label htmlFor={`${prefijo}-barcode`}>Código de barras</label>
+          <input
+            id={`${prefijo}-barcode`}
+            name="barcode"
+            type="text"
+            inputMode="numeric"
+            defaultValue={p?.barcode ?? ''}
+            placeholder="Escanealo con un lector o escribilo"
+          />
+          <p className="ayuda">Acepta lector USB/Bluetooth que escriba como teclado, o carga manual.</p>
+        </div>
+        <div className="campo">
+          <Casilla name="usesPlu" etiqueta="Se identifica con PLU" defecto={p?.usesPlu ?? true} />
         </div>
       </div>
 
@@ -243,8 +263,8 @@ export default async function PaginaProductos({
 
       <form className="card card-compacta" method="get">
         <div className="campo">
-          <label htmlFor="q">Buscar por PLU, nombre o código de proveedor</label>
-          <input id="q" name="q" type="search" defaultValue={busqueda} placeholder="1211, cremoso, ART-00228" />
+          <label htmlFor="q">Buscar por PLU, código de barras, nombre o código de proveedor</label>
+          <input id="q" name="q" type="search" defaultValue={busqueda} placeholder="1211, 779..., cremoso, ART-00228" />
         </div>
         <div className="acciones">
           <button type="submit" className="boton boton-secundario">
@@ -258,8 +278,8 @@ export default async function PaginaProductos({
         </div>
       </form>
       <p className="medio">
-        Cada producto define cómo se compra, cómo se vende y con qué margen, descuento por efectivo
-        y redondeo se forma su precio.
+        Cada producto define cómo se compra, cómo se vende y con qué marcajes y redondeo se forman
+        sus precios. Los artículos sin PLU pueden identificarse por código de barras.
       </p>
 
       <div className="card">
@@ -277,7 +297,9 @@ export default async function PaginaProductos({
           <li key={producto.id} className="fila-dato">
             <div className="fila-dato-cabecera">
               <span className="fila-dato-titulo">{producto.normalizedName}</span>
-              <span className="etiqueta-estado estado-neutro">{producto.internalCode}</span>
+              <span className="etiqueta-estado estado-neutro">
+                {producto.usesPlu ? `PLU ${producto.internalCode}` : `Código ${producto.barcode ?? producto.internalCode}`}
+              </span>
             </div>
             <div className="fila-dato-meta">
               {producto.category ? <span>{producto.category}</span> : null}
@@ -285,9 +307,6 @@ export default async function PaginaProductos({
               <span>
                 {MARGIN_BASIS_LABEL[producto.marginBasis]}:{' '}
                 {formatRate(producto.targetMarginPct.toString())}
-              </span>
-              <span>
-                Efectivo −{formatRate(producto.cashDiscountPct.toString())}
               </span>
               <span>{ROUNDING_RULE_LABEL[producto.roundingRule as RoundingRule]}</span>
               {producto.purchaseUnit === 'UNIT' && producto.purchaseUnitWeightKg ? (
