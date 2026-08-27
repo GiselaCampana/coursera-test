@@ -8,6 +8,7 @@ import {
   asociarRenglonHistorico,
   backfillProductLinks,
   importarMapeoCodigosProveedor,
+  crearProductoDesdeRenglon,
   type InformeMapeoCodigos,
 } from '@/lib/services/backfill-productos';
 
@@ -107,6 +108,33 @@ export async function resolverAsociacion(
       { aprenderCodigo: formData.get('aprenderCodigo') !== null },
     );
     revalidatePath('/configuracion/productos/asociaciones');
+    revalidatePath('/compras');
+    revalidatePath('/precios');
+    return { ok: true };
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
+}
+
+
+export async function crearProductoYAsociar(
+  _prev: ResultadoAsociacion,
+  formData: FormData,
+): Promise<ResultadoAsociacion> {
+  try {
+    const user = await requireUser();
+    await crearProductoDesdeRenglon(user, {
+      documentItemId: String(formData.get('documentItemId') ?? ''),
+      internalCode: String(formData.get('internalCode') ?? '') || null,
+      normalizedName: String(formData.get('normalizedName') ?? ''),
+      usesPlu: formData.get('usesPlu') === 'on',
+      barcode: String(formData.get('barcode') ?? '') || null,
+      saleMode: String(formData.get('saleMode') ?? 'FETEABLE') === 'AL_CORTE' ? 'AL_CORTE' : 'FETEABLE',
+      purchaseUnit: String(formData.get('purchaseUnit') ?? 'KG') === 'UNIT' ? 'UNIT' : 'KG',
+      purchaseUnitWeightKg: String(formData.get('purchaseUnitWeightKg') ?? '') || null,
+    });
+    revalidatePath('/configuracion/productos/asociaciones');
+    revalidatePath('/configuracion/productos');
     revalidatePath('/compras');
     revalidatePath('/precios');
     return { ok: true };
