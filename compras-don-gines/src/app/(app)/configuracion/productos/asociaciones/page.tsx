@@ -9,7 +9,7 @@ import {
   segurasDe,
   type RenglonDelInforme,
 } from '@/lib/services/backfill-productos';
-import { Aplicar, ResolverAmbigua } from './Acciones';
+import { Aplicar, ResolverAmbigua, ImportarMapeoCodigos } from './Acciones';
 
 export const metadata: Metadata = { title: 'Asociaciones históricas' };
 export const dynamic = 'force-dynamic';
@@ -174,6 +174,13 @@ export default async function PaginaAsociaciones({
           </button>
         </div>
       </form>
+
+      {proveedor ? (
+        <ImportarMapeoCodigos
+          supplierId={proveedor}
+          supplierName={proveedores.find((p) => p.id === proveedor)?.tradeName ?? 'proveedor'}
+        />
+      ) : null}
 
       <div className="card card-compacta">
         <dl className="resumen-mes" style={{ margin: 0 }}>
