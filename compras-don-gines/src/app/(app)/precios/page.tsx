@@ -70,23 +70,28 @@ export default async function PaginaPrecios({
       </form>
 
       <div className="card card-compacta">
-        <h2>Exportar lista de precios y costos</h2>
+        <h2>Exportar listas</h2>
         <p className="chico medio">
-          Usa los mismos filtros de tipo de producto y proveedor de arriba. En la lista de venta se
-          toma el precio aprobado si existe; si todavía no fue aprobado, el sugerido.
+          Se respetan los filtros de tipo de producto y proveedor elegidos arriba.
         </p>
         <div className="acciones">
           <a
             className="boton boton-secundario"
-            href={`/api/precios/exportar?formato=pdf&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
+            href={`/api/precios/exportar?formato=pdf&vista=empleados&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
           >
-            Exportar PDF
+            PDF para empleados
+          </a>
+          <a
+            className="boton boton-secundario"
+            href={`/api/precios/exportar?formato=pdf&vista=gestion&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
+          >
+            PDF completo
           </a>
           <a
             className="boton boton-secundario"
             href={`/api/precios/exportar?formato=xlsx&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
           >
-            Exportar Excel
+            Excel completo
           </a>
         </div>
       </div>
@@ -173,18 +178,56 @@ export default async function PaginaPrecios({
                   </div>
                 ) : null}
 
-                <div className="dato destacado">
-                  <dt>Precio por kilo sugerido · pago digital</dt>
-                  <dd>{fila.suggestedPricePerKg ? formatARS(fila.suggestedPricePerKg) : '—'}</dd>
-                </div>
-                <div className="dato">
-                  <dt>Precio por kilo · efectivo</dt>
-                  <dd>{fila.pricePerKgCash ? formatARS(fila.pricePerKgCash) : '—'}</dd>
-                </div>
+                {fila.saleMode === 'AL_CORTE' ? (
+                  <>
+                    <div className="dato destacado">
+                      <dt>Por kilo</dt>
+                      <dd>{fila.suggestedPricePerKg ? formatARS(fila.suggestedPricePerKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Por kilo · horma digital</dt>
+                      <dd>{fila.alCorteHormaDigitalKg ? formatARS(fila.alCorteHormaDigitalKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Por kilo · horma efectivo</dt>
+                      <dd>{fila.alCorteHormaCashKg ? formatARS(fila.alCorteHormaCashKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Por kilo · horma por caja efectivo</dt>
+                      <dd>{fila.alCorteCajaCashKg ? formatARS(fila.alCorteCajaCashKg) : '—'}</dd>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="dato destacado">
+                      <dt>Venta por 100 g · precio expresado por kilo</dt>
+                      <dd>{fila.feteado100gKg ? formatARS(fila.feteado100gKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Venta por 1/4 kg · precio expresado por kilo</dt>
+                      <dd>{fila.feteadoQuarterKg ? formatARS(fila.feteadoQuarterKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Pieza entera digital · precio expresado por kilo</dt>
+                      <dd>{fila.feteadoPieceDigitalKg ? formatARS(fila.feteadoPieceDigitalKg) : '—'}</dd>
+                    </div>
+                    <div className="dato">
+                      <dt>Pieza entera efectivo · precio expresado por kilo</dt>
+                      <dd>{fila.feteadoPieceCashKg ? formatARS(fila.feteadoPieceCashKg) : '—'}</dd>
+                    </div>
+                  </>
+                )}
+
+                {fila.purchaseUnit === 'UNIT' && fila.purchaseUnitWeightKg ? (
+                  <div className="dato">
+                    <dt>Unidad/lata/cajón entero</dt>
+                    <dd>{fila.wholeUnitTotal ? formatARS(fila.wholeUnitTotal) : '—'}</dd>
+                  </div>
+                ) : null}
 
                 {fila.approvedPricePerKg ? (
                   <div className="dato destacado">
-                    <dt>Precio por kilo aprobado</dt>
+                    <dt>Precio base aprobado por kilo</dt>
                     <dd>{formatARS(fila.approvedPricePerKg)}</dd>
                   </div>
                 ) : null}
@@ -196,11 +239,18 @@ export default async function PaginaPrecios({
                   nombre={fila.name}
                   targetMarginPct={fila.targetMarginPct}
                   marginBasis={fila.marginBasis}
-                  cashDiscountPct={fila.cashDiscountPct}
                   roundingRule={fila.roundingRule}
                   saleMode={fila.saleMode}
                   purchaseUnit={fila.purchaseUnit}
                   purchaseUnitWeightKg={fila.purchaseUnitWeightKg}
+                  alCorteHormaDigitalMarginPct={fila.alCorteHormaDigitalMarginPct}
+                  alCorteHormaCashMarginPct={fila.alCorteHormaCashMarginPct}
+                  alCorteCajaCashMarginPct={fila.alCorteCajaCashMarginPct}
+                  feteado100gMarginPct={fila.feteado100gMarginPct}
+                  feteadoQuarterMarginPct={fila.feteadoQuarterMarginPct}
+                  feteadoPieceDigitalMarginPct={fila.feteadoPieceDigitalMarginPct}
+                  feteadoPieceCashMarginPct={fila.feteadoPieceCashMarginPct}
+                  wholeUnitMarginPct={fila.wholeUnitMarginPct}
                 />
               ) : null}
 
