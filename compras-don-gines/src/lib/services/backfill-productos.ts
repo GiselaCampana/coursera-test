@@ -6,6 +6,7 @@ import { hasPermission, type AuthUser } from '@/lib/auth/session';
 import { matchProduct, normalizarCodigo, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
 import { parsearCsv } from '@/lib/domain/catalogo';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
+import { learnProductAlias } from '@/lib/services/documents';
 import { toDecimal } from '@/lib/money';
 
 /**
