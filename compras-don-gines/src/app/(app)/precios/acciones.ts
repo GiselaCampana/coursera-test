@@ -48,7 +48,14 @@ export async function guardarConfigPrecio(
       productId,
       targetMarginPct: String(formData.get('targetMarginPct') ?? ''),
       marginBasis: String(formData.get('marginBasis') ?? 'SOBRE_COSTO') as 'SOBRE_COSTO' | 'SOBRE_VENTA',
-      cashDiscountPct: String(formData.get('cashDiscountPct') ?? '0'),
+      alCorteHormaDigitalMarginPct: String(formData.get('alCorteHormaDigitalMarginPct') ?? '') || null,
+      alCorteHormaCashMarginPct: String(formData.get('alCorteHormaCashMarginPct') ?? '') || null,
+      alCorteCajaCashMarginPct: String(formData.get('alCorteCajaCashMarginPct') ?? '') || null,
+      feteado100gMarginPct: String(formData.get('feteado100gMarginPct') ?? '') || null,
+      feteadoQuarterMarginPct: String(formData.get('feteadoQuarterMarginPct') ?? '') || null,
+      feteadoPieceDigitalMarginPct: String(formData.get('feteadoPieceDigitalMarginPct') ?? '') || null,
+      feteadoPieceCashMarginPct: String(formData.get('feteadoPieceCashMarginPct') ?? '') || null,
+      wholeUnitMarginPct: String(formData.get('wholeUnitMarginPct') ?? '') || null,
       roundingRule: String(formData.get('roundingRule') ?? 'NEAREST_100') as
         | 'NONE'
         | 'NEAREST_10'
