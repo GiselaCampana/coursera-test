@@ -31,6 +31,7 @@ export async function aplicarAsociaciones(
     aplicadas = informe.aplicadas;
     revalidatePath('/configuracion/productos/asociaciones');
     revalidatePath('/compras');
+    revalidatePath('/precios');
   } catch (error) {
     return { error: toUserMessage(error) };
   }
@@ -64,6 +65,7 @@ export async function resolverAsociacion(
     );
     revalidatePath('/configuracion/productos/asociaciones');
     revalidatePath('/compras');
+    revalidatePath('/precios');
     return { ok: true };
   } catch (error) {
     return { error: toUserMessage(error) };
