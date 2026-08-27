@@ -78,15 +78,16 @@ test.describe('asociaciones históricas', () => {
 
     await expect(page.getByRole('heading', { name: /Códigos confirmados de Distribución Errecalde/ })).toBeVisible();
 
-    await page
-      .getByLabel('CSV o texto')
-      .fill('Código proveedor;PLU\nART-00228;1211');
+    await page.getByRole('button', { name: 'Cargar 16 códigos verificados de Errecalde' }).click();
+    await expect(page.getByLabel('CSV o texto')).toContainText('ART-00228;1211');
+
     await page.getByRole('button', { name: 'Ver propuesta' }).click();
 
     await expect(page.getByText('ART-00228')).toBeVisible();
-    await expect(page.getByText(/PLU/)).toBeVisible();
     await expect(page.getByText('Cremoso Punta del Agua')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Aplicar 1 código/s' })).toBeVisible();
+    await expect(page.getByText('ART-00758')).toBeVisible();
+    await expect(page.getByText('Sardo Bloque Melincue')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Aplicar \d+ código\/s/ })).toBeVisible();
   });
 
   test('un operador no llega a esta pantalla', async ({ page }) => {
