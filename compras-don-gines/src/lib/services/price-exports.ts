@@ -96,7 +96,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
       r.purchaseUnitWeightKg ? Number(r.purchaseUnitWeightKg) : null,
       r.purchaseUnitCost ? Number(r.purchaseUnitCost) : null,
       r.lastUnitCost ? Number(r.lastUnitCost) : null,
-      Number(r.targetMarginPct) * 100,
+      Number(r.targetMarginPct),
       r.salePricePerKg ? Number(r.salePricePerKg) : null,
       r.salePricePerKgCash ? Number(r.salePricePerKgCash) : null,
       r.approvedPricePerKg ? Number(r.approvedPricePerKg) : null,
