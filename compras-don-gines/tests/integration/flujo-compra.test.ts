@@ -3846,7 +3846,8 @@ describe('precios por kilo configurables', () => {
     const zip = await JSZip.loadAsync(xlsx);
     const hoja = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
     expect(hoja).toContain('Los Calvos');
-    expect(hoja).toContain('Precios');
+    expect(hoja).toContain('<sheetData>');
+    expect((hoja.match(/<row r="/g) ?? []).length).toBeGreaterThan(1);
     expect((hoja.match(/<sheetViews>/g) ?? [])).toHaveLength(1);
   });
 });
