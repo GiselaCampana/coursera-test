@@ -25,12 +25,16 @@ test.describe('precios por kilo', () => {
     await expect(page.getByRole('link', { name: 'Exportar Excel' })).toBeVisible();
 
     const pdf = await page.request.get('/api/precios/exportar?formato=pdf');
-    expect(pdf.ok()).toBe(true);
+    if (!pdf.ok()) {
+      throw new Error(`Exportar PDF respondió ${pdf.status()}: ${await pdf.text()}`);
+    }
     expect(pdf.headers()['content-type']).toContain('application/pdf');
     expect((await pdf.body()).subarray(0, 4).toString()).toBe('%PDF');
 
     const xlsx = await page.request.get('/api/precios/exportar?formato=xlsx');
-    expect(xlsx.ok()).toBe(true);
+    if (!xlsx.ok()) {
+      throw new Error(`Exportar Excel respondió ${xlsx.status()}: ${await xlsx.text()}`);
+    }
     expect(xlsx.headers()['content-type']).toContain('spreadsheetml');
     expect((await xlsx.body()).subarray(0, 2).toString()).toBe('PK');
 
