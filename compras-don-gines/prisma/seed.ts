@@ -16,6 +16,7 @@
 import { randomBytes } from 'node:crypto';
 import { PrismaClient, type PurchaseUnit, type SaleMode } from '@prisma/client';
 import { checkPasswordStrength, hashPassword } from '../src/lib/auth/password';
+import { recoverAdminPasswordOnce } from '../src/lib/auth/admin-recovery';
 import {
   ADMIN_PERMISSIONS,
   OPERADOR_PERMISSIONS,
@@ -124,9 +125,9 @@ async function main() {
     deVariable: boolean;
   }[] = [];
 
-  const existingAdmin = await prisma.user.findUnique({ where: { email: adminEmail } });
-  if (!existingAdmin) {
-    await prisma.user.create({
+  let adminUser = await prisma.user.findUnique({ where: { email: adminEmail } });
+  if (!adminUser) {
+    adminUser = await prisma.user.create({
       data: {
         email: adminEmail,
         name: 'Administrador',
@@ -145,6 +146,51 @@ async function main() {
       role: 'Administrador',
       deVariable: adminDeVariable,
     });
+  }
+
+  /*
+   * Recuperación de emergencia, deliberadamente opt-in y de una sola vez.
+   *
+   * Para usarla:
+   *   1. cambiar SEED_ADMIN_PASSWORD en Render por una contraseña temporal;
+   *   2. agregar RESET_ADMIN_REQUEST_ID con un valor nuevo, por ejemplo
+   *      2026-08-27-gise-1;
+   *   3. desplegar.
+   *
+   * El requestId queda en auditoría. Repetir el mismo deploy no vuelve a pisar
+   * la contraseña. Después del ingreso la aplicación obliga a cambiarla.
+   */
+  const resetRequestId = (process.env.RESET_ADMIN_REQUEST_ID || '').trim();
+  if (resetRequestId) {
+    if ((process.env.AUTH_PROVIDER || 'local').toLowerCase() !== 'local') {
+      throw new Error(
+        'RESET_ADMIN_REQUEST_ID sólo puede usarse con AUTH_PROVIDER=local. ' +
+          'Con Supabase Auth el restablecimiento se hace desde Supabase.',
+      );
+    }
+    if (!adminDeVariable) {
+      throw new Error(
+        'RESET_ADMIN_REQUEST_ID necesita que SEED_ADMIN_PASSWORD tenga la contraseña temporal.',
+      );
+    }
+
+    const recuperacion = await recoverAdminPasswordOnce(prisma, {
+      userId: adminUser.id,
+      email: adminEmail,
+      password: adminPassword,
+      requestId: resetRequestId,
+    });
+
+    if (recuperacion.applied) {
+      console.log(
+        `Contraseña del administrador restablecida por única vez (solicitud ${resetRequestId}).\n` +
+          'Ingresá con SEED_ADMIN_PASSWORD y elegí una contraseña personal nueva.\n',
+      );
+    } else if (recuperacion.alreadyApplied) {
+      console.log(
+        `La recuperación ${resetRequestId} ya había sido aplicada: no se volvió a cambiar la contraseña.\n`,
+      );
+    }
   }
 
   for (const branch of branches) {
