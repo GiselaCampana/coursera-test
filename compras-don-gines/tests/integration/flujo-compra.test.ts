@@ -28,6 +28,7 @@ import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
 import {
   asociarRenglonHistorico,
   backfillProductLinks,
+  importarMapeoCodigosProveedor,
   segurasDe,
 } from '@/lib/services/backfill-productos';
 import { saveSupplierCode, saveSupplierTerm } from '@/lib/services/admin';
@@ -3638,6 +3639,124 @@ describe('importar el catálogo interno de Don Ginés', () => {
     });
     expect(auditoria.userId).toBe(escenario.admin.id);
     expect((auditoria.after as Record<string, unknown>).creados).toBe(1);
+  });
+});
+
+describe('mapeo masivo de códigos de proveedor', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  it('muestra una vista previa y recién después aprende código -> PLU', async () => {
+    const texto = [
+      'Código proveedor;PLU',
+      'ART-00228;1211',
+      'ART-00758;2001',
+    ].join('\n');
+
+    const previa = await importarMapeoCodigosProveedor(
+      escenario.admin,
+      escenario.proveedorErrecaldeId,
+      texto,
+    );
+
+    expect(previa.aplicadas).toBe(0);
+    expect(previa.aplicables.map((f) => f.plu).sort()).toEqual(['1211', '2001']);
+
+    expect(
+      await prisma.productAlias.findFirst({
+        where: {
+          supplierId: escenario.proveedorErrecaldeId,
+          supplierCode: 'ART-00758',
+        },
+      }),
+    ).toBeNull();
+
+    const aplicado = await importarMapeoCodigosProveedor(
+      escenario.admin,
+      escenario.proveedorErrecaldeId,
+      texto,
+      { aplicar: true },
+    );
+    expect(aplicado.aplicadas).toBe(2);
+
+    const alias = await prisma.productAlias.findFirstOrThrow({
+      where: {
+        supplierId: escenario.proveedorErrecaldeId,
+        supplierCode: 'ART-00228',
+      },
+    });
+    expect(alias.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('no acepta un PLU inexistente ni roba un código que ya tiene dueño', async () => {
+    const primero = [
+      'Código proveedor;PLU',
+      'ART-00228;1211',
+    ].join('\n');
+    await importarMapeoCodigosProveedor(
+      escenario.admin,
+      escenario.proveedorErrecaldeId,
+      primero,
+      { aplicar: true },
+    );
+
+    const conflictivo = [
+      'Código proveedor;PLU',
+      'ART-00228;2001',
+      'ART-99999;NO-EXISTE',
+    ].join('\n');
+    const informe = await importarMapeoCodigosProveedor(
+      escenario.admin,
+      escenario.proveedorErrecaldeId,
+      conflictivo,
+      { aplicar: true },
+    );
+
+    expect(informe.aplicadas).toBe(0);
+    expect(informe.conflictos).toHaveLength(2);
+
+    const alias = await prisma.productAlias.findFirstOrThrow({
+      where: {
+        supplierId: escenario.proveedorErrecaldeId,
+        supplierCode: 'ART-00228',
+      },
+    });
+    expect(alias.productId).toBe(escenario.productos['1211']);
+  });
+
+  it('los códigos aprendidos levantan la factura histórica y crean costos para Precios', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+
+    await prisma.documentItem.updateMany({
+      where: { documentId },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+    await prisma.purchaseMovement.updateMany({
+      where: { documentId },
+      data: { productId: null },
+    });
+    await prisma.costHistory.deleteMany({ where: { documentId } });
+
+    await importarMapeoCodigosProveedor(
+      escenario.admin,
+      escenario.proveedorErrecaldeId,
+      ['Código proveedor;PLU', 'ART-00228;1211', 'ART-00758;2001'].join('\n'),
+      { aplicar: true },
+    );
+
+    const backfill = await backfillProductLinks(escenario.admin, {
+      aplicar: true,
+      supplierId: escenario.proveedorErrecaldeId,
+    });
+    expect(backfill.porCodigo.some((f) => f.supplierCode === 'ART-00228')).toBe(true);
+    expect(backfill.porCodigo.some((f) => f.supplierCode === 'ART-00758')).toBe(true);
+
+    const cremoso = await getLatestCost(escenario.productos['1211']);
+    const sardo = await getLatestCost(escenario.productos['2001']);
+    expect(cremoso.unitCost).not.toBeNull();
+    expect(sardo.unitCost).not.toBeNull();
   });
 });
 
