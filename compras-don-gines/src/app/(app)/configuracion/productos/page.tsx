@@ -139,15 +139,30 @@ export default async function PaginaProductos({
           </select>
         </div>
         <div className="campo">
-          <label htmlFor={`${prefijo}-piece`}>Peso de pieza u horma (kg)</label>
+          <label htmlFor={`${prefijo}-buy-weight`}>Kg por unidad comprada</label>
           <input
-            id={`${prefijo}-piece`}
-            name="avgPieceWeightKg"
+            id={`${prefijo}-buy-weight`}
+            name="purchaseUnitWeightKg"
             type="text"
             inputMode="decimal"
-            defaultValue={p?.avgPieceWeightKg?.toString() ?? ''}
+            defaultValue={p?.purchaseUnitWeightKg?.toString() ?? ''}
+            placeholder="Ej. 5 para una lata de 5 kg"
           />
+          <p className="ayuda">
+            Usalo sólo si el proveedor factura por unidad y el producto se vende por kilo.
+          </p>
         </div>
+      </div>
+
+      <div className="campo">
+        <label htmlFor={`${prefijo}-piece`}>Peso de pieza u horma (kg, opcional)</label>
+        <input
+          id={`${prefijo}-piece`}
+          name="avgPieceWeightKg"
+          type="text"
+          inputMode="decimal"
+          defaultValue={p?.avgPieceWeightKg?.toString() ?? ''}
+        />
       </div>
 
       <div className="fila fila-3">
@@ -275,6 +290,9 @@ export default async function PaginaProductos({
                 Efectivo −{formatRate(producto.cashDiscountPct.toString())}
               </span>
               <span>{ROUNDING_RULE_LABEL[producto.roundingRule as RoundingRule]}</span>
+              {producto.purchaseUnit === 'UNIT' && producto.purchaseUnitWeightKg ? (
+                <span>Compra: {formatQty(producto.purchaseUnitWeightKg.toString(), 3)} kg/unidad</span>
+              ) : null}
               {producto.avgPieceWeightKg ? (
                 <span>Pieza {formatQty(producto.avgPieceWeightKg.toString(), 3)} kg</span>
               ) : null}
