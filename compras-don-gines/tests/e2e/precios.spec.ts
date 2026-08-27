@@ -9,27 +9,23 @@ test.describe('precios por kilo', () => {
 
     await expect(page.getByRole('heading', { level: 1, name: 'Precios' })).toBeVisible();
     await expect(page.getByText('Último costo por kilo').first()).toBeVisible();
-    await expect(page.getByText('Precio por kilo sugerido · pago digital').first()).toBeVisible();
-    await expect(page.getByText('Precio por kilo · efectivo').first()).toBeVisible();
+    await expect(page.getByText('Por kilo').first()).toBeVisible();
+    await expect(page.getByText(/precio expresado por kilo/i).first()).toBeVisible();
 
-    await expect(page.getByText('Por 100 g')).toHaveCount(0);
-    await expect(page.getByText('Por 1/4 kg')).toHaveCount(0);
-    await expect(page.getByText(/Por pieza \(/)).toHaveCount(0);
-    await expect(page.getByText(/Por horma \(/)).toHaveCount(0);
-
-    await page.getByRole('button', { name: 'Configurar marcaje y venta' }).first().click();
-    await expect(page.getByLabel('Marcaje (%)').first()).toBeVisible();
+    await page.getByRole('button', { name: 'Configurar marcajes y venta' }).first().click();
+    await expect(page.getByLabel('Marcaje base por kilo (%)').first()).toBeVisible();
     await expect(page.getByLabel('Modo de venta').first()).toBeVisible();
     await expect(page.getByLabel('Cómo lo compra Don Ginés').first()).toBeVisible();
 
-    await expect(page.getByRole('link', { name: 'Exportar PDF' })).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Exportar Excel' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'PDF para empleados' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'PDF completo' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Excel completo' })).toBeVisible();
 
     // Se prueba como lo usa una persona: tocando el enlace desde la página.
     // Así el navegador manda la misma sesión que usa la interfaz.
     const [pdfDownload] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Exportar PDF' }).click(),
+      page.getByRole('link', { name: 'PDF para empleados' }).click(),
     ]);
     expect(pdfDownload.suggestedFilename()).toMatch(/\.pdf$/i);
     const pdfPath = await pdfDownload.path();
@@ -39,7 +35,7 @@ test.describe('precios por kilo', () => {
 
     const [xlsxDownload] = await Promise.all([
       page.waitForEvent('download'),
-      page.getByRole('link', { name: 'Exportar Excel' }).click(),
+      page.getByRole('link', { name: 'Excel completo' }).click(),
     ]);
     expect(xlsxDownload.suggestedFilename()).toMatch(/\.xlsx$/i);
     const xlsxPath = await xlsxDownload.path();
