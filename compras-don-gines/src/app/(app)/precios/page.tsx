@@ -7,27 +7,67 @@ import { formatARS, formatRate } from '@/lib/money';
 import { formatDateAr } from '@/lib/datetime';
 import { SALE_MODE_LABEL } from '@/lib/domain/pricing';
 import { FichaPrecio } from './FichaPrecio';
+import { ConfigurarPrecio } from './ConfigurarPrecio';
 
 export const metadata: Metadata = { title: 'Precios' };
 export const dynamic = 'force-dynamic';
 
-export default async function PaginaPrecios() {
+export default async function PaginaPrecios({
+  searchParams,
+}: {
+  searchParams: Promise<{ tipo?: string; proveedor?: string }>;
+}) {
   const user = await requireUserOrRedirect();
   if (!hasPermission(user, PERMISSIONS.PRECIOS_VER)) redirect('/');
 
+  const { tipo = '', proveedor = '' } = await searchParams;
   const filas = await getPriceBoard(user);
   const puedeAprobar = hasPermission(user, PERMISSIONS.PRECIOS_GESTIONAR);
-  const conCosto = filas.filter((f) => f.lastUnitCost !== null);
-  const sinCosto = filas.filter((f) => f.lastUnitCost === null);
+  const tipos = [...new Set(filas.map((f) => f.category).filter(Boolean) as string[])].sort((a, b) =>
+    a.localeCompare(b, 'es'),
+  );
+  const proveedores = [...new Set(filas.map((f) => f.supplierName).filter(Boolean) as string[])].sort((a, b) =>
+    a.localeCompare(b, 'es'),
+  );
+  const filtradas = filas.filter(
+    (f) => (!tipo || f.category === tipo) && (!proveedor || f.supplierName === proveedor),
+  );
+  const conCosto = filtradas.filter((f) => f.purchaseUnitCost !== null);
+  const sinCosto = filtradas.filter((f) => f.purchaseUnitCost === null);
   const alertas = conCosto.filter((f) => f.alert);
 
   return (
     <>
       <h1>Precios</h1>
       <p className="medio">
-        Los precios de venta se calculan sobre el costo unitario final, con el IVA y las
-        percepciones ya distribuidos.
+        Los precios de venta se calculan por kilo sobre el costo final, con IVA y percepciones
+        distribuidos. El marcaje, el modo de venta y las conversiones de unidades los definís vos.
       </p>
+
+      <form className="card card-compacta" method="get">
+        <div className="fila fila-2">
+          <div className="campo">
+            <label htmlFor="tipo">Tipo de producto</label>
+            <select id="tipo" name="tipo" defaultValue={tipo}>
+              <option value="">Todos</option>
+              {tipos.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </div>
+          <div className="campo">
+            <label htmlFor="proveedor">Proveedor</label>
+            <select id="proveedor" name="proveedor" defaultValue={proveedor}>
+              <option value="">Todos</option>
+              {proveedores.map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="acciones">
+          <button type="submit" className="boton">Filtrar</button>
+          {(tipo || proveedor) ? (
+            <a href="/precios" className="boton boton-secundario">Limpiar</a>
+          ) : null}
+        </div>
+      </form>
 
       {alertas.length > 0 ? (
         <div className="mensaje mensaje-aviso">
@@ -55,7 +95,11 @@ export default async function PaginaPrecios() {
               <div className="fila-dato-cabecera">
                 <span className="fila-dato-titulo">{fila.name}</span>
                 <span className="fila-dato-importe">
-                  {fila.suggestedPricePerKg ? formatARS(fila.suggestedPricePerKg) : '—'}
+                  {fila.approvedPricePerKg
+                    ? formatARS(fila.approvedPricePerKg)
+                    : fila.suggestedPricePerKg
+                      ? formatARS(fila.suggestedPricePerKg)
+                      : '—'}
                 </span>
               </div>
               <div className="fila-dato-meta">
@@ -66,13 +110,34 @@ export default async function PaginaPrecios() {
               </div>
 
               <dl style={{ margin: '9px 0 0' }}>
+                {fila.purchaseUnit === 'UNIT' ? (
+                  <div className="dato">
+                    <dt>Último costo por unidad comprada</dt>
+                    <dd>{fila.purchaseUnitCost ? formatARS(fila.purchaseUnitCost) : '—'}</dd>
+                  </div>
+                ) : null}
+
                 <div className="dato">
-                  <dt>Último costo</dt>
-                  <dd>{formatARS(fila.lastUnitCost!)}</dd>
+                  <dt>Último costo por kilo</dt>
+                  <dd>{fila.lastUnitCost ? formatARS(fila.lastUnitCost) : '—'}</dd>
                 </div>
+
+                {fila.purchaseUnit === 'UNIT' && fila.purchaseUnitWeightKg ? (
+                  <div className="dato">
+                    <dt>Conversión</dt>
+                    <dd>{fila.purchaseUnitWeightKg} kg por unidad</dd>
+                  </div>
+                ) : null}
+
+                {fila.needsPurchaseUnitWeight ? (
+                  <div className="mensaje mensaje-aviso">
+                    Falta indicar cuántos kilos trae cada unidad comprada para calcular costo y venta por kilo.
+                  </div>
+                ) : null}
+
                 {fila.previousUnitCost ? (
                   <div className="dato">
-                    <dt>Costo anterior</dt>
+                    <dt>Costo anterior por kilo</dt>
                     <dd>{formatARS(fila.previousUnitCost)}</dd>
                   </div>
                 ) : null}
@@ -86,54 +151,36 @@ export default async function PaginaPrecios() {
                   </div>
                 ) : null}
 
-                <div className="dato">
-                  <dt>Precio por kilo sugerido</dt>
+                <div className="dato destacado">
+                  <dt>Precio por kilo sugerido · pago digital</dt>
                   <dd>{fila.suggestedPricePerKg ? formatARS(fila.suggestedPricePerKg) : '—'}</dd>
                 </div>
-
-                {fila.saleMode === 'FETEABLE' ? (
-                  <>
-                    <div className="dato">
-                      <dt>Por 100 g</dt>
-                      <dd>{fila.pricePer100g ? formatARS(fila.pricePer100g) : '—'}</dd>
-                    </div>
-                    <div className="dato">
-                      <dt>Por 1/4 kg</dt>
-                      <dd>{fila.pricePerQuarter ? formatARS(fila.pricePerQuarter) : '—'}</dd>
-                    </div>
-                    <div className="dato">
-                      <dt>Por pieza (pago digital)</dt>
-                      <dd>
-                        {fila.pricePerPieceDigital ? formatARS(fila.pricePerPieceDigital) : '—'}
-                      </dd>
-                    </div>
-                    <div className="dato">
-                      <dt>Por pieza (efectivo)</dt>
-                      <dd>{fila.pricePerPieceCash ? formatARS(fila.pricePerPieceCash) : '—'}</dd>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="dato">
-                      <dt>Por horma (pago digital)</dt>
-                      <dd>
-                        {fila.pricePerPieceDigital ? formatARS(fila.pricePerPieceDigital) : '—'}
-                      </dd>
-                    </div>
-                    <div className="dato">
-                      <dt>Por horma (efectivo)</dt>
-                      <dd>{fila.pricePerPieceCash ? formatARS(fila.pricePerPieceCash) : '—'}</dd>
-                    </div>
-                  </>
-                )}
+                <div className="dato">
+                  <dt>Precio por kilo · efectivo</dt>
+                  <dd>{fila.pricePerKgCash ? formatARS(fila.pricePerKgCash) : '—'}</dd>
+                </div>
 
                 {fila.approvedPricePerKg ? (
                   <div className="dato destacado">
-                    <dt>Precio aprobado</dt>
+                    <dt>Precio por kilo aprobado</dt>
                     <dd>{formatARS(fila.approvedPricePerKg)}</dd>
                   </div>
                 ) : null}
               </dl>
+
+              {puedeAprobar ? (
+                <ConfigurarPrecio
+                  productId={fila.productId}
+                  nombre={fila.name}
+                  targetMarginPct={fila.targetMarginPct}
+                  marginBasis={fila.marginBasis}
+                  cashDiscountPct={fila.cashDiscountPct}
+                  roundingRule={fila.roundingRule}
+                  saleMode={fila.saleMode}
+                  purchaseUnit={fila.purchaseUnit}
+                  purchaseUnitWeightKg={fila.purchaseUnitWeightKg}
+                />
+              ) : null}
 
               {puedeAprobar && fila.suggestedPricePerKg ? (
                 <FichaPrecio
@@ -151,8 +198,8 @@ export default async function PaginaPrecios() {
         <div className="card">
           <h2>Sin compras registradas</h2>
           <p className="chico medio">
-            Estos productos todavía no tienen ninguna compra, así que no hay costo sobre el cual
-            calcular el precio.
+            Estos productos todavía no tienen ninguna compra asociada. Los que se compran por unidad
+            además necesitan el peso neto de esa unidad para poder calcular el costo por kilo.
           </p>
           <p className="chico mb0">{sinCosto.map((f) => f.name).join(', ')}</p>
         </div>
