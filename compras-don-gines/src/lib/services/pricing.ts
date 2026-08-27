@@ -126,6 +126,7 @@ export interface PriceSuggestion {
   saleMode: SaleMode;
   purchaseUnit: 'KG' | 'UNIT';
   purchaseUnitWeightKg: string | null;
+  soldByUnit: boolean;
   cost: ProductCostSnapshot;
   /** Costo comparable para vender por kilo. */
   costPerKg: Decimal | null;
@@ -160,8 +161,17 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
   const purchaseUnit = rule.product.purchaseUnit as 'KG' | 'UNIT';
   const purchaseUnitWeightKg = rule.product.purchaseUnitWeightKg?.toString() ?? null;
   const pesoUnidad = purchaseUnitWeightKg ? toDecimal(purchaseUnitWeightKg) : null;
+  // Un artículo de código de barras que se compra y se vende por unidad (ej. botella
+  // de tomate) no necesita inventar un peso para poder formar su precio.
+  const soldByUnit =
+    !rule.product.usesPlu &&
+    purchaseUnit === 'UNIT' &&
+    (!pesoUnidad || pesoUnidad.lte(0));
   const needsPurchaseUnitWeight =
-    purchaseUnit === 'UNIT' && Boolean(cost.unitCost) && (!pesoUnidad || pesoUnidad.lte(0));
+    purchaseUnit === 'UNIT' &&
+    !soldByUnit &&
+    Boolean(cost.unitCost) &&
+    (!pesoUnidad || pesoUnidad.lte(0));
 
   const convertirAKg = (valor: Decimal | null): Decimal | null => {
     if (!valor) return null;
@@ -180,8 +190,14 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
       ? priceFromMargin(costPerKg, rule.marginBasis, marginFor(specific), rule.roundingRule)
       : null;
   const baseKg = tier(null);
-  const wholeUnitTotal =
-    costPerKg && pesoUnidad && pesoUnidad.gt(0)
+  const wholeUnitTotal = soldByUnit && cost.unitCost
+    ? priceFromMargin(
+        cost.unitCost,
+        rule.marginBasis,
+        marginFor(rule.wholeUnitMarginPct),
+        rule.roundingRule,
+      )
+    : costPerKg && pesoUnidad && pesoUnidad.gt(0)
       ? priceFromMargin(
           costPerKg.times(pesoUnidad),
           rule.marginBasis,
@@ -196,6 +212,7 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
     saleMode: rule.saleMode,
     purchaseUnit,
     purchaseUnitWeightKg,
+    soldByUnit,
     cost,
     costPerKg,
     previousCostPerKg,
@@ -313,6 +330,7 @@ export interface PriceBoardRow {
   saleMode: SaleMode;
   purchaseUnit: 'KG' | 'UNIT';
   purchaseUnitWeightKg: string | null;
+  soldByUnit: boolean;
   purchaseUnitCost: string | null;
   lastUnitCost: string | null;
   previousUnitCost: string | null;
@@ -380,6 +398,7 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       saleMode: product.saleMode as SaleMode,
       purchaseUnit: suggestion.purchaseUnit,
       purchaseUnitWeightKg: suggestion.purchaseUnitWeightKg,
+      soldByUnit: suggestion.soldByUnit,
       purchaseUnitCost: cost.unitCost?.toFixed(2) ?? null,
       lastUnitCost: suggestion.costPerKg?.toFixed(2) ?? null,
       previousUnitCost: suggestion.previousCostPerKg?.toFixed(2) ?? null,
