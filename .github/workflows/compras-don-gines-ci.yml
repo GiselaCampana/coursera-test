@@ -99,4 +99,4 @@ jobs:
       - name: Playwright de catálogo y asociaciones
         run: |
           node scripts/preparar-e2e.mjs
-          npx playwright test tests/e2e/asociaciones.spec.ts tests/e2e/catalogo.spec.ts
+          npx playwright test tests/e2e/asociaciones.spec.ts tests/e2e/catalogo.spec.ts tests/e2e/precios.spec.ts
