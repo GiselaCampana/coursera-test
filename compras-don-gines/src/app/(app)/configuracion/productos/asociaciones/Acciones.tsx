@@ -7,6 +7,7 @@ import {
   resolverAsociacion,
   analizarMapeoCodigos,
   aplicarMapeoCodigos,
+  crearProductoYAsociar,
   type ResultadoAsociacion,
   type ResultadoMapeoCodigos,
 } from './acciones';
@@ -248,6 +249,7 @@ export function ImportarMapeoCodigos({
 
 export function ResolverAmbigua({
   documentItemId,
+  descripcion,
   tieneCodigo,
   supplierName,
   supplierCode,
@@ -255,6 +257,7 @@ export function ResolverAmbigua({
   productos,
 }: {
   documentItemId: string;
+  descripcion: string;
   tieneCodigo: boolean;
   supplierName: string | null;
   supplierCode: string | null;
@@ -262,7 +265,9 @@ export function ResolverAmbigua({
   productos: { id: string; internalCode: string; normalizedName: string }[];
 }) {
   const [abierto, setAbierto] = useState(false);
+  const [creando, setCreando] = useState(false);
   const [estado, accion] = useActionState<ResultadoAsociacion, FormData>(resolverAsociacion, {});
+  const [estadoNuevo, accionNuevo] = useActionState<ResultadoAsociacion, FormData>(crearProductoYAsociar, {});
 
   if (!abierto) {
     return (
@@ -325,8 +330,78 @@ export function ResolverAmbigua({
         <button type="button" className="boton boton-secundario" onClick={() => setAbierto(false)}>
           Cancelar
         </button>
+        <button type="button" className="boton boton-secundario" onClick={() => setCreando(true)}>
+          Crear producto nuevo…
+        </button>
         <Boton texto="Asociar" cargando="Asociando…" />
       </div>
+
+      {creando ? (
+        <div className="card card-compacta mt">
+          <form action={accionNuevo}>
+            <input type="hidden" name="documentItemId" value={documentItemId} />
+            {estadoNuevo.error ? <p className="mensaje mensaje-error">{estadoNuevo.error}</p> : null}
+            <h3>Crear producto y asociarlo</h3>
+            <div className="campo">
+              <label htmlFor={`nuevo-nombre-${documentItemId}`}>Nombre</label>
+              <input
+                id={`nuevo-nombre-${documentItemId}`}
+                name="normalizedName"
+                type="text"
+                defaultValue={descripcion}
+                required
+              />
+            </div>
+            <label className="casilla">
+              <input type="checkbox" name="usesPlu" defaultChecked />
+              <span>Este producto usa PLU</span>
+            </label>
+            <div className="fila fila-2">
+              <div className="campo">
+                <label htmlFor={`nuevo-plu-${documentItemId}`}>PLU nuevo</label>
+                <input id={`nuevo-plu-${documentItemId}`} name="internalCode" type="text" />
+                <p className="ayuda">Si no usa PLU, puede quedar vacío.</p>
+              </div>
+              <div className="campo">
+                <label htmlFor={`nuevo-barcode-${documentItemId}`}>Código de barras</label>
+                <input
+                  id={`nuevo-barcode-${documentItemId}`}
+                  name="barcode"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Escanealo con lector o escribilo"
+                />
+              </div>
+            </div>
+            <div className="fila fila-2">
+              <div className="campo">
+                <label htmlFor={`nuevo-modo-${documentItemId}`}>Modo de venta</label>
+                <select id={`nuevo-modo-${documentItemId}`} name="saleMode" defaultValue="FETEABLE">
+                  <option value="FETEABLE">Feteable</option>
+                  <option value="AL_CORTE">Al corte</option>
+                </select>
+              </div>
+              <div className="campo">
+                <label htmlFor={`nuevo-unidad-${documentItemId}`}>Unidad de compra</label>
+                <select id={`nuevo-unidad-${documentItemId}`} name="purchaseUnit" defaultValue="KG">
+                  <option value="KG">Kilos</option>
+                  <option value="UNIT">Unidades</option>
+                </select>
+              </div>
+            </div>
+            <div className="campo">
+              <label htmlFor={`nuevo-peso-${documentItemId}`}>Kg por unidad comprada, si corresponde</label>
+              <input id={`nuevo-peso-${documentItemId}`} name="purchaseUnitWeightKg" type="text" inputMode="decimal" />
+            </div>
+            <div className="acciones">
+              <button type="button" className="boton boton-secundario" onClick={() => setCreando(false)}>
+                Cancelar alta
+              </button>
+              <Boton texto="Crear y asociar" cargando="Creando…" />
+            </div>
+          </form>
+        </div>
+      ) : null}
     </form>
   );
 }
