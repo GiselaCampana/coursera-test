@@ -466,7 +466,7 @@ export async function saveProduct(user: AuthUser, form: FormData) {
 
   const id = texto(form.get('id'));
   const normalizedName = texto(form.get('normalizedName'));
-  const usesPlu = form.get('usesPlu') !== 'off';
+  const usesPlu = form.get('usesPlu') === 'on';
   const barcode = texto(form.get('barcode'));
   let internalCode = texto(form.get('internalCode'));
   if (!normalizedName) {
