@@ -344,6 +344,103 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
   return rows;
 }
 
+export interface UpdatePriceConfigInput {
+  productId: string;
+  targetMarginPct: string;
+  marginBasis: MarginBasis;
+  cashDiscountPct: string;
+  roundingRule: RoundingRule;
+  saleMode: SaleMode;
+  purchaseUnit: 'KG' | 'UNIT';
+  purchaseUnitWeightKg?: string | null;
+}
+
+/**
+ * Ajustes operativos que la usuaria necesita tocar desde la propia pantalla de
+ * Precios, sin ir a la ficha técnica del producto.
+ */
+export async function updateProductPriceConfig(user: AuthUser, input: UpdatePriceConfigInput) {
+  if (!hasPermission(user, PERMISSIONS.PRECIOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede modificar la formación de precios.');
+  }
+
+  const product = await prisma.product.findUnique({ where: { id: input.productId } });
+  if (!product) throw new NotFoundError('No encontramos ese producto.');
+
+  const margin = toDecimal(input.targetMarginPct);
+  const marginFraction = margin.gt(1) ? margin.div(100) : margin;
+  if (marginFraction.isNegative() || marginFraction.gte(1)) {
+    throw new ValidationError('El marcaje tiene que ser un porcentaje entre 0 y 100.');
+  }
+
+  if (!['SOBRE_COSTO', 'SOBRE_VENTA'].includes(input.marginBasis)) {
+    throw new ValidationError('Elegí una base de marcaje válida.');
+  }
+  if (!['FETEABLE', 'AL_CORTE'].includes(input.saleMode)) {
+    throw new ValidationError('Elegí si el producto es feteable o al corte.');
+  }
+  if (!['KG', 'UNIT'].includes(input.purchaseUnit)) {
+    throw new ValidationError('Elegí una unidad de compra válida.');
+  }
+  if (!['NONE','NEAREST_10','NEAREST_50','NEAREST_100','UP_10','UP_50','UP_100'].includes(input.roundingRule)) {
+    throw new ValidationError('Elegí una regla de redondeo válida.');
+  }
+
+  const cash = toDecimal(input.cashDiscountPct || '0');
+  const cashFraction = cash.gt(1) ? cash.div(100) : cash;
+  if (cashFraction.isNegative() || cashFraction.gte(1)) {
+    throw new ValidationError('El descuento en efectivo tiene que estar entre 0 y 100.');
+  }
+
+  let purchaseUnitWeightKg: string | null = null;
+  if (input.purchaseUnit === 'UNIT') {
+    const raw = (input.purchaseUnitWeightKg ?? '').trim();
+    if (raw) {
+      const weight = toDecimal(raw);
+      if (weight.lte(0)) {
+        throw new ValidationError('Los kilos por unidad comprada tienen que ser mayores a cero.');
+      }
+      purchaseUnitWeightKg = weight.toString();
+    }
+  }
+
+  const saved = await prisma.product.update({
+    where: { id: input.productId },
+    data: {
+      targetMarginPct: marginFraction.toString(),
+      marginBasis: input.marginBasis,
+      cashDiscountPct: cashFraction.toString(),
+      roundingRule: input.roundingRule,
+      saleMode: input.saleMode,
+      purchaseUnit: input.purchaseUnit,
+      purchaseUnitWeightKg,
+    },
+  });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_UPDATED,
+    entity: 'Product',
+    entityId: product.id,
+    before: {
+      marcaje: product.targetMarginPct.toString(),
+      base: product.marginBasis,
+      modoVenta: product.saleMode,
+      unidadCompra: product.purchaseUnit,
+      kgUnidadCompra: product.purchaseUnitWeightKg?.toString() ?? null,
+    },
+    after: {
+      marcaje: saved.targetMarginPct.toString(),
+      base: saved.marginBasis,
+      modoVenta: saved.saleMode,
+      unidadCompra: saved.purchaseUnit,
+      kgUnidadCompra: saved.purchaseUnitWeightKg?.toString() ?? null,
+    },
+  });
+
+  return saved;
+}
+
 /** Productos con aumento de precio en el período, para el tablero de inicio. */
 export async function countPriceIncreases(user: AuthUser, since: Date): Promise<number> {
   const scope = branchScopeFilter(user);
