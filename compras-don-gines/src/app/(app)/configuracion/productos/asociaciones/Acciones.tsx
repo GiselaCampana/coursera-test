@@ -37,6 +37,7 @@ const MAPEO_ERRECALDE_VERIFICADO = [
   ['ART-00721', '1611'],
   ['ART-80719', '1612'],
   ['ART-00758', '1551'],
+  ['ART-00643', '3020'],
 ] as const;
 
 const textoMapeoErrecalde = [
@@ -164,7 +165,7 @@ export function ImportarMapeoCodigos({
             className="boton boton-secundario"
             onClick={() => setTexto(textoMapeoErrecalde)}
           >
-            Cargar 16 códigos verificados de Errecalde
+            Cargar 17 códigos verificados de Errecalde
           </button>
         </div>
       ) : null}
