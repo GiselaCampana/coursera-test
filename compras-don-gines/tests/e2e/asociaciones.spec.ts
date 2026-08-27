@@ -68,6 +68,27 @@ test.describe('asociaciones históricas', () => {
     await expect(page.locator('.resumen-mes')).toBeVisible();
   });
 
+  test('permite revisar un mapeo código de proveedor a PLU antes de aplicarlo', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/productos/asociaciones');
+
+    await elegirOpcion(page, '#proveedor', 'Distribución Errecalde');
+    await page.getByRole('button', { name: 'Analizar' }).click();
+    await expect(page).toHaveURL(/proveedor=/);
+
+    await expect(page.getByRole('heading', { name: /Códigos confirmados de Distribución Errecalde/ })).toBeVisible();
+
+    await page
+      .getByLabel('CSV o texto')
+      .fill('Código proveedor;PLU\nART-00228;1211');
+    await page.getByRole('button', { name: 'Ver propuesta' }).click();
+
+    await expect(page.getByText('ART-00228')).toBeVisible();
+    await expect(page.getByText(/PLU/)).toBeVisible();
+    await expect(page.getByText('Cremoso Punta del Agua')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Aplicar 1 código/s' })).toBeVisible();
+  });
+
   test('un operador no llega a esta pantalla', async ({ page }) => {
     await ingresar(page, 'operador');
     await page.goto('/configuracion/productos/asociaciones');
