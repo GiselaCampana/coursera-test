@@ -8,6 +8,7 @@ import { arToday, parseArDate } from '@/lib/datetime';
 import {
   applyRounding,
   computeSalePrices,
+  priceFromMargin,
   type MarginBasis,
   type RoundingRule,
   type SaleMode,
@@ -58,6 +59,14 @@ export async function resolvePricingRule(productId: string, at: Date = arToday()
     roundingRule: (effective?.roundingRule ?? product.roundingRule) as RoundingRule,
     saleMode: product.saleMode as SaleMode,
     pieceWeightKg: product.avgPieceWeightKg?.toString() ?? null,
+    alCorteHormaDigitalMarginPct: product.alCorteHormaDigitalMarginPct?.toString() ?? null,
+    alCorteHormaCashMarginPct: product.alCorteHormaCashMarginPct?.toString() ?? null,
+    alCorteCajaCashMarginPct: product.alCorteCajaCashMarginPct?.toString() ?? null,
+    feteado100gMarginPct: product.feteado100gMarginPct?.toString() ?? null,
+    feteadoQuarterMarginPct: product.feteadoQuarterMarginPct?.toString() ?? null,
+    feteadoPieceDigitalMarginPct: product.feteadoPieceDigitalMarginPct?.toString() ?? null,
+    feteadoPieceCashMarginPct: product.feteadoPieceCashMarginPct?.toString() ?? null,
+    wholeUnitMarginPct: product.wholeUnitMarginPct?.toString() ?? null,
   };
 }
 
@@ -99,6 +108,18 @@ export async function getLatestCost(productId: string): Promise<ProductCostSnaps
   };
 }
 
+export interface PriceTierSet {
+  baseKg: Decimal | null;
+  alCorteHormaDigitalKg: Decimal | null;
+  alCorteHormaCashKg: Decimal | null;
+  alCorteCajaCashKg: Decimal | null;
+  feteado100gKg: Decimal | null;
+  feteadoQuarterKg: Decimal | null;
+  feteadoPieceDigitalKg: Decimal | null;
+  feteadoPieceCashKg: Decimal | null;
+  wholeUnitTotal: Decimal | null;
+}
+
 export interface PriceSuggestion {
   productId: string;
   productName: string;
@@ -112,6 +133,7 @@ export interface PriceSuggestion {
   /** Falta el peso neto para convertir una compra por unidad a costo por kilo. */
   needsPurchaseUnitWeight: boolean;
   prices: SalePrices | null;
+  tiers: PriceTierSet;
   rule: Awaited<ReturnType<typeof resolvePricingRule>>;
   approved: {
     pricePerKg: string;
@@ -151,6 +173,23 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
   const costPerKg = convertirAKg(cost.unitCost);
   const previousCostPerKg = convertirAKg(cost.previousUnitCost);
 
+  const marginFor = (specific: string | null): string =>
+    specific ?? rule.targetMarginPct;
+  const tier = (specific: string | null): Decimal | null =>
+    costPerKg
+      ? priceFromMargin(costPerKg, rule.marginBasis, marginFor(specific), rule.roundingRule)
+      : null;
+  const baseKg = tier(null);
+  const wholeUnitTotal =
+    costPerKg && pesoUnidad && pesoUnidad.gt(0)
+      ? priceFromMargin(
+          costPerKg.times(pesoUnidad),
+          rule.marginBasis,
+          marginFor(rule.wholeUnitMarginPct),
+          rule.roundingRule,
+        )
+      : null;
+
   return {
     productId,
     productName: rule.product.normalizedName,
@@ -165,12 +204,23 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
       ? computeSalePrices(costPerKg, {
           marginBasis: rule.marginBasis,
           targetMarginPct: rule.targetMarginPct,
-          cashDiscountPct: rule.cashDiscountPct,
+          cashDiscountPct: 0,
           roundingRule: rule.roundingRule,
           saleMode: rule.saleMode,
           pieceWeightKg: rule.pieceWeightKg,
         })
       : null,
+    tiers: {
+      baseKg,
+      alCorteHormaDigitalKg: tier(rule.alCorteHormaDigitalMarginPct),
+      alCorteHormaCashKg: tier(rule.alCorteHormaCashMarginPct),
+      alCorteCajaCashKg: tier(rule.alCorteCajaCashMarginPct),
+      feteado100gKg: tier(rule.feteado100gMarginPct),
+      feteadoQuarterKg: tier(rule.feteadoQuarterMarginPct),
+      feteadoPieceDigitalKg: tier(rule.feteadoPieceDigitalMarginPct),
+      feteadoPieceCashKg: tier(rule.feteadoPieceCashMarginPct),
+      wholeUnitTotal,
+    },
     rule,
     approved: lastApproved
       ? {
@@ -273,14 +323,28 @@ export interface PriceBoardRow {
   branchName: string | null;
   suggestedPricePerKg: string | null;
   pricePerKgCash: string | null;
-  pricePer100g: string | null;
-  pricePerQuarter: string | null;
-  pricePerPieceDigital: string | null;
-  pricePerPieceCash: string | null;
+  alCorteHormaDigitalKg: string | null;
+  alCorteHormaCashKg: string | null;
+  alCorteCajaCashKg: string | null;
+  feteado100gKg: string | null;
+  feteadoQuarterKg: string | null;
+  feteadoPieceDigitalKg: string | null;
+  feteadoPieceCashKg: string | null;
+  wholeUnitTotal: string | null;
   approvedPricePerKg: string | null;
   targetMarginPct: string;
   marginBasis: MarginBasis;
   cashDiscountPct: string;
+  alCorteHormaDigitalMarginPct: string | null;
+  alCorteHormaCashMarginPct: string | null;
+  alCorteCajaCashMarginPct: string | null;
+  feteado100gMarginPct: string | null;
+  feteadoQuarterMarginPct: string | null;
+  feteadoPieceDigitalMarginPct: string | null;
+  feteadoPieceCashMarginPct: string | null;
+  wholeUnitMarginPct: string | null;
+  usesPlu: boolean;
+  barcode: string | null;
   roundingRule: RoundingRule;
   needsPurchaseUnitWeight: boolean;
   /** true si el último costo subió más que el umbral configurado. */
@@ -327,23 +391,30 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       lastCostDate: cost.date,
       supplierName: cost.supplierName,
       branchName: cost.branchName,
-      suggestedPricePerKg: prices?.pricePerKg.toFixed(2) ?? null,
-      pricePerKgCash: suggestion.approved?.pricePerKg
-        ? applyRounding(
-            toDecimal(suggestion.approved.pricePerKg).times(
-              toDecimal(1).minus(toDecimal(suggestion.rule.cashDiscountPct)),
-            ),
-            suggestion.rule.roundingRule,
-          ).toFixed(2)
-        : prices?.pricePerKgCash.toFixed(2) ?? null,
-      pricePer100g: prices?.pricePer100g.toFixed(2) ?? null,
-      pricePerQuarter: prices?.pricePerQuarter.toFixed(2) ?? null,
-      pricePerPieceDigital: prices?.pricePerPieceDigital?.toFixed(2) ?? null,
-      pricePerPieceCash: prices?.pricePerPieceCash?.toFixed(2) ?? null,
+      suggestedPricePerKg: suggestion.tiers.baseKg?.toFixed(2) ?? null,
+      pricePerKgCash: null,
+      alCorteHormaDigitalKg: suggestion.tiers.alCorteHormaDigitalKg?.toFixed(2) ?? null,
+      alCorteHormaCashKg: suggestion.tiers.alCorteHormaCashKg?.toFixed(2) ?? null,
+      alCorteCajaCashKg: suggestion.tiers.alCorteCajaCashKg?.toFixed(2) ?? null,
+      feteado100gKg: suggestion.tiers.feteado100gKg?.toFixed(2) ?? null,
+      feteadoQuarterKg: suggestion.tiers.feteadoQuarterKg?.toFixed(2) ?? null,
+      feteadoPieceDigitalKg: suggestion.tiers.feteadoPieceDigitalKg?.toFixed(2) ?? null,
+      feteadoPieceCashKg: suggestion.tiers.feteadoPieceCashKg?.toFixed(2) ?? null,
+      wholeUnitTotal: suggestion.tiers.wholeUnitTotal?.toFixed(2) ?? null,
       approvedPricePerKg: suggestion.approved?.pricePerKg ?? null,
       targetMarginPct: suggestion.rule.targetMarginPct,
       marginBasis: suggestion.rule.marginBasis,
-      cashDiscountPct: suggestion.rule.cashDiscountPct,
+      cashDiscountPct: '0',
+      alCorteHormaDigitalMarginPct: suggestion.rule.alCorteHormaDigitalMarginPct,
+      alCorteHormaCashMarginPct: suggestion.rule.alCorteHormaCashMarginPct,
+      alCorteCajaCashMarginPct: suggestion.rule.alCorteCajaCashMarginPct,
+      feteado100gMarginPct: suggestion.rule.feteado100gMarginPct,
+      feteadoQuarterMarginPct: suggestion.rule.feteadoQuarterMarginPct,
+      feteadoPieceDigitalMarginPct: suggestion.rule.feteadoPieceDigitalMarginPct,
+      feteadoPieceCashMarginPct: suggestion.rule.feteadoPieceCashMarginPct,
+      wholeUnitMarginPct: suggestion.rule.wholeUnitMarginPct,
+      usesPlu: product.usesPlu,
+      barcode: product.barcode,
       roundingRule: suggestion.rule.roundingRule,
       needsPurchaseUnitWeight: suggestion.needsPurchaseUnitWeight,
       alert: cost.deltaPct ? cost.deltaPct.gte(PRICE_ALERT_THRESHOLD) : false,
@@ -356,7 +427,15 @@ export interface UpdatePriceConfigInput {
   productId: string;
   targetMarginPct: string;
   marginBasis: MarginBasis;
-  cashDiscountPct: string;
+  cashDiscountPct?: string;
+  alCorteHormaDigitalMarginPct?: string | null;
+  alCorteHormaCashMarginPct?: string | null;
+  alCorteCajaCashMarginPct?: string | null;
+  feteado100gMarginPct?: string | null;
+  feteadoQuarterMarginPct?: string | null;
+  feteadoPieceDigitalMarginPct?: string | null;
+  feteadoPieceCashMarginPct?: string | null;
+  wholeUnitMarginPct?: string | null;
   roundingRule: RoundingRule;
   saleMode: SaleMode;
   purchaseUnit: 'KG' | 'UNIT';
@@ -394,11 +473,16 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
     throw new ValidationError('Elegí una regla de redondeo válida.');
   }
 
-  const cash = toDecimal(input.cashDiscountPct || '0');
-  const cashFraction = cash.gt(1) ? cash.div(100) : cash;
-  if (cashFraction.isNegative() || cashFraction.gte(1)) {
-    throw new ValidationError('El descuento en efectivo tiene que estar entre 0 y 100.');
-  }
+  const normalizarMarcaje = (valor?: string | null): string | null => {
+    const raw = (valor ?? '').trim();
+    if (!raw) return null;
+    const d = toDecimal(raw);
+    const fraction = d.gt(1) ? d.div(100) : d;
+    if (fraction.isNegative() || fraction.gte(1)) {
+      throw new ValidationError('Cada marcaje tiene que estar entre 0 y menos de 100.');
+    }
+    return fraction.toString();
+  };
 
   let purchaseUnitWeightKg: string | null = null;
   if (input.purchaseUnit === 'UNIT') {
@@ -417,7 +501,15 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
     data: {
       targetMarginPct: marginFraction.toString(),
       marginBasis: input.marginBasis,
-      cashDiscountPct: cashFraction.toString(),
+      cashDiscountPct: '0',
+      alCorteHormaDigitalMarginPct: normalizarMarcaje(input.alCorteHormaDigitalMarginPct),
+      alCorteHormaCashMarginPct: normalizarMarcaje(input.alCorteHormaCashMarginPct),
+      alCorteCajaCashMarginPct: normalizarMarcaje(input.alCorteCajaCashMarginPct),
+      feteado100gMarginPct: normalizarMarcaje(input.feteado100gMarginPct),
+      feteadoQuarterMarginPct: normalizarMarcaje(input.feteadoQuarterMarginPct),
+      feteadoPieceDigitalMarginPct: normalizarMarcaje(input.feteadoPieceDigitalMarginPct),
+      feteadoPieceCashMarginPct: normalizarMarcaje(input.feteadoPieceCashMarginPct),
+      wholeUnitMarginPct: normalizarMarcaje(input.wholeUnitMarginPct),
       roundingRule: input.roundingRule,
       saleMode: input.saleMode,
       purchaseUnit: input.purchaseUnit,
