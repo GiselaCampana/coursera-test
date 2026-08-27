@@ -2564,6 +2564,10 @@ describe('el mantenimiento de asociaciones históricas', () => {
       where: { documentId: documento.id },
       data: { productId: null },
     });
+    // El estado roto real tampoco tenía historial de costos. Si se deja el
+    // CostHistory de la confirmación original, la prueba no reproduce el
+    // problema de producción y Precios puede dar un falso verde.
+    await prisma.costHistory.deleteMany({ where: { documentId: documento.id } });
     return documento.id;
   }
 
@@ -2608,6 +2612,14 @@ describe('el mantenimiento de asociaciones históricas', () => {
     expect(despuesDonAlfonso.rows).toHaveLength(1);
     expect(despuesDonAlfonso.totals.kilos).toBe('28.90');
     expect(Number(despuesDonAlfonso.totals.costoTotal)).toBeGreaterThan(0);
+
+    // El mismo backfill deja lista la pantalla Precios.
+    const asociados = await prisma.documentItem.count({
+      where: { documentId, productId: { not: null } },
+    });
+    expect(await prisma.costHistory.count({ where: { documentId } })).toBe(asociados);
+    const costoSardo = await getLatestCost(bloque);
+    expect(costoSardo.unitCost).not.toBeNull();
 
     // Y la factura quedó intacta: los mismos 23 renglones y el mismo total.
     const documento = await prisma.document.findUniqueOrThrow({
@@ -2674,6 +2686,10 @@ describe('el mantenimiento de asociaciones históricas', () => {
       where: { documentItemId: renglon.id },
     });
     expect(movimiento.productId).toBe(escenario.productos['2001']);
+
+    // Resolver a mano también deja el costo listo para Precios.
+    const costo = await getLatestCost(escenario.productos['2001']);
+    expect(costo.unitCost).not.toBeNull();
 
     // Y el código quedó aprendido para las próximas facturas.
     const aprendido = await prisma.productAlias.findFirst({
