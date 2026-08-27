@@ -64,6 +64,7 @@ function Fila({
       {resoluble ? (
         <ResolverAmbigua
           documentItemId={renglon.documentItemId}
+          descripcion={renglon.description}
           tieneCodigo={Boolean(renglon.supplierCode)}
           supplierName={renglon.supplierName}
           supplierCode={renglon.supplierCode}
