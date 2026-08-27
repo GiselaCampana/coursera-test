@@ -3532,6 +3532,21 @@ describe('importar el catálogo interno de Don Ginés', () => {
     expect(sardo!.conMovimientos).toBe(true);
   });
 
+  it('desactiva los PLU demo antiguos sin historial, pero no los borra', async () => {
+    const demo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } });
+    expect(demo.active).toBe(true);
+
+    const previa = await importarCatalogo(escenario.admin, CATALOGO);
+    expect(previa.demosDesactivables.map((p) => p.plu)).toContain('1001');
+    expect((await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } })).active)
+      .toBe(true);
+
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+    const despues = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } });
+    expect(despues.active).toBe(false);
+    expect(despues.id).toBe(demo.id);
+  });
+
   it('aprende el código del proveedor, y con eso la próxima factura entra sola', async () => {
     /*
      * Errecalde · ART-00228 → Don Ginés · PLU 1211.
