@@ -120,6 +120,11 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
 
   const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
   <cols>
     <col min="1" max="1" width="12" customWidth="1"/>
     <col min="2" max="2" width="34" customWidth="1"/>
@@ -180,6 +185,7 @@ function pdfEscapeLatin1(s: string): Buffer {
     .replace(/–|—/g, '-')
     .replace(/“|”/g, '"')
     .replace(/’/g, "'")
+    .replace(/…/g, '...')
     .replace(/€/g, 'EUR');
   const escaped = normalized.replace(/([\\()])/g, '\\$1');
   return Buffer.from(escaped, 'latin1');
