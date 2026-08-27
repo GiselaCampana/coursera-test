@@ -2,6 +2,8 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { prisma } from '@/lib/db';
 import { getStorage, buildDocumentKey } from '@/lib/storage';
 import { ForbiddenError } from '@/lib/errors';
+import { verifyPassword } from '@/lib/auth/password';
+import { recoverAdminPasswordOnce } from '@/lib/auth/admin-recovery';
 import {
   acceptReadDocument,
   confirmDocument,
@@ -3670,6 +3672,62 @@ describe('importar el catálogo interno de Don Ginés', () => {
     });
     expect(auditoria.userId).toBe(escenario.admin.id);
     expect((auditoria.after as Record<string, unknown>).creados).toBe(1);
+  });
+});
+
+describe('recuperación administrativa de contraseña', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  it('restablece una sola vez, cierra sesiones y obliga a cambiar la contraseña', async () => {
+    await prisma.session.create({
+      data: {
+        tokenHash: 'sesion-admin-recuperacion',
+        userId: escenario.admin.id,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    });
+
+    const nueva = 'TemporalNueva123';
+    const primera = await recoverAdminPasswordOnce(prisma, {
+      userId: escenario.admin.id,
+      email: escenario.admin.email,
+      password: nueva,
+      requestId: 'recuperacion-1',
+    });
+
+    expect(primera).toEqual({ applied: true, alreadyApplied: false });
+
+    const usuario = await prisma.user.findUniqueOrThrow({ where: { id: escenario.admin.id } });
+    expect(await verifyPassword(nueva, usuario.passwordHash)).toBe(true);
+    expect(usuario.mustChangePassword).toBe(true);
+    expect(usuario.failedLogins).toBe(0);
+    expect(usuario.lockedUntil).toBeNull();
+    expect(await prisma.session.count({ where: { userId: escenario.admin.id } })).toBe(0);
+
+    const segunda = await recoverAdminPasswordOnce(prisma, {
+      userId: escenario.admin.id,
+      email: escenario.admin.email,
+      password: 'OtraTemporal456',
+      requestId: 'recuperacion-1',
+    });
+    expect(segunda).toEqual({ applied: false, alreadyApplied: true });
+
+    const despues = await prisma.user.findUniqueOrThrow({ where: { id: escenario.admin.id } });
+    expect(await verifyPassword(nueva, despues.passwordHash)).toBe(true);
+    expect(await verifyPassword('OtraTemporal456', despues.passwordHash)).toBe(false);
+
+    expect(
+      await prisma.auditLog.count({
+        where: {
+          action: 'usuario.contrasena_restablecida_seed',
+          entityId: escenario.admin.id,
+          reason: 'reset-admin:recuperacion-1',
+        },
+      }),
+    ).toBe(1);
   });
 });
 
