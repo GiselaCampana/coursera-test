@@ -126,9 +126,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     <col min="3" max="6" width="20" customWidth="1"/>
     <col min="7" max="14" width="18" customWidth="1"/>
   </cols>
-  <sheetData>${rowsXml}</sheetData>
-  <autoFilter ref="A1:N${data.length}"/>
-  <freezePane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+  <sheetViews>\n    <sheetView workbookViewId="0">\n      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>\n    </sheetView>\n  </sheetViews>\n  <sheetData>${rowsXml}</sheetData>\n  <autoFilter ref="A1:N${data.length}"/>
 </worksheet>`;
 
   const zip = new JSZip();
@@ -168,7 +166,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
   <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
   <xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>
   <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-  <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+  <xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
  </cellXfs>
  <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>`);
