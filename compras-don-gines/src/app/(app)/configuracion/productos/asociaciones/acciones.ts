@@ -7,11 +7,54 @@ import { toUserMessage } from '@/lib/errors';
 import {
   asociarRenglonHistorico,
   backfillProductLinks,
+  importarMapeoCodigosProveedor,
+  type InformeMapeoCodigos,
 } from '@/lib/services/backfill-productos';
 
 export interface ResultadoAsociacion {
   ok?: boolean;
   error?: string;
+}
+
+export interface ResultadoMapeoCodigos {
+  informe?: InformeMapeoCodigos;
+  texto?: string;
+  supplierId?: string;
+  error?: string;
+}
+
+export async function analizarMapeoCodigos(
+  _prev: ResultadoMapeoCodigos,
+  formData: FormData,
+): Promise<ResultadoMapeoCodigos> {
+  try {
+    const user = await requireUser();
+    const supplierId = String(formData.get('supplierId') ?? '');
+    const texto = String(formData.get('texto') ?? '');
+    if (!supplierId) return { error: 'Elegí primero un proveedor.' };
+    if (!texto.trim()) return { error: 'Pegá o cargá el mapeo Código proveedor + PLU.' };
+    const informe = await importarMapeoCodigosProveedor(user, supplierId, texto);
+    return { informe, texto, supplierId };
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
+}
+
+export async function aplicarMapeoCodigos(
+  _prev: ResultadoMapeoCodigos,
+  formData: FormData,
+): Promise<ResultadoMapeoCodigos> {
+  try {
+    const user = await requireUser();
+    const supplierId = String(formData.get('supplierId') ?? '');
+    const texto = String(formData.get('texto') ?? '');
+    await importarMapeoCodigosProveedor(user, supplierId, texto, { aplicar: true });
+    revalidatePath('/configuracion/productos/asociaciones');
+    revalidatePath('/configuracion/productos');
+    return { informe: undefined, texto: '', supplierId, error: undefined };
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
 }
 
 /** Paso 2: escribe las asociaciones que el análisis dio por seguras. */
