@@ -3909,6 +3909,23 @@ describe('alta de productos desde compras sin asociación', () => {
     expect(creado.usesPlu).toBe(false);
     expect(creado.barcode).toBe('7791234567890');
     expect(creado.internalCode).toBe('BC-7791234567890');
+
+    await prisma.costHistory.create({
+      data: {
+        productId: creado.id,
+        supplierId: escenario.proveedorErrecaldeId,
+        branchId: escenario.sucursales.devoto,
+        date: new Date(Date.UTC(2026, 7, 22)),
+        unitNetPrice: '1800',
+        unitCost: '2178',
+      },
+    });
+    const precio = await suggestPricesFor(creado.id);
+    expect(precio.soldByUnit).toBe(true);
+    expect(precio.needsPurchaseUnitWeight).toBe(false);
+    expect(precio.costPerKg).toBeNull();
+    // El tomate se vende por botella: precio sobre costo/unidad, sin inventar kilos.
+    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('3200.00');
   });
 });
 
