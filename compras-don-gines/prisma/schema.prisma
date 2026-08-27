@@ -271,6 +271,10 @@ model Product {
   saleMode          SaleMode     @default(FETEABLE)
   /// Peso habitual de la pieza u horma, en kg.
   avgPieceWeightKg  Decimal?     @db.Decimal(14, 4)
+  /// Peso neto, en kg, de una unidad de compra cuando el proveedor factura por
+  /// unidad pero Don Ginés vende por kilo. Ej.: lata de dulce 5 kg, postre de
+  /// maní 3 kg. Permite convertir costo por unidad -> costo por kilo.
+  purchaseUnitWeightKg Decimal?  @db.Decimal(14, 4)
   defaultSupplierId String?
   defaultSupplier   Supplier?    @relation(fields: [defaultSupplierId], references: [id])
   /// Margen objetivo expresado como fracción (0.45 = 45 %).
