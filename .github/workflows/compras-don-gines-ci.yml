@@ -10,6 +10,10 @@ on:
       - '.github/workflows/compras-don-gines-ci.yml'
   workflow_dispatch:
 
+concurrency:
+  group: compras-don-gines-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validar:
     runs-on: ubuntu-latest
