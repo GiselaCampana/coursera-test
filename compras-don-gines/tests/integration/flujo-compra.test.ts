@@ -3851,6 +3851,67 @@ describe('precios por kilo configurables', () => {
   });
 });
 
+describe('alta de productos desde compras sin asociación', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  it('crea un PLU nuevo y lo asocia al renglón validado', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+    const renglon = await prisma.documentItem.findFirstOrThrow({ where: { documentId } });
+
+    await prisma.documentItem.update({
+      where: { id: renglon.id },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+    await prisma.purchaseMovement.updateMany({
+      where: { documentItemId: renglon.id },
+      data: { productId: null },
+    });
+
+    const creado = await crearProductoDesdeRenglon(escenario.admin, {
+      documentItemId: renglon.id,
+      internalCode: '9099',
+      normalizedName: 'Producto nuevo de prueba',
+      usesPlu: true,
+      saleMode: 'AL_CORTE',
+      purchaseUnit: 'KG',
+    });
+
+    expect(creado.internalCode).toBe('9099');
+    const actualizado = await prisma.documentItem.findUniqueOrThrow({ where: { id: renglon.id } });
+    expect(actualizado.productId).toBe(creado.id);
+  });
+
+  it('crea un artículo por código de barras sin exigir PLU', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+    const renglon = await prisma.documentItem.findFirstOrThrow({ where: { documentId } });
+
+    await prisma.documentItem.update({
+      where: { id: renglon.id },
+      data: { productId: null, matchMethod: 'NONE' },
+    });
+    await prisma.purchaseMovement.updateMany({
+      where: { documentItemId: renglon.id },
+      data: { productId: null },
+    });
+
+    const creado = await crearProductoDesdeRenglon(escenario.admin, {
+      documentItemId: renglon.id,
+      normalizedName: 'Tomate botella 950 g',
+      usesPlu: false,
+      barcode: '7791234567890',
+      saleMode: 'FETEABLE',
+      purchaseUnit: 'UNIT',
+    });
+
+    expect(creado.usesPlu).toBe(false);
+    expect(creado.barcode).toBe('7791234567890');
+    expect(creado.internalCode).toBe('BC-7791234567890');
+  });
+});
+
 describe('mapeo masivo de códigos de proveedor', () => {
   beforeEach(async () => {
     await limpiarBase();
