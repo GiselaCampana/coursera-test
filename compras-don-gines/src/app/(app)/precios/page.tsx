@@ -69,6 +69,28 @@ export default async function PaginaPrecios({
         </div>
       </form>
 
+      <div className="card card-compacta">
+        <h2>Exportar lista de precios y costos</h2>
+        <p className="chico medio">
+          Usa los mismos filtros de tipo de producto y proveedor de arriba. En la lista de venta se
+          toma el precio aprobado si existe; si todavía no fue aprobado, el sugerido.
+        </p>
+        <div className="acciones">
+          <a
+            className="boton boton-secundario"
+            href={`/api/precios/exportar?formato=pdf&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
+          >
+            Exportar PDF
+          </a>
+          <a
+            className="boton boton-secundario"
+            href={`/api/precios/exportar?formato=xlsx&tipo=${encodeURIComponent(tipo)}&proveedor=${encodeURIComponent(proveedor)}`}
+          >
+            Exportar Excel
+          </a>
+        </div>
+      </div>
+
       {alertas.length > 0 ? (
         <div className="mensaje mensaje-aviso">
           <strong>
