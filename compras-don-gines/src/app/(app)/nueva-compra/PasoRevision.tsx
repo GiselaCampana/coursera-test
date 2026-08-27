@@ -127,6 +127,53 @@ export function PasoRevision({
     })),
   );
 
+  const [productosDisponibles, setProductosDisponibles] = useState(productos);
+  const [altaProductoClave, setAltaProductoClave] = useState<string | null>(null);
+  const [altaNombre, setAltaNombre] = useState('');
+  const [altaPlu, setAltaPlu] = useState('');
+  const [altaBarcode, setAltaBarcode] = useState('');
+  const [altaUsaPlu, setAltaUsaPlu] = useState(true);
+  const [altaGuardando, setAltaGuardando] = useState(false);
+  const [altaError, setAltaError] = useState<string | null>(null);
+
+  const abrirAltaProducto = (articulo: ArticuloEditable) => {
+    setAltaProductoClave(articulo.clave);
+    setAltaNombre(articulo.descripcion);
+    setAltaPlu('');
+    setAltaBarcode('');
+    setAltaUsaPlu(true);
+    setAltaError(null);
+  };
+
+  const crearProductoRapido = async (articulo: ArticuloEditable) => {
+    setAltaError(null);
+    setAltaGuardando(true);
+    try {
+      const respuesta = await fetch('/api/productos/rapido', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombre: altaNombre,
+          plu: altaPlu || null,
+          usaPlu: altaUsaPlu,
+          codigoBarras: altaBarcode || null,
+          unidadCompra: articulo.unidad,
+        }),
+      });
+      const datos = await respuesta.json();
+      if (!respuesta.ok) {
+        throw new AppError(datos.error ?? 'No pudimos crear el producto.');
+      }
+      setProductosDisponibles((prev) => [...prev, datos]);
+      actualizarArticulo(articulo.clave, 'productoId', datos.id);
+      setAltaProductoClave(null);
+    } catch (e) {
+      setAltaError(toUserMessage(e));
+    } finally {
+      setAltaGuardando(false);
+    }
+  };
+
   /*
    * Con "factura contra factura" la fecha no se completa sola.
    *
@@ -791,7 +838,7 @@ export function PasoRevision({
                         se lo sabe de memoria, el nombre si no, y el código que
                         se está mirando en el papel.
                       */}
-                      {productos.map((p) => (
+                      {productosDisponibles.map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.codigo} · {p.nombre}
                           {p.codigosDeProveedor && p.codigosDeProveedor.length > 0
@@ -800,8 +847,87 @@ export function PasoRevision({
                         </option>
                       ))}
                     </select>
+                    <div className="acciones">
+                      <button
+                        type="button"
+                        className="boton boton-secundario boton-chico"
+                        onClick={() => abrirAltaProducto(articulo)}
+                      >
+                        Crear producto nuevo…
+                      </button>
+                    </div>
                   </div>
                 </div>
+
+                {altaProductoClave === articulo.clave ? (
+                  <div className="card card-compacta mt">
+                    <h3>Nuevo producto</h3>
+                    {altaError ? <p className="mensaje mensaje-error">{altaError}</p> : null}
+                    <div className="campo">
+                      <label htmlFor={`alta-nombre-${articulo.clave}`}>Nombre</label>
+                      <input
+                        id={`alta-nombre-${articulo.clave}`}
+                        type="text"
+                        value={altaNombre}
+                        onChange={(e) => setAltaNombre(e.target.value)}
+                      />
+                    </div>
+                    <label className="casilla">
+                      <input
+                        type="checkbox"
+                        checked={altaUsaPlu}
+                        onChange={(e) => setAltaUsaPlu(e.target.checked)}
+                      />
+                      <span>Este producto usa PLU</span>
+                    </label>
+                    <div className="fila fila-2">
+                      <div className="campo">
+                        <label htmlFor={`alta-plu-${articulo.clave}`}>PLU nuevo</label>
+                        <input
+                          id={`alta-plu-${articulo.clave}`}
+                          type="text"
+                          value={altaPlu}
+                          onChange={(e) => setAltaPlu(e.target.value)}
+                          disabled={!altaUsaPlu}
+                          placeholder="Ej. 9099"
+                        />
+                      </div>
+                      <div className="campo">
+                        <label htmlFor={`alta-barcode-${articulo.clave}`}>Código de barras</label>
+                        <input
+                          id={`alta-barcode-${articulo.clave}`}
+                          type="text"
+                          inputMode="numeric"
+                          value={altaBarcode}
+                          onChange={(e) => setAltaBarcode(e.target.value)}
+                          placeholder="Escanealo o escribilo"
+                        />
+                      </div>
+                    </div>
+                    <p className="ayuda">
+                      Al crear el artículo queda seleccionado en este renglón. Si marcás “recordar
+                      asociación”, el código del proveedor se aprende al guardar la factura.
+                    </p>
+                    <div className="acciones">
+                      <button
+                        type="button"
+                        className="boton boton-secundario"
+                        onClick={() => setAltaProductoClave(null)}
+                        disabled={altaGuardando}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        className="boton"
+                        onClick={() => crearProductoRapido(articulo)}
+                        disabled={altaGuardando}
+                      >
+                        {altaGuardando ? 'Creando…' : 'Crear y seleccionar'}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
 
                 {/*
                   Los dos códigos, uno al lado del otro y sin ocupar lugar.
@@ -827,7 +953,7 @@ export function PasoRevision({
                           "CREMOSO PUNTA DEL AGUA" en el papel y necesita ver
                           contra qué se lo está asociando.
                         */
-                        const elegido = productos.find((p) => p.id === articulo.productoId);
+                        const elegido = productosDisponibles.find((p) => p.id === articulo.productoId);
                         return elegido
                           ? `PLU ${elegido.codigo} · ${elegido.nombre}`
                           : 'Sin asociar';
