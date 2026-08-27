@@ -185,9 +185,9 @@ export default async function PaginaProductos({
         />
       </div>
 
-      <div className="fila fila-3">
+      <div className="fila fila-2">
         <div className="campo">
-          <label htmlFor={`${prefijo}-margin`}>Margen objetivo (%)</label>
+          <label htmlFor={`${prefijo}-margin`}>Marcaje base (%)</label>
           <input
             id={`${prefijo}-margin`}
             name="targetMarginPct"
@@ -196,27 +196,20 @@ export default async function PaginaProductos({
             defaultValue={p ? Number(p.targetMarginPct) * 100 : '45'}
             required
           />
+          <p className="ayuda">
+            Los marcajes específicos de horma, caja, feteado y efectivo se ajustan en la pantalla Precios.
+          </p>
         </div>
         <div className="campo">
-          <label htmlFor={`${prefijo}-basis`}>Base del margen</label>
+          <label htmlFor={`${prefijo}-basis`}>Base del marcaje</label>
           <select
             id={`${prefijo}-basis`}
             name="marginBasis"
             defaultValue={p?.marginBasis ?? 'SOBRE_COSTO'}
           >
-            <option value="SOBRE_COSTO">Sobre el costo · precio = costo × (1 + margen)</option>
-            <option value="SOBRE_VENTA">Sobre la venta · precio = costo / (1 − margen)</option>
+            <option value="SOBRE_COSTO">Sobre el costo · precio = costo × (1 + marcaje)</option>
+            <option value="SOBRE_VENTA">Sobre la venta · precio = costo / (1 − marcaje)</option>
           </select>
-        </div>
-        <div className="campo">
-          <label htmlFor={`${prefijo}-cash`}>Descuento por efectivo (%)</label>
-          <input
-            id={`${prefijo}-cash`}
-            name="cashDiscountPct"
-            type="text"
-            inputMode="decimal"
-            defaultValue={p ? Number(p.cashDiscountPct) * 100 : '10'}
-          />
         </div>
       </div>
 
