@@ -6,6 +6,7 @@ import { branchScopeFilter, hasPermission, type AuthUser } from '@/lib/auth/sess
 import { Decimal, money, toDecimal } from '@/lib/money';
 import { arToday, parseArDate } from '@/lib/datetime';
 import {
+  applyRounding,
   computeSalePrices,
   type MarginBasis,
   type RoundingRule,
@@ -327,7 +328,14 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       supplierName: cost.supplierName,
       branchName: cost.branchName,
       suggestedPricePerKg: prices?.pricePerKg.toFixed(2) ?? null,
-      pricePerKgCash: prices?.pricePerKgCash.toFixed(2) ?? null,
+      pricePerKgCash: suggestion.approved?.pricePerKg
+        ? applyRounding(
+            toDecimal(suggestion.approved.pricePerKg).times(
+              toDecimal(1).minus(toDecimal(suggestion.rule.cashDiscountPct)),
+            ),
+            suggestion.rule.roundingRule,
+          ).toFixed(2)
+        : prices?.pricePerKgCash.toFixed(2) ?? null,
       pricePer100g: prices?.pricePer100g.toFixed(2) ?? null,
       pricePerQuarter: prices?.pricePerQuarter.toFixed(2) ?? null,
       pricePerPieceDigital: prices?.pricePerPieceDigital?.toFixed(2) ?? null,
