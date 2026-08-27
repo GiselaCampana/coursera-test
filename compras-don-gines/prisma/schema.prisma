@@ -277,11 +277,24 @@ model Product {
   purchaseUnitWeightKg Decimal?  @db.Decimal(14, 4)
   defaultSupplierId String?
   defaultSupplier   Supplier?    @relation(fields: [defaultSupplierId], references: [id])
-  /// Margen objetivo expresado como fracción (0.45 = 45 %).
+  /// Margen base por kilo, expresado como fracción (0.45 = 45 %).
   targetMarginPct   Decimal      @default(0.45) @db.Decimal(9, 6)
   marginBasis       MarginBasis  @default(SOBRE_COSTO)
-  /// Descuento por pago en efectivo, fracción.
-  cashDiscountPct   Decimal      @default(0.10) @db.Decimal(9, 6)
+  /// Marcajes específicos por forma de venta. Si están en null usan el marcaje base.
+  alCorteHormaDigitalMarginPct Decimal? @db.Decimal(9, 6)
+  alCorteHormaCashMarginPct    Decimal? @db.Decimal(9, 6)
+  alCorteCajaCashMarginPct     Decimal? @db.Decimal(9, 6)
+  feteado100gMarginPct         Decimal? @db.Decimal(9, 6)
+  feteadoQuarterMarginPct      Decimal? @db.Decimal(9, 6)
+  feteadoPieceDigitalMarginPct Decimal? @db.Decimal(9, 6)
+  feteadoPieceCashMarginPct    Decimal? @db.Decimal(9, 6)
+  /// Para artículos que se venden también por unidad completa (lata/cajón/postre).
+  wholeUnitMarginPct           Decimal? @db.Decimal(9, 6)
+  /// Queda por compatibilidad histórica; los precios en efectivo ya no se calculan como descuento.
+  cashDiscountPct   Decimal      @default(0) @db.Decimal(9, 6)
+  /// Algunos artículos no usan PLU en la balanza y se identifican por código de barras.
+  usesPlu           Boolean      @default(true)
+  barcode           String?      @unique
   /// Regla de redondeo: NONE | NEAREST_10 | NEAREST_50 | NEAREST_100 | UP_100
   roundingRule      String       @default("NEAREST_100")
   active            Boolean      @default(true)
