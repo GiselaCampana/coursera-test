@@ -25,7 +25,17 @@ import {
   listPayments,
   reschedulePayment,
 } from '@/lib/services/payments';
-import { suggestPricesFor, approveSalePrice, getLatestCost } from '@/lib/services/pricing';
+import {
+  suggestPricesFor,
+  approveSalePrice,
+  getLatestCost,
+  updateProductPriceConfig,
+} from '@/lib/services/pricing';
+import {
+  getPriceExportRows,
+  priceRowsToPdf,
+  priceRowsToXlsx,
+} from '@/lib/services/price-exports';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
 import {
   asociarRenglonHistorico,
@@ -3728,6 +3738,92 @@ describe('recuperación administrativa de contraseña', () => {
         },
       }),
     ).toBe(1);
+  });
+});
+
+describe('precios por kilo configurables', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  it('convierte una compra por unidad a costo por kilo usando el peso neto', async () => {
+    const producto = await prisma.product.create({
+      data: {
+        internalCode: 'DULCE5',
+        normalizedName: 'Dulce lata 5 kg',
+        purchaseUnit: 'UNIT',
+        purchaseUnitWeightKg: '5',
+        saleMode: 'AL_CORTE',
+        targetMarginPct: '0.50',
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0.08',
+        roundingRule: 'NONE',
+      },
+    });
+    await prisma.costHistory.create({
+      data: {
+        productId: producto.id,
+        supplierId: escenario.proveedorErrecaldeId,
+        branchId: escenario.sucursales.devoto,
+        date: new Date(Date.UTC(2026, 7, 22)),
+        unitNetPrice: '10000',
+        unitCost: '12100',
+      },
+    });
+
+    const sugerencia = await suggestPricesFor(producto.id);
+    expect(sugerencia.cost.unitCost?.toFixed(2)).toBe('12100.00');
+    expect(sugerencia.costPerKg?.toFixed(2)).toBe('2420.00');
+    expect(sugerencia.prices?.pricePerKg.toFixed(2)).toBe('3630.00');
+    expect(sugerencia.prices?.pricePerKgCash.toFixed(2)).toBe('3339.60');
+  });
+
+  it('deja elegir marcaje, modo de venta y conversión desde Precios', async () => {
+    const productId = escenario.productos['2001'];
+
+    await updateProductPriceConfig(escenario.admin, {
+      productId,
+      targetMarginPct: '62',
+      marginBasis: 'SOBRE_COSTO',
+      cashDiscountPct: '8',
+      roundingRule: 'NEAREST_100',
+      saleMode: 'AL_CORTE',
+      purchaseUnit: 'UNIT',
+      purchaseUnitWeightKg: '3',
+    });
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
+    expect(producto.targetMarginPct.toString()).toBe('0.62');
+    expect(producto.saleMode).toBe('AL_CORTE');
+    expect(producto.purchaseUnit).toBe('UNIT');
+    expect(producto.purchaseUnitWeightKg?.toString()).toBe('3');
+    expect(producto.cashDiscountPct.toString()).toBe('0.08');
+  });
+
+  it('exporta costos y precios a PDF y Excel', async () => {
+    const productId = escenario.productos['1001'];
+    await prisma.costHistory.create({
+      data: {
+        productId,
+        supplierId: escenario.proveedorId,
+        branchId: escenario.sucursales.devoto,
+        date: new Date(Date.UTC(2026, 7, 22)),
+        unitNetPrice: '10000',
+        unitCost: '12100',
+      },
+    });
+
+    const rows = await getPriceExportRows(escenario.admin, { supplier: 'Los Calvos' });
+    expect(rows.some((r) => r.productId === productId)).toBe(true);
+
+    const pdf = priceRowsToPdf(rows, { supplier: 'Los Calvos' });
+    expect(pdf.subarray(0, 8).toString('latin1')).toContain('%PDF-1.4');
+    expect(pdf.length).toBeGreaterThan(500);
+
+    const xlsx = await priceRowsToXlsx(rows);
+    expect(xlsx.subarray(0, 2).toString('ascii')).toBe('PK');
+    expect(xlsx.length).toBeGreaterThan(1000);
   });
 });
 
