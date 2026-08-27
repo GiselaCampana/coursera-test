@@ -3532,6 +3532,37 @@ describe('importar el catálogo interno de Don Ginés', () => {
     expect(sardo!.conMovimientos).toBe(true);
   });
 
+  it('un demo viejo no bloquea por nombre al PLU real del catálogo', async () => {
+    const demo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1005' } });
+    expect(demo.normalizedName).toBe('Jamón crudo Parma');
+
+    const archivo = ['PLU;Artículo;Proveedor', '2132;Jamón Crudo Parma;Sol Naciente'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.conflictos).toEqual([]);
+    const real = await prisma.product.findUniqueOrThrow({ where: { internalCode: '2132' } });
+    expect(real.normalizedName).toBe('Jamón Crudo Parma');
+    expect(real.id).not.toBe(demo.id);
+
+    const viejo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1005' } });
+    expect(viejo.active).toBe(false);
+  });
+
+  it('desactiva los PLU demo antiguos sin historial, pero no los borra', async () => {
+    const demo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } });
+    expect(demo.active).toBe(true);
+
+    const previa = await importarCatalogo(escenario.admin, CATALOGO);
+    expect(previa.demosDesactivables.map((p) => p.plu)).toContain('1001');
+    expect((await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } })).active)
+      .toBe(true);
+
+    await importarCatalogo(escenario.admin, CATALOGO, { aplicar: true });
+    const despues = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } });
+    expect(despues.active).toBe(false);
+    expect(despues.id).toBe(demo.id);
+  });
+
   it('aprende el código del proveedor, y con eso la próxima factura entra sola', async () => {
     /*
      * Errecalde · ART-00228 → Don Ginés · PLU 1211.
@@ -3901,9 +3932,15 @@ describe('la factura de Errecalde contra el catálogo interno', () => {
     const informe = await backfillProductLinks(escenario.admin, { aplicar: true });
     expect(informe.aplicadas).toBeGreaterThan(0);
 
-    // 4. Y se completa lo derivado que faltaba: el historial de costos.
+    // 4. El propio backfill deja listo el historial de costos para Precios.
+    const costosTrasBackfill = await prisma.costHistory.count({ where: { documentId } });
+    expect(costosTrasBackfill).toBeGreaterThan(0);
+
+    // Reparar derivados queda como red de seguridad e idempotencia: si el
+    // backfill ya hizo su trabajo, no tiene que duplicar costos.
     const reparacion = await repararDerivados(escenario.admin, documentId);
-    expect(reparacion.costosCreados).toBeGreaterThan(0);
+    expect(reparacion.costosCreados).toBe(0);
+    expect(await prisma.costHistory.count({ where: { documentId } })).toBe(costosTrasBackfill);
 
     // --- Compras muestra cantidades por artículo --------------------------
     const sardoBloque = await prisma.product.findUniqueOrThrow({
@@ -3923,8 +3960,8 @@ describe('la factura de Errecalde contra el catálogo interno', () => {
     expect(porFamilia.totals.kilos).toBe('33.65');
 
     // --- Precios tiene costo para lo asociado ----------------------------
-    expect(await getLatestCost(sardoBloque.id)).not.toBeNull();
-    expect(await getLatestCost(sardoAlfonso.id)).not.toBeNull();
+    expect((await getLatestCost(sardoBloque.id)).unitCost).not.toBeNull();
+    expect((await getLatestCost(sardoAlfonso.id)).unitCost).not.toBeNull();
 
     // --- Y ningún importe se movió ---------------------------------------
     const despues = await prisma.documentItem.findMany({
