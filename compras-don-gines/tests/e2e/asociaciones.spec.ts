@@ -80,7 +80,7 @@ test.describe('asociaciones históricas', () => {
 
     // El preset queda cargado de una vez; la prueba no presupone que el
     // catálogo E2E tenga los 16 PLU reales de producción.
-    await page.getByRole('button', { name: 'Cargar 16 códigos verificados de Errecalde' }).click();
+    await page.getByRole('button', { name: 'Cargar 17 códigos verificados de Errecalde' }).click();
     await expect(page.getByLabel('CSV o texto')).toContainText('ART-00228;1211');
     await expect(page.getByLabel('CSV o texto')).toContainText('ART-00758;1551');
 
