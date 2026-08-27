@@ -295,6 +295,15 @@ export async function importarCatalogo(
   }
 
   // --- Fila por fila --------------------------------------------------------
+  const esDemoAntiguoSinHistorial = (producto: (typeof existentes)[number]): boolean => {
+    const nombreDemo = CATALOGO_DEMO_ANTIGUO.get(producto.internalCode);
+    return Boolean(
+      nombreDemo &&
+        normalizeText(nombreDemo) === normalizeText(producto.normalizedName) &&
+        !tienenHistorial.has(producto.id),
+    );
+  };
+
   const vistos = new Set<string>();
 
   for (const fila of porPlu.values()) {
@@ -312,7 +321,7 @@ export async function importarCatalogo(
      * una persona mirando los dos.
      */
     const mismoNombre = existentePorNombre.get(normalizeText(fila.nombre));
-    if (!existente && mismoNombre) {
+    if (!existente && mismoNombre && !esDemoAntiguoSinHistorial(mismoNombre)) {
       informe.conflictos.push({
         plu: fila.plu,
         motivo:
