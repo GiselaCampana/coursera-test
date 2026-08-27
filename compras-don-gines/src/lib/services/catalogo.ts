@@ -79,6 +79,12 @@ export interface InformeDeCatalogo {
   proveedoresDesconocidos: string[];
   /** Artículos que están en Compras y no vinieron en el archivo. No se borran. */
   soloEnCompras: { plu: string; nombre: string; conMovimientos: boolean }[];
+  /**
+   * PLU de demostración sembrados por versiones viejas y ausentes del catálogo
+   * real. Sólo entran acá si no tienen historial: al aplicar se desactivan, no
+   * se borran.
+   */
+  demosDesactivables: { plu: string; nombre: string }[];
   /** Códigos de proveedor que el archivo trae y quedarían aprendidos. */
   codigosPorAprender: { plu: string; proveedor: string; codigo: string }[];
   problemas: string[];
@@ -88,6 +94,27 @@ export interface InformeDeCatalogo {
 }
 
 const SIN_FAMILIA = '—';
+
+/*
+ * Catálogo de demostración de versiones anteriores.
+ *
+ * Estos PLU nunca fueron la fuente real: el propio seed los marca como datos
+ * inventados. Se usa código + nombre exacto para no desactivar por accidente un
+ * artículo legítimo que casualmente reutilice uno de esos números.
+ */
+const CATALOGO_DEMO_ANTIGUO = new Map<string, string>([
+  ['1001', 'Longaniza corta'],
+  ['1002', 'Salame Crespón'],
+  ['1003', 'Salame Milán'],
+  ['1004', 'Bondiola al papel'],
+  ['1005', 'Jamón crudo Parma'],
+  ['1006', 'Jamón cocido'],
+  ['1007', 'Jamón cocido Mont-Blanc'],
+  ['1008', 'Fiambre de pechuga de pollo ahumado y horneado'],
+  ['1009', 'Fiambre cocido de pata Zur-Linde'],
+  ['2001', 'Queso Sardo'],
+  ['2002', 'Queso Reggianito'],
+]);
 
 /**
  * Analiza el archivo y, si se pide, lo aplica.
@@ -116,6 +143,7 @@ export async function importarCatalogo(
     familiasNuevas: [],
     proveedoresDesconocidos: [],
     soloEnCompras: [],
+    demosDesactivables: [],
     codigosPorAprender: [],
     problemas: [...lectura.problemas],
     columnas: lectura.columnas,
@@ -253,13 +281,29 @@ export async function importarCatalogo(
    * decir cuáles de los que no vienen en el archivo no se podrían dar de baja
    * sin perder historial.
    */
-  const conCompras = await prisma.purchaseMovement.groupBy({
-    by: ['productId'],
-    _count: { _all: true },
-  });
+  const [conCompras, conRenglones, conCostos, conPrecios, conVentas] = await Promise.all([
+    prisma.purchaseMovement.groupBy({ by: ['productId'], _count: { _all: true } }),
+    prisma.documentItem.groupBy({ by: ['productId'], _count: { _all: true } }),
+    prisma.costHistory.groupBy({ by: ['productId'], _count: { _all: true } }),
+    prisma.salePriceHistory.groupBy({ by: ['productId'], _count: { _all: true } }),
+    prisma.salesMovement.groupBy({ by: ['productId'], _count: { _all: true } }),
+  ]);
   const tienenCompras = new Set(conCompras.map((c) => c.productId).filter(Boolean) as string[]);
+  const tienenHistorial = new Set<string>();
+  for (const grupo of [conCompras, conRenglones, conCostos, conPrecios, conVentas]) {
+    for (const fila of grupo) if (fila.productId) tienenHistorial.add(fila.productId);
+  }
 
   // --- Fila por fila --------------------------------------------------------
+  const esDemoAntiguoSinHistorial = (producto: (typeof existentes)[number]): boolean => {
+    const nombreDemo = CATALOGO_DEMO_ANTIGUO.get(producto.internalCode);
+    return Boolean(
+      nombreDemo &&
+        normalizeText(nombreDemo) === normalizeText(producto.normalizedName) &&
+        !tienenHistorial.has(producto.id),
+    );
+  };
+
   const vistos = new Set<string>();
 
   for (const fila of porPlu.values()) {
@@ -277,7 +321,7 @@ export async function importarCatalogo(
      * una persona mirando los dos.
      */
     const mismoNombre = existentePorNombre.get(normalizeText(fila.nombre));
-    if (!existente && mismoNombre) {
+    if (!existente && mismoNombre && !esDemoAntiguoSinHistorial(mismoNombre)) {
       informe.conflictos.push({
         plu: fila.plu,
         motivo:
@@ -470,6 +514,21 @@ export async function importarCatalogo(
       conMovimientos: tienenCompras.has(p.id),
     }));
 
+  informe.demosDesactivables = existentes
+    .filter((p) => {
+      if (!p.active || vistos.has(p.internalCode) || tienenHistorial.has(p.id)) return false;
+      const nombreDemo = CATALOGO_DEMO_ANTIGUO.get(p.internalCode);
+      return Boolean(nombreDemo && normalizeText(nombreDemo) === normalizeText(p.normalizedName));
+    })
+    .map((p) => ({ plu: p.internalCode, nombre: p.normalizedName }));
+
+  if (opciones.aplicar && informe.demosDesactivables.length > 0) {
+    await prisma.product.updateMany({
+      where: { internalCode: { in: informe.demosDesactivables.map((p) => p.plu) } },
+      data: { active: false },
+    });
+  }
+
   if (opciones.aplicar) {
     await recordAudit({
       userId: user.id,
@@ -487,6 +546,7 @@ export async function importarCatalogo(
         familiaDesde: origen,
         codigosAprendidos: informe.codigosPorAprender.length,
         soloEnCompras: informe.soloEnCompras.length,
+        demosDesactivados: informe.demosDesactivables.length,
       },
     });
   }
