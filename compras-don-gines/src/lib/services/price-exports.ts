@@ -372,7 +372,7 @@ export function priceRowsToManagementPdf(
     y -= 20;
 
     const xs = [28, 72, 250, 365, 450, 545, 640, 730];
-    const heads = ['ID', 'Producto', 'Proveedor', 'Costo/kg', 'Venta base', 'Modalidad 1', 'Modalidad 2', 'Marcaje'];
+    const heads = ['ID', 'Producto', 'Proveedor', 'Costo base', 'Venta base', 'Modalidad 1', 'Modalidad 2', 'Marcaje'];
     heads.forEach((h, i) => parts.push(pdfText(xs[i]!, y, 7, h, true)));
     y -= 9;
 
