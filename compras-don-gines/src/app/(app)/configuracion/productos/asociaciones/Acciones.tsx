@@ -272,14 +272,83 @@ export function ResolverAmbigua({
   if (!abierto) {
     return (
       <div className="acciones">
-        <button
-          type="button"
-          className="boton boton-secundario"
-          onClick={() => setAbierto(true)}
-        >
+        <button type="button" className="boton boton-secundario" onClick={() => setAbierto(true)}>
           Elegir el PLU…
         </button>
       </div>
+    );
+  }
+
+  if (creando) {
+    return (
+      <form action={accionNuevo} className="card card-compacta mt">
+        <input type="hidden" name="documentItemId" value={documentItemId} />
+        {estadoNuevo.error ? <p className="mensaje mensaje-error">{estadoNuevo.error}</p> : null}
+        <h3>Crear producto y asociarlo</h3>
+
+        <div className="campo">
+          <label htmlFor={`nuevo-nombre-${documentItemId}`}>Nombre</label>
+          <input
+            id={`nuevo-nombre-${documentItemId}`}
+            name="normalizedName"
+            type="text"
+            defaultValue={descripcion}
+            required
+          />
+        </div>
+
+        <label className="casilla">
+          <input type="checkbox" name="usesPlu" defaultChecked />
+          <span>Este producto usa PLU</span>
+        </label>
+
+        <div className="fila fila-2">
+          <div className="campo">
+            <label htmlFor={`nuevo-plu-${documentItemId}`}>PLU nuevo</label>
+            <input id={`nuevo-plu-${documentItemId}`} name="internalCode" type="text" />
+            <p className="ayuda">Si no usa PLU, puede quedar vacío.</p>
+          </div>
+          <div className="campo">
+            <label htmlFor={`nuevo-barcode-${documentItemId}`}>Código de barras</label>
+            <input
+              id={`nuevo-barcode-${documentItemId}`}
+              name="barcode"
+              type="text"
+              inputMode="numeric"
+              placeholder="Escanealo con lector o escribilo"
+            />
+          </div>
+        </div>
+
+        <div className="fila fila-2">
+          <div className="campo">
+            <label htmlFor={`nuevo-modo-${documentItemId}`}>Modo de venta</label>
+            <select id={`nuevo-modo-${documentItemId}`} name="saleMode" defaultValue="FETEABLE">
+              <option value="FETEABLE">Feteable</option>
+              <option value="AL_CORTE">Al corte</option>
+            </select>
+          </div>
+          <div className="campo">
+            <label htmlFor={`nuevo-unidad-${documentItemId}`}>Unidad de compra</label>
+            <select id={`nuevo-unidad-${documentItemId}`} name="purchaseUnit" defaultValue="KG">
+              <option value="KG">Kilos</option>
+              <option value="UNIT">Unidades</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="campo">
+          <label htmlFor={`nuevo-peso-${documentItemId}`}>Kg por unidad comprada, si corresponde</label>
+          <input id={`nuevo-peso-${documentItemId}`} name="purchaseUnitWeightKg" type="text" inputMode="decimal" />
+        </div>
+
+        <div className="acciones">
+          <button type="button" className="boton boton-secundario" onClick={() => setCreando(false)}>
+            Volver al catálogo
+          </button>
+          <Boton texto="Crear y asociar" cargando="Creando…" />
+        </div>
+      </form>
     );
   }
 
@@ -335,73 +404,6 @@ export function ResolverAmbigua({
         </button>
         <Boton texto="Asociar" cargando="Asociando…" />
       </div>
-
-      {creando ? (
-        <div className="card card-compacta mt">
-          <form action={accionNuevo}>
-            <input type="hidden" name="documentItemId" value={documentItemId} />
-            {estadoNuevo.error ? <p className="mensaje mensaje-error">{estadoNuevo.error}</p> : null}
-            <h3>Crear producto y asociarlo</h3>
-            <div className="campo">
-              <label htmlFor={`nuevo-nombre-${documentItemId}`}>Nombre</label>
-              <input
-                id={`nuevo-nombre-${documentItemId}`}
-                name="normalizedName"
-                type="text"
-                defaultValue={descripcion}
-                required
-              />
-            </div>
-            <label className="casilla">
-              <input type="checkbox" name="usesPlu" defaultChecked />
-              <span>Este producto usa PLU</span>
-            </label>
-            <div className="fila fila-2">
-              <div className="campo">
-                <label htmlFor={`nuevo-plu-${documentItemId}`}>PLU nuevo</label>
-                <input id={`nuevo-plu-${documentItemId}`} name="internalCode" type="text" />
-                <p className="ayuda">Si no usa PLU, puede quedar vacío.</p>
-              </div>
-              <div className="campo">
-                <label htmlFor={`nuevo-barcode-${documentItemId}`}>Código de barras</label>
-                <input
-                  id={`nuevo-barcode-${documentItemId}`}
-                  name="barcode"
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="Escanealo con lector o escribilo"
-                />
-              </div>
-            </div>
-            <div className="fila fila-2">
-              <div className="campo">
-                <label htmlFor={`nuevo-modo-${documentItemId}`}>Modo de venta</label>
-                <select id={`nuevo-modo-${documentItemId}`} name="saleMode" defaultValue="FETEABLE">
-                  <option value="FETEABLE">Feteable</option>
-                  <option value="AL_CORTE">Al corte</option>
-                </select>
-              </div>
-              <div className="campo">
-                <label htmlFor={`nuevo-unidad-${documentItemId}`}>Unidad de compra</label>
-                <select id={`nuevo-unidad-${documentItemId}`} name="purchaseUnit" defaultValue="KG">
-                  <option value="KG">Kilos</option>
-                  <option value="UNIT">Unidades</option>
-                </select>
-              </div>
-            </div>
-            <div className="campo">
-              <label htmlFor={`nuevo-peso-${documentItemId}`}>Kg por unidad comprada, si corresponde</label>
-              <input id={`nuevo-peso-${documentItemId}`} name="purchaseUnitWeightKg" type="text" inputMode="decimal" />
-            </div>
-            <div className="acciones">
-              <button type="button" className="boton boton-secundario" onClick={() => setCreando(false)}>
-                Cancelar alta
-              </button>
-              <Boton texto="Crear y asociar" cargando="Creando…" />
-            </div>
-          </form>
-        </div>
-      ) : null}
     </form>
   );
 }
