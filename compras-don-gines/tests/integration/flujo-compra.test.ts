@@ -3532,6 +3532,22 @@ describe('importar el catálogo interno de Don Ginés', () => {
     expect(sardo!.conMovimientos).toBe(true);
   });
 
+  it('un demo viejo no bloquea por nombre al PLU real del catálogo', async () => {
+    const demo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1005' } });
+    expect(demo.normalizedName).toBe('Jamón crudo Parma');
+
+    const archivo = ['PLU;Artículo;Proveedor', '2132;Jamón Crudo Parma;Sol Naciente'].join('\n');
+    const informe = await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    expect(informe.conflictos).toEqual([]);
+    const real = await prisma.product.findUniqueOrThrow({ where: { internalCode: '2132' } });
+    expect(real.normalizedName).toBe('Jamón Crudo Parma');
+    expect(real.id).not.toBe(demo.id);
+
+    const viejo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1005' } });
+    expect(viejo.active).toBe(false);
+  });
+
   it('desactiva los PLU demo antiguos sin historial, pero no los borra', async () => {
     const demo = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1001' } });
     expect(demo.active).toBe(true);
