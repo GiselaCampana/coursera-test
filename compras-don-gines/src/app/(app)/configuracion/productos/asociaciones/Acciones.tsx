@@ -2,7 +2,14 @@
 
 import { useActionState, useState } from 'react';
 import { useFormStatus } from 'react-dom';
-import { aplicarAsociaciones, resolverAsociacion, type ResultadoAsociacion } from './acciones';
+import {
+  aplicarAsociaciones,
+  resolverAsociacion,
+  analizarMapeoCodigos,
+  aplicarMapeoCodigos,
+  type ResultadoAsociacion,
+  type ResultadoMapeoCodigos,
+} from './acciones';
 
 function Boton({ texto, cargando }: { texto: string; cargando: string }) {
   const { pending } = useFormStatus();
@@ -97,6 +104,111 @@ export function Aplicar({
  * los que casi siempre son— y después el catálogo entero, para el caso en que
  * no sea ninguno de ellos.
  */
+
+
+export function ImportarMapeoCodigos({
+  supplierId,
+  supplierName,
+}: {
+  supplierId: string;
+  supplierName: string;
+}) {
+  const [texto, setTexto] = useState('');
+  const [previa, accionPrevia] = useActionState<ResultadoMapeoCodigos, FormData>(
+    analizarMapeoCodigos,
+    {},
+  );
+  const [aplicado, accionAplicar] = useActionState<ResultadoMapeoCodigos, FormData>(
+    aplicarMapeoCodigos,
+    {},
+  );
+  const informe = previa.informe;
+
+  return (
+    <div className="card">
+      <h2>Códigos confirmados de {supplierName}</h2>
+      <p className="chico medio">
+        Para cargar varias relaciones de una vez. El archivo o texto necesita dos columnas:
+        <strong> Código proveedor</strong> y <strong>PLU</strong>. Primero se muestra la vista previa;
+        recién después se aplica.
+      </p>
+
+      <form action={accionPrevia}>
+        <input type="hidden" name="supplierId" value={supplierId} />
+        <div className="campo">
+          <label htmlFor="mapeo-codigos">CSV o texto</label>
+          <textarea
+            id="mapeo-codigos"
+            name="texto"
+            rows={8}
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            placeholder={'Código proveedor;PLU\nART-00228;1211'}
+          />
+        </div>
+        {previa.error ? <p className="mensaje mensaje-error">{previa.error}</p> : null}
+        <div className="acciones">
+          <Boton texto="Ver propuesta" cargando="Analizando…" />
+        </div>
+      </form>
+
+      {informe ? (
+        <>
+          <div className="resumen-mes">
+            <div className="dato destacado">
+              <dt>Aplicables</dt>
+              <dd>{informe.aplicables.length}</dd>
+            </div>
+            <div className="dato">
+              <dt>Ya estaban</dt>
+              <dd>{informe.yaExistentes.length}</dd>
+            </div>
+            <div className="dato">
+              <dt>Conflictos</dt>
+              <dd>{informe.conflictos.length}</dd>
+            </div>
+          </div>
+
+          {informe.aplicables.length > 0 ? (
+            <ul className="lista">
+              {informe.aplicables.map((f) => (
+                <li key={f.codigoProveedor} className="fila-dato">
+                  <strong>{f.codigoProveedor}</strong> → PLU <strong>{f.plu}</strong> · {f.producto}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          {informe.conflictos.length > 0 ? (
+            <div className="mensaje mensaje-error">
+              <strong>Conflictos sin aplicar</strong>
+              <ul>
+                {informe.conflictos.map((f, i) => (
+                  <li key={`${f.codigoProveedor}-${f.plu}-${i}`}>
+                    {f.codigoProveedor || 'sin código'} → {f.plu || 'sin PLU'}: {f.motivo}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          <form action={accionAplicar}>
+            <input type="hidden" name="supplierId" value={supplierId} />
+            <input type="hidden" name="texto" value={previa.texto ?? texto} />
+            {aplicado.error ? <p className="mensaje mensaje-error">{aplicado.error}</p> : null}
+            <div className="acciones">
+              <Boton
+                texto={`Aplicar ${informe.aplicables.length} código/s`}
+                cargando="Aplicando…"
+              />
+            </div>
+          </form>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export function ResolverAmbigua({
   documentItemId,
   tieneCodigo,
