@@ -1,10 +1,11 @@
 import 'server-only';
-import { prisma } from '@/lib/db';
+import { prisma, type Prisma } from '@/lib/db';
 import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { hasPermission, type AuthUser } from '@/lib/auth/session';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
+import { toDecimal } from '@/lib/money';
 
 /**
  * Reasignación de productos a compras que quedaron sin clasificar.
@@ -75,6 +76,67 @@ export interface InformeDeBackfill {
 /** Las dos juntas: es lo que se aplica. */
 export function segurasDe(informe: InformeDeBackfill): RenglonDelInforme[] {
   return [...informe.porCodigo, ...informe.porDescripcion];
+}
+
+/**
+ * Completa CostHistory cuando se asocia una compra histórica.
+ *
+ * Compras lee PurchaseMovement, pero Precios lee CostHistory. Si el backfill
+ * sólo completa productId, la compra aparece en Compras y sigue siendo
+ * invisible para Precios.
+ */
+async function asegurarHistorialDeCosto(
+  tx: Prisma.TransactionClient,
+  renglon: {
+    documentId: string;
+    unitNetPrice: { toString(): string };
+    unitCost: { toString(): string };
+    document: {
+      supplierId: string | null;
+      branchId: string;
+      issueDate: Date | null;
+    };
+  },
+  productId: string,
+): Promise<boolean> {
+  const supplierId = renglon.document.supplierId;
+  const fecha = renglon.document.issueDate;
+  if (!supplierId || !fecha) return false;
+
+  // Tiene que haber una entrada de costo por renglón asociado, incluso si dos
+  // renglones de la misma factura terminan en el mismo PLU.
+  const [asociados, costosExistentes] = await Promise.all([
+    tx.documentItem.count({ where: { documentId: renglon.documentId, productId } }),
+    tx.costHistory.count({ where: { documentId: renglon.documentId, productId } }),
+  ]);
+  if (costosExistentes >= asociados) return false;
+
+  const previo = await tx.costHistory.findFirst({
+    where: { productId, date: { lte: fecha } },
+    orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+  });
+  const anterior = previo ? toDecimal(previo.unitCost.toString()) : null;
+  const actual = toDecimal(renglon.unitCost.toString());
+  const delta = anterior ? actual.minus(anterior) : null;
+
+  await tx.costHistory.create({
+    data: {
+      productId,
+      supplierId,
+      branchId: renglon.document.branchId,
+      documentId: renglon.documentId,
+      date: fecha,
+      unitNetPrice: renglon.unitNetPrice.toString(),
+      unitCost: actual.toString(),
+      previousUnitCost: anterior?.toString() ?? null,
+      deltaAmount: delta?.toString() ?? null,
+      deltaPct:
+        anterior && !anterior.isZero()
+          ? delta!.div(anterior).toDecimalPlaces(6).toString()
+          : null,
+    },
+  });
+  return true;
 }
 
 /**
@@ -202,30 +264,28 @@ export async function backfillProductLinks(
 
   /* Qué se le puso a cada renglón: va al asiento de auditoría. */
   const aplicadas: { renglon: string; comprobante: string; plu: string; metodo: string }[] = [];
+  let costosCreados = 0;
 
   for (const fila of seguras) {
     const renglon = renglones.find((r) => r.id === fila.documentItemId)!;
     const productId = fila.productId!;
 
-    await prisma.$transaction(async (tx) => {
+    const costoCreado = await prisma.$transaction(async (tx) => {
       await tx.documentItem.update({
         where: { id: renglon.id },
         data: { productId, matchMethod: fila.method },
       });
 
-      /*
-       * El movimiento se actualiza, no se crea.
-       *
-       * Ya existe uno por renglón desde que se confirmó el comprobante: crear
-       * otro duplicaría la compra en todos los reportes, que es peor que el
-       * problema que vinimos a arreglar. Lo único que le falta es a qué
-       * producto pertenece.
-       */
+      // El movimiento se actualiza, no se crea: ya existe uno por renglón.
       await tx.purchaseMovement.updateMany({
         where: { documentItemId: renglon.id },
         data: { productId },
       });
+
+      // Precios no lee PurchaseMovement; necesita su CostHistory.
+      return asegurarHistorialDeCosto(tx, renglon, productId);
     });
+    if (costoCreado) costosCreados += 1;
 
     informe.aplicadas += 1;
     aplicadas.push({
@@ -247,6 +307,7 @@ export async function backfillProductLinks(
       porDescripcion: informe.porDescripcion.length,
       ambiguas: informe.ambiguas.length,
       sinCoincidencia: informe.sinCoincidencia.length,
+      costosCreados,
       /*
        * Qué producto se le puso a cada renglón.
        *
@@ -293,7 +354,7 @@ export async function asociarRenglonHistorico(
   const renglon = await prisma.documentItem.findUnique({
     where: { id: documentItemId },
     include: {
-      document: { select: { supplierId: true, fullNumber: true, status: true } },
+      document: { select: { supplierId: true, fullNumber: true, status: true, branchId: true, issueDate: true } },
     },
   });
   if (!renglon) throw new NotFoundError('No encontramos ese renglón.');
@@ -346,16 +407,16 @@ export async function asociarRenglonHistorico(
     }
   }
 
-  await prisma.$transaction(async (tx) => {
+  const costoCreado = await prisma.$transaction(async (tx) => {
     await tx.documentItem.update({
       where: { id: documentItemId },
       data: { productId, matchMethod: 'MANUAL' },
     });
-    // Se actualiza el movimiento que ya existe: crear otro duplicaría la compra.
     await tx.purchaseMovement.updateMany({
       where: { documentItemId },
       data: { productId },
     });
+    return asegurarHistorialDeCosto(tx, renglon, productId);
   });
 
   await recordAudit({
@@ -370,6 +431,7 @@ export async function asociarRenglonHistorico(
       plu: producto.internalCode,
       producto: producto.normalizedName,
       codigoAprendido: aprendido,
+      costoCreado,
       resueltoAMano: true,
     },
   });
