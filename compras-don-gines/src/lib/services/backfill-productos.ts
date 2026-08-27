@@ -3,7 +3,8 @@ import { prisma, type Prisma } from '@/lib/db';
 import { ConflictError, ForbiddenError, NotFoundError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { hasPermission, type AuthUser } from '@/lib/auth/session';
-import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
+import { matchProduct, normalizarCodigo, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
+import { parsearCsv } from '@/lib/domain/catalogo';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { toDecimal } from '@/lib/money';
 
@@ -76,6 +77,190 @@ export interface InformeDeBackfill {
 /** Las dos juntas: es lo que se aplica. */
 export function segurasDe(informe: InformeDeBackfill): RenglonDelInforme[] {
   return [...informe.porCodigo, ...informe.porDescripcion];
+}
+
+
+export interface FilaMapeoCodigo {
+  codigoProveedor: string;
+  plu: string;
+  producto: string | null;
+  motivo?: string;
+}
+
+export interface InformeMapeoCodigos {
+  total: number;
+  aplicables: FilaMapeoCodigo[];
+  yaExistentes: FilaMapeoCodigo[];
+  conflictos: FilaMapeoCodigo[];
+  aplicadas: number;
+}
+
+/**
+ * Importa relaciones proveedor + código -> PLU en lote, siempre con vista previa.
+ *
+ * Es el puente entre una factura ya interpretada y el catálogo real: el código
+ * del proveedor es estable, el PLU es estable, y una vez aprendida la relación
+ * el backfill histórico y las facturas futuras dejan de depender del parecido
+ * de los nombres.
+ */
+export async function importarMapeoCodigosProveedor(
+  user: AuthUser,
+  supplierId: string,
+  texto: string,
+  opciones: { aplicar?: boolean } = {},
+): Promise<InformeMapeoCodigos> {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede administrar códigos de proveedor.');
+  }
+  const proveedor = await prisma.supplier.findUnique({ where: { id: supplierId } });
+  if (!proveedor) throw new NotFoundError('No encontramos ese proveedor.');
+
+  const filas = parsearCsv(texto.trim());
+  if (filas.length === 0) {
+    return { total: 0, aplicables: [], yaExistentes: [], conflictos: [], aplicadas: 0 };
+  }
+
+  const encabezados = filas[0].map((h) => normalizeText(h));
+  const indice = (variantes: string[]) =>
+    encabezados.findIndex((h) => variantes.includes(h));
+  const iCodigo = indice([
+    'codigo proveedor',
+    'codigo de proveedor',
+    'codigo del proveedor',
+    'supplier code',
+    'codigo',
+  ]);
+  const iPlu = indice(['plu', 'codigo interno', 'internal code']);
+
+  if (iCodigo < 0 || iPlu < 0) {
+    throw new ConflictError(
+      'El archivo necesita dos columnas: Código proveedor y PLU.',
+    );
+  }
+
+  const productos = await prisma.product.findMany({
+    select: { id: true, internalCode: true, normalizedName: true },
+  });
+  const porPlu = new Map(productos.map((p) => [p.internalCode, p]));
+  const aliases = await prisma.productAlias.findMany({
+    where: { supplierId, supplierCode: { not: null } },
+    select: { productId: true, supplierCode: true },
+  });
+  const dueno = new Map(
+    aliases
+      .filter((a) => a.supplierCode)
+      .map((a) => [normalizarCodigo(a.supplierCode!), a.productId]),
+  );
+
+  const informe: InformeMapeoCodigos = {
+    total: 0,
+    aplicables: [],
+    yaExistentes: [],
+    conflictos: [],
+    aplicadas: 0,
+  };
+  const vistos = new Map<string, string>();
+
+  for (let n = 1; n < filas.length; n++) {
+    const codigoProveedor = (filas[n][iCodigo] ?? '').trim();
+    const plu = (filas[n][iPlu] ?? '').trim();
+    if (!codigoProveedor && !plu) continue;
+    informe.total += 1;
+
+    if (!codigoProveedor || !plu) {
+      informe.conflictos.push({
+        codigoProveedor,
+        plu,
+        producto: null,
+        motivo: 'Falta el código del proveedor o el PLU.',
+      });
+      continue;
+    }
+
+    const producto = porPlu.get(plu);
+    if (!producto) {
+      informe.conflictos.push({
+        codigoProveedor,
+        plu,
+        producto: null,
+        motivo: `El PLU ${plu} no existe en el catálogo Don Ginés.`,
+      });
+      continue;
+    }
+
+    const clave = normalizarCodigo(codigoProveedor);
+    const repetido = vistos.get(clave);
+    if (repetido && repetido !== plu) {
+      informe.conflictos.push({
+        codigoProveedor,
+        plu,
+        producto: producto.normalizedName,
+        motivo: `El mismo código aparece también asociado al PLU ${repetido} en este archivo.`,
+      });
+      continue;
+    }
+    vistos.set(clave, plu);
+
+    const actual = dueno.get(clave);
+    if (actual === producto.id) {
+      informe.yaExistentes.push({
+        codigoProveedor,
+        plu,
+        producto: producto.normalizedName,
+      });
+      continue;
+    }
+    if (actual && actual !== producto.id) {
+      const otro = productos.find((p) => p.id === actual);
+      informe.conflictos.push({
+        codigoProveedor,
+        plu,
+        producto: producto.normalizedName,
+        motivo:
+          `Ese código ya pertenece al PLU ${otro?.internalCode ?? '?'} · ` +
+          `${otro?.normalizedName ?? 'otro producto'}.`,
+      });
+      continue;
+    }
+
+    informe.aplicables.push({
+      codigoProveedor,
+      plu,
+      producto: producto.normalizedName,
+    });
+  }
+
+  if (!opciones.aplicar || informe.aplicables.length === 0) return informe;
+
+  await prisma.$transaction(async (tx) => {
+    for (const fila of informe.aplicables) {
+      const producto = porPlu.get(fila.plu)!;
+      await learnProductAlias(tx, {
+        productId: producto.id,
+        supplierId,
+        supplierCode: fila.codigoProveedor,
+        description: producto.normalizedName,
+      });
+      informe.aplicadas += 1;
+    }
+  });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_UPDATED,
+    entity: 'Supplier',
+    entityId: supplierId,
+    after: {
+      proveedor: proveedor.tradeName,
+      codigosImportados: informe.aplicadas,
+      relaciones: informe.aplicables.map((f) => ({
+        codigo: f.codigoProveedor,
+        plu: f.plu,
+      })),
+    },
+  });
+
+  return informe;
 }
 
 /**
