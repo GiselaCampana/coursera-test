@@ -63,6 +63,24 @@ export function applyRounding(value: MoneyInput, rule: RoundingRule): Decimal {
   }
 }
 
+
+export function priceFromMargin(
+  cost: MoneyInput,
+  basis: MarginBasis,
+  margin: MoneyInput,
+  roundingRule: RoundingRule = 'NEAREST_100',
+): Decimal {
+  const base = money(cost);
+  const m = toDecimal(margin);
+  if (m.isNegative() || m.gte(1)) {
+    throw new Error('El marcaje tiene que estar entre 0 % y menos de 100 %.');
+  }
+  const raw = basis === 'SOBRE_VENTA'
+    ? base.div(ONE.minus(m))
+    : base.times(ONE.plus(m));
+  return applyRounding(raw, roundingRule);
+}
+
 export interface PricingConfig {
   marginBasis: MarginBasis;
   /** Fracción: 0,45 = 45 %. */
