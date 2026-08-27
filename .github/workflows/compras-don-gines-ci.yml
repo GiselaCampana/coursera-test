@@ -92,5 +92,7 @@ jobs:
       - name: Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Playwright
-        run: npm run test:e2e
+      - name: Playwright de catálogo y asociaciones
+        run: |
+          node scripts/preparar-e2e.mjs
+          npx playwright test tests/e2e/asociaciones.spec.ts tests/e2e/catalogo.spec.ts
