@@ -515,6 +515,99 @@ export async function backfillProductLinks(
   return informe;
 }
 
+export interface CrearProductoDesdeRenglonInput {
+  documentItemId: string;
+  internalCode?: string | null;
+  normalizedName: string;
+  usesPlu: boolean;
+  barcode?: string | null;
+  saleMode: 'FETEABLE' | 'AL_CORTE';
+  purchaseUnit: 'KG' | 'UNIT';
+  purchaseUnitWeightKg?: string | null;
+}
+
+/**
+ * Da de alta un artículo que todavía no existe y asocia el renglón histórico
+ * en el mismo flujo. Sirve para incorporaciones reales del surtido: no obliga
+ * a inventar una asociación con un PLU viejo sólo para poder confirmar la compra.
+ */
+export async function crearProductoDesdeRenglon(
+  user: AuthUser,
+  input: CrearProductoDesdeRenglonInput,
+) {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede crear productos.');
+  }
+
+  const renglon = await prisma.documentItem.findUnique({
+    where: { id: input.documentItemId },
+    include: { document: { select: { supplierId: true, status: true } } },
+  });
+  if (!renglon) throw new NotFoundError('No encontramos ese renglón.');
+  if (renglon.productId) throw new ConflictError('Ese renglón ya está asociado a un producto.');
+  if (renglon.document.status !== 'VALIDADO') {
+    throw new ConflictError('Sólo se pueden resolver compras ya validadas desde esta pantalla.');
+  }
+
+  const nombre = input.normalizedName.trim();
+  const barcode = (input.barcode ?? '').trim() || null;
+  let internalCode = (input.internalCode ?? '').trim();
+
+  if (!nombre) throw new ConflictError('Escribí el nombre del producto nuevo.');
+  if (input.usesPlu && !internalCode) {
+    throw new ConflictError('Para un producto con PLU, escribí el PLU nuevo.');
+  }
+  if (!input.usesPlu && !barcode) {
+    throw new ConflictError('Para un producto sin PLU, cargá el código de barras.');
+  }
+  if (!input.usesPlu && !internalCode) internalCode = `BC-${barcode}`;
+
+  const [pluTomado, barcodeTomado] = await Promise.all([
+    prisma.product.findUnique({ where: { internalCode } }),
+    barcode ? prisma.product.findUnique({ where: { barcode } }) : Promise.resolve(null),
+  ]);
+  if (pluTomado) {
+    throw new ConflictError(`El código interno ${internalCode} ya existe. Buscalo en el listado y asociá ese producto.`);
+  }
+  if (barcodeTomado) {
+    throw new ConflictError(`El código de barras ${barcode} ya pertenece a ${barcodeTomado.normalizedName}.`);
+  }
+
+  const peso = (input.purchaseUnitWeightKg ?? '').trim();
+  if (peso && toDecimal(peso).lte(0)) {
+    throw new ConflictError('Los kilos por unidad tienen que ser mayores a cero.');
+  }
+
+  const producto = await prisma.product.create({
+    data: {
+      internalCode,
+      normalizedName: nombre,
+      usesPlu: input.usesPlu,
+      barcode,
+      saleMode: input.saleMode,
+      purchaseUnit: input.purchaseUnit,
+      purchaseUnitWeightKg:
+        input.purchaseUnit === 'UNIT' && peso ? toDecimal(peso).toString() : null,
+      cashDiscountPct: '0',
+    },
+  });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.PRODUCT_UPDATED,
+    entity: 'Product',
+    entityId: producto.id,
+    after: {
+      creadoDesdeCompra: renglon.id,
+      identificacion: input.usesPlu ? internalCode : barcode,
+      nombre,
+    },
+  });
+
+  await asociarRenglonHistorico(user, renglon.id, producto.id, { aprenderCodigo: true });
+  return producto;
+}
+
 /**
  * Resuelve a mano un renglón histórico que el reconocimiento dejó dudoso.
  *
