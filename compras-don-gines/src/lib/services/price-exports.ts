@@ -3,8 +3,7 @@ import 'server-only';
 import JSZip from 'jszip';
 import type { AuthUser } from '@/lib/auth/session';
 import { getPriceBoard, type PriceBoardRow } from '@/lib/services/pricing';
-import { applyRounding } from '@/lib/domain/pricing';
-import { formatARS, formatRate, toDecimal } from '@/lib/money';
+import { formatARS, formatRate } from '@/lib/money';
 import { formatDateAr } from '@/lib/datetime';
 
 export interface PriceExportFilters {
@@ -14,7 +13,6 @@ export interface PriceExportFilters {
 
 export interface PriceExportRow extends PriceBoardRow {
   salePricePerKg: string | null;
-  salePricePerKgCash: string | null;
 }
 
 export async function getPriceExportRows(
@@ -26,16 +24,10 @@ export async function getPriceExportRows(
     .filter((r) => r.purchaseUnitCost !== null)
     .filter((r) => !filters.category || r.category === filters.category)
     .filter((r) => !filters.supplier || r.supplierName === filters.supplier)
-    .map((r) => {
-      const salePricePerKg = r.approvedPricePerKg ?? r.suggestedPricePerKg;
-      const salePricePerKgCash = salePricePerKg
-        ? applyRounding(
-            toDecimal(salePricePerKg).times(toDecimal(1).minus(toDecimal(r.cashDiscountPct))),
-            r.roundingRule,
-          ).toFixed(2)
-        : null;
-      return { ...r, salePricePerKg, salePricePerKgCash };
-    });
+    .map((r) => ({
+      ...r,
+      salePricePerKg: r.approvedPricePerKg ?? r.suggestedPricePerKg,
+    }));
 }
 
 function xml(s: string): string {
@@ -66,9 +58,15 @@ function xlsxCell(ref: string, value: string | number | null, style?: number): s
   return `<c r="${ref}" t="inlineStr"${styleAttr}><is><t xml:space="preserve">${xml(String(value))}</t></is></c>`;
 }
 
+function n(v: string | null): number | null {
+  return v === null ? null : Number(v);
+}
+
 export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
   const headers = [
+    'Identificador',
     'PLU',
+    'Código de barras',
     'Producto',
     'Tipo',
     'Proveedor',
@@ -77,47 +75,83 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     'Kg por unidad comprada',
     'Costo de compra',
     'Costo por kg',
-    'Marcaje',
-    'Precio venta por kg',
-    'Precio efectivo por kg',
-    'Precio aprobado por kg',
+    'Marcaje base',
+    'Marcaje horma digital',
+    'Marcaje horma efectivo',
+    'Marcaje caja efectivo',
+    'Marcaje 100 g',
+    'Marcaje 1/4 kg',
+    'Marcaje pieza digital',
+    'Marcaje pieza efectivo',
+    'Marcaje unidad entera',
+    'Precio por kilo',
+    'Horma digital · $/kg',
+    'Horma efectivo · $/kg',
+    'Caja efectivo · $/kg',
+    '100 g · $/kg',
+    '1/4 kg · $/kg',
+    'Pieza digital · $/kg',
+    'Pieza efectivo · $/kg',
+    'Unidad/lata/cajón entero',
+    'Precio base aprobado/kg',
     'Fecha último costo',
   ];
 
   const data: Array<Array<string | number | null>> = [
     headers,
     ...rows.map((r) => [
-      r.internalCode,
+      r.usesPlu ? r.internalCode : r.barcode ?? r.internalCode,
+      r.usesPlu ? r.internalCode : '',
+      r.barcode ?? '',
       r.name,
       r.category ?? '',
       r.supplierName ?? '',
       r.saleMode === 'AL_CORTE' ? 'Al corte' : 'Feteable',
       r.purchaseUnit === 'UNIT' ? 'Unidad' : 'Kg',
       r.purchaseUnitWeightKg ? Number(r.purchaseUnitWeightKg) : null,
-      r.purchaseUnitCost ? Number(r.purchaseUnitCost) : null,
-      r.lastUnitCost ? Number(r.lastUnitCost) : null,
+      n(r.purchaseUnitCost),
+      n(r.lastUnitCost),
       Number(r.targetMarginPct),
-      r.salePricePerKg ? Number(r.salePricePerKg) : null,
-      r.salePricePerKgCash ? Number(r.salePricePerKgCash) : null,
-      r.approvedPricePerKg ? Number(r.approvedPricePerKg) : null,
+      r.alCorteHormaDigitalMarginPct ? Number(r.alCorteHormaDigitalMarginPct) : Number(r.targetMarginPct),
+      r.alCorteHormaCashMarginPct ? Number(r.alCorteHormaCashMarginPct) : Number(r.targetMarginPct),
+      r.alCorteCajaCashMarginPct ? Number(r.alCorteCajaCashMarginPct) : Number(r.targetMarginPct),
+      r.feteado100gMarginPct ? Number(r.feteado100gMarginPct) : Number(r.targetMarginPct),
+      r.feteadoQuarterMarginPct ? Number(r.feteadoQuarterMarginPct) : Number(r.targetMarginPct),
+      r.feteadoPieceDigitalMarginPct ? Number(r.feteadoPieceDigitalMarginPct) : Number(r.targetMarginPct),
+      r.feteadoPieceCashMarginPct ? Number(r.feteadoPieceCashMarginPct) : Number(r.targetMarginPct),
+      r.wholeUnitMarginPct ? Number(r.wholeUnitMarginPct) : Number(r.targetMarginPct),
+      n(r.salePricePerKg),
+      n(r.alCorteHormaDigitalKg),
+      n(r.alCorteHormaCashKg),
+      n(r.alCorteCajaCashKg),
+      n(r.feteado100gKg),
+      n(r.feteadoQuarterKg),
+      n(r.feteadoPieceDigitalKg),
+      n(r.feteadoPieceCashKg),
+      n(r.wholeUnitTotal),
+      n(r.approvedPricePerKg),
       r.lastCostDate ? formatDateAr(r.lastCostDate) : '',
     ]),
   ];
+
+  const moneyColumns = new Set([10, 11, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]);
+  const pctColumns = new Set([12, 13, 14, 15, 16, 17, 18, 19, 20]);
 
   const rowsXml = data
     .map((row, ri) => {
       const cells = row
         .map((value, ci) => {
           const ref = `${col(ci + 1)}${ri + 1}`;
-          const isMoney = ri > 0 && [8, 9, 11, 12, 13].includes(ci + 1);
-          const isPct = ri > 0 && ci + 1 === 10;
-          return xlsxCell(ref, value, ri === 0 ? 1 : isMoney ? 2 : isPct ? 3 : undefined);
+          const oneBased = ci + 1;
+          const style = ri === 0 ? 1 : moneyColumns.has(oneBased) ? 2 : pctColumns.has(oneBased) ? 3 : undefined;
+          return xlsxCell(ref, value, style);
         })
         .join('');
       return `<row r="${ri + 1}">${cells}</row>`;
     })
     .join('');
 
+  const lastCol = col(headers.length);
   const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetViews>
@@ -126,12 +160,13 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     </sheetView>
   </sheetViews>
   <cols>
-    <col min="1" max="1" width="12" customWidth="1"/>
-    <col min="2" max="2" width="34" customWidth="1"/>
-    <col min="3" max="6" width="20" customWidth="1"/>
-    <col min="7" max="14" width="18" customWidth="1"/>
+    <col min="1" max="3" width="18" customWidth="1"/>
+    <col min="4" max="4" width="36" customWidth="1"/>
+    <col min="5" max="9" width="20" customWidth="1"/>
+    <col min="10" max="${headers.length}" width="18" customWidth="1"/>
   </cols>
-  <sheetViews>\n    <sheetView workbookViewId="0">\n      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>\n    </sheetView>\n  </sheetViews>\n  <sheetData>${rowsXml}</sheetData>\n  <autoFilter ref="A1:N${data.length}"/>
+  <sheetData>${rowsXml}</sheetData>
+  <autoFilter ref="A1:${lastCol}${data.length}"/>
 </worksheet>`;
 
   const zip = new JSZip();
@@ -191,76 +226,15 @@ function pdfEscapeLatin1(s: string): Buffer {
   return Buffer.from(escaped, 'latin1');
 }
 
-function pdfText(x: number, y: number, size: number, text: string, bold = false): Buffer {
+function pdfText(x: number, y: number, size: number, value: string, bold = false): Buffer {
   return Buffer.concat([
     Buffer.from(`BT /F${bold ? 2 : 1} ${size} Tf ${x} ${y} Td (`, 'ascii'),
-    pdfEscapeLatin1(text),
+    pdfEscapeLatin1(value),
     Buffer.from(') Tj ET\n', 'ascii'),
   ]);
 }
 
-export function priceRowsToPdf(
-  rows: PriceExportRow[],
-  filters: PriceExportFilters = {},
-): Buffer {
-  const pageW = 842;
-  const pageH = 595;
-  const margin = 32;
-  const lineH = 15;
-  const bodySize = 8;
-  const perPage = 30;
-  const pages: Buffer[] = [];
-
-  for (let start = 0; start < Math.max(rows.length, 1); start += perPage) {
-    const chunk = rows.slice(start, start + perPage);
-    const parts: Buffer[] = [];
-    let y = pageH - 36;
-
-    parts.push(pdfText(margin, y, 16, 'Don Gines - Lista de precios y costos', true));
-    y -= 20;
-    const filtros = [
-      filters.category ? `Tipo: ${filters.category}` : null,
-      filters.supplier ? `Proveedor: ${filters.supplier}` : null,
-    ].filter(Boolean).join('   |   ');
-    if (filtros) {
-      parts.push(pdfText(margin, y, 9, filtros));
-      y -= 18;
-    }
-
-    const xs = [32, 76, 260, 415, 505, 595, 690];
-    const heads = ['PLU', 'Producto', 'Proveedor', 'Costo/kg', 'Venta/kg', 'Efectivo/kg', 'Marcaje'];
-    heads.forEach((h, i) => parts.push(pdfText(xs[i]!, y, 8, h, true)));
-    y -= 8;
-    parts.push(Buffer.from(`${margin} ${y} m ${pageW - margin} ${y} l S\n`, 'ascii'));
-    y -= 13;
-
-    if (chunk.length === 0) {
-      parts.push(pdfText(margin, y, 10, 'No hay productos para los filtros elegidos.'));
-    }
-
-    for (const r of chunk) {
-      const nombre = r.name.length > 29 ? r.name.slice(0, 28) + '…' : r.name;
-      const prov = (r.supplierName ?? '').length > 21
-        ? (r.supplierName ?? '').slice(0, 20) + '…'
-        : (r.supplierName ?? '');
-      const vals = [
-        r.internalCode,
-        nombre,
-        prov,
-        r.lastUnitCost ? formatARS(r.lastUnitCost) : '-',
-        r.salePricePerKg ? formatARS(r.salePricePerKg) : '-',
-        r.salePricePerKgCash ? formatARS(r.salePricePerKgCash) : '-',
-        formatRate(r.targetMarginPct),
-      ];
-      vals.forEach((v, i) => parts.push(pdfText(xs[i]!, y, bodySize, v)));
-      y -= lineH;
-    }
-
-    pages.push(Buffer.concat(parts));
-  }
-
-  // PDF object numbers: 1 catalog, 2 pages, 3 font regular, 4 font bold,
-  // then for each page: page object, content object.
+function makePdf(pages: Buffer[], pageW: number, pageH: number): Buffer {
   const objects: Buffer[] = [];
   objects[1] = Buffer.from('<< /Type /Catalog /Pages 2 0 R >>', 'ascii');
   const pageObjectNumbers = pages.map((_, i) => 5 + i * 2);
@@ -309,4 +283,119 @@ export function priceRowsToPdf(
   const trailer = `trailer\n<< /Size ${objects.length} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
   bodyParts.push(Buffer.from(xrefLines.join('') + trailer, 'ascii'));
   return Buffer.concat(bodyParts);
+}
+
+function filtersLabel(filters: PriceExportFilters): string {
+  return [
+    filters.category ? `Tipo: ${filters.category}` : null,
+    filters.supplier ? `Proveedor: ${filters.supplier}` : null,
+  ].filter(Boolean).join('   |   ');
+}
+
+function employeePriceText(r: PriceExportRow): string[] {
+  if (r.saleMode === 'AL_CORTE') {
+    return [
+      `Kilo: ${r.salePricePerKg ? formatARS(r.salePricePerKg) : '-'}`,
+      `Horma digital: ${r.alCorteHormaDigitalKg ? formatARS(r.alCorteHormaDigitalKg) + '/kg' : '-'}`,
+      `Horma efectivo: ${r.alCorteHormaCashKg ? formatARS(r.alCorteHormaCashKg) + '/kg' : '-'}`,
+      `Caja efectivo: ${r.alCorteCajaCashKg ? formatARS(r.alCorteCajaCashKg) + '/kg' : '-'}`,
+      ...(r.wholeUnitTotal ? [`Unidad entera: ${formatARS(r.wholeUnitTotal)}`] : []),
+    ];
+  }
+  return [
+    `100 g: ${r.feteado100gKg ? formatARS(r.feteado100gKg) + '/kg' : '-'}`,
+    `1/4 kg: ${r.feteadoQuarterKg ? formatARS(r.feteadoQuarterKg) + '/kg' : '-'}`,
+    `Pieza digital: ${r.feteadoPieceDigitalKg ? formatARS(r.feteadoPieceDigitalKg) + '/kg' : '-'}`,
+    `Pieza efectivo: ${r.feteadoPieceCashKg ? formatARS(r.feteadoPieceCashKg) + '/kg' : '-'}`,
+    ...(r.wholeUnitTotal ? [`Unidad entera: ${formatARS(r.wholeUnitTotal)}`] : []),
+  ];
+}
+
+export function priceRowsToEmployeePdf(
+  rows: PriceExportRow[],
+  filters: PriceExportFilters = {},
+): Buffer {
+  const pageW = 595;
+  const pageH = 842;
+  const margin = 36;
+  const perPage = 13;
+  const pages: Buffer[] = [];
+
+  for (let start = 0; start < Math.max(rows.length, 1); start += perPage) {
+    const chunk = rows.slice(start, start + perPage);
+    const parts: Buffer[] = [];
+    let y = pageH - 42;
+    parts.push(pdfText(margin, y, 17, 'Don Gines - Lista de precios de venta', true));
+    y -= 20;
+    parts.push(pdfText(margin, y, 9, filtersLabel(filters) || 'Todos los productos'));
+    y -= 25;
+
+    if (chunk.length === 0) {
+      parts.push(pdfText(margin, y, 10, 'No hay productos para los filtros elegidos.'));
+    }
+
+    for (const r of chunk) {
+      const id = r.usesPlu ? `PLU ${r.internalCode}` : `Cod. barras ${r.barcode ?? '-'}`;
+      parts.push(pdfText(margin, y, 10, `${r.name}  ·  ${id}`, true));
+      y -= 13;
+      const text = employeePriceText(r);
+      parts.push(pdfText(margin + 8, y, 8, text.join('   |   ')));
+      y -= 21;
+    }
+    pages.push(Buffer.concat(parts));
+  }
+  return makePdf(pages, pageW, pageH);
+}
+
+export function priceRowsToManagementPdf(
+  rows: PriceExportRow[],
+  filters: PriceExportFilters = {},
+): Buffer {
+  const pageW = 842;
+  const pageH = 595;
+  const margin = 28;
+  const perPage = 24;
+  const pages: Buffer[] = [];
+
+  for (let start = 0; start < Math.max(rows.length, 1); start += perPage) {
+    const chunk = rows.slice(start, start + perPage);
+    const parts: Buffer[] = [];
+    let y = pageH - 34;
+    parts.push(pdfText(margin, y, 15, 'Don Gines - Precios, costos y marcajes', true));
+    y -= 18;
+    parts.push(pdfText(margin, y, 8, filtersLabel(filters) || 'Todos los productos'));
+    y -= 20;
+
+    const xs = [28, 72, 250, 365, 450, 545, 640, 730];
+    const heads = ['ID', 'Producto', 'Proveedor', 'Costo/kg', 'Venta base', 'Modalidad 1', 'Modalidad 2', 'Marcaje'];
+    heads.forEach((h, i) => parts.push(pdfText(xs[i]!, y, 7, h, true)));
+    y -= 9;
+
+    for (const r of chunk) {
+      const ident = r.usesPlu ? r.internalCode : r.barcode ?? r.internalCode;
+      const nombre = r.name.length > 27 ? r.name.slice(0, 26) + '...' : r.name;
+      const prov = (r.supplierName ?? '').length > 16 ? (r.supplierName ?? '').slice(0, 15) + '...' : (r.supplierName ?? '');
+      const modality1 = r.saleMode === 'AL_CORTE' ? r.alCorteHormaDigitalKg : r.feteado100gKg;
+      const modality2 = r.saleMode === 'AL_CORTE' ? r.alCorteHormaCashKg : r.feteadoPieceCashKg;
+      const vals = [
+        ident,
+        nombre,
+        prov,
+        r.lastUnitCost ? formatARS(r.lastUnitCost) : '-',
+        r.salePricePerKg ? formatARS(r.salePricePerKg) : '-',
+        modality1 ? formatARS(modality1) : '-',
+        modality2 ? formatARS(modality2) : '-',
+        formatRate(r.targetMarginPct),
+      ];
+      vals.forEach((v, i) => parts.push(pdfText(xs[i]!, y, 7, v)));
+      y -= 15;
+    }
+    pages.push(Buffer.concat(parts));
+  }
+  return makePdf(pages, pageW, pageH);
+}
+
+// Compatibilidad con llamadas/tests anteriores: el PDF genérico es el completo.
+export function priceRowsToPdf(rows: PriceExportRow[], filters: PriceExportFilters = {}): Buffer {
+  return priceRowsToManagementPdf(rows, filters);
 }
