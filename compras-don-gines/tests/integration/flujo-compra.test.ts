@@ -1,3 +1,4 @@
+import JSZip from 'jszip';
 import { describe, it, expect, beforeEach } from 'vitest';
 import { prisma } from '@/lib/db';
 import { getStorage, buildDocumentKey } from '@/lib/storage';
@@ -34,6 +35,8 @@ import {
 import {
   getPriceExportRows,
   priceRowsToPdf,
+  priceRowsToEmployeePdf,
+  priceRowsToManagementPdf,
   priceRowsToXlsx,
 } from '@/lib/services/price-exports';
 import { getPurchaseReport, purchaseReportToCsv } from '@/lib/services/reports';
@@ -41,6 +44,7 @@ import {
   asociarRenglonHistorico,
   backfillProductLinks,
   importarMapeoCodigosProveedor,
+  crearProductoDesdeRenglon,
   segurasDe,
 } from '@/lib/services/backfill-productos';
 import { saveSupplierCode, saveSupplierTerm } from '@/lib/services/admin';
@@ -3747,7 +3751,7 @@ describe('precios por kilo configurables', () => {
     escenario = await sembrarEscenario();
   });
 
-  it('convierte una compra por unidad a costo por kilo usando el peso neto', async () => {
+  it('convierte compra por unidad a costo/kg y usa marcajes independientes', async () => {
     const producto = await prisma.product.create({
       data: {
         internalCode: 'DULCE5',
@@ -3756,8 +3760,12 @@ describe('precios por kilo configurables', () => {
         purchaseUnitWeightKg: '5',
         saleMode: 'AL_CORTE',
         targetMarginPct: '0.50',
+        alCorteHormaDigitalMarginPct: '0.40',
+        alCorteHormaCashMarginPct: '0.30',
+        alCorteCajaCashMarginPct: '0.25',
+        wholeUnitMarginPct: '0.20',
         marginBasis: 'SOBRE_COSTO',
-        cashDiscountPct: '0.08',
+        cashDiscountPct: '0',
         roundingRule: 'NONE',
       },
     });
@@ -3775,18 +3783,24 @@ describe('precios por kilo configurables', () => {
     const sugerencia = await suggestPricesFor(producto.id);
     expect(sugerencia.cost.unitCost?.toFixed(2)).toBe('12100.00');
     expect(sugerencia.costPerKg?.toFixed(2)).toBe('2420.00');
-    expect(sugerencia.prices?.pricePerKg.toFixed(2)).toBe('3630.00');
-    expect(sugerencia.prices?.pricePerKgCash.toFixed(2)).toBe('3339.60');
+    expect(sugerencia.tiers.baseKg?.toFixed(2)).toBe('3630.00');
+    expect(sugerencia.tiers.alCorteHormaDigitalKg?.toFixed(2)).toBe('3388.00');
+    expect(sugerencia.tiers.alCorteHormaCashKg?.toFixed(2)).toBe('3146.00');
+    expect(sugerencia.tiers.alCorteCajaCashKg?.toFixed(2)).toBe('3025.00');
+    expect(sugerencia.tiers.wholeUnitTotal?.toFixed(2)).toBe('14520.00');
   });
 
-  it('deja elegir marcaje, modo de venta y conversión desde Precios', async () => {
+  it('deja elegir los marcajes de cada modalidad desde Precios', async () => {
     const productId = escenario.productos['2001'];
 
     await updateProductPriceConfig(escenario.admin, {
       productId,
       targetMarginPct: '62',
       marginBasis: 'SOBRE_COSTO',
-      cashDiscountPct: '8',
+      alCorteHormaDigitalMarginPct: '50',
+      alCorteHormaCashMarginPct: '40',
+      alCorteCajaCashMarginPct: '30',
+      wholeUnitMarginPct: '20',
       roundingRule: 'NEAREST_100',
       saleMode: 'AL_CORTE',
       purchaseUnit: 'UNIT',
@@ -3795,13 +3809,15 @@ describe('precios por kilo configurables', () => {
 
     const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
     expect(producto.targetMarginPct.toString()).toBe('0.62');
-    expect(producto.saleMode).toBe('AL_CORTE');
-    expect(producto.purchaseUnit).toBe('UNIT');
+    expect(producto.alCorteHormaDigitalMarginPct?.toString()).toBe('0.5');
+    expect(producto.alCorteHormaCashMarginPct?.toString()).toBe('0.4');
+    expect(producto.alCorteCajaCashMarginPct?.toString()).toBe('0.3');
+    expect(producto.wholeUnitMarginPct?.toString()).toBe('0.2');
+    expect(producto.cashDiscountPct.toString()).toBe('0');
     expect(producto.purchaseUnitWeightKg?.toString()).toBe('3');
-    expect(producto.cashDiscountPct.toString()).toBe('0.08');
   });
 
-  it('exporta costos y precios a PDF y Excel', async () => {
+  it('exporta los dos PDF y un Excel válido con datos', async () => {
     const productId = escenario.productos['1001'];
     await prisma.costHistory.create({
       data: {
@@ -3818,12 +3834,20 @@ describe('precios por kilo configurables', () => {
     expect(rows.some((r) => r.productId === productId)).toBe(true);
 
     const pdf = priceRowsToPdf(rows, { supplier: 'Los Calvos' });
-    expect(pdf.subarray(0, 8).toString('latin1')).toContain('%PDF-1.4');
-    expect(pdf.length).toBeGreaterThan(500);
+    const empleados = priceRowsToEmployeePdf(rows, { supplier: 'Los Calvos' });
+    const gestion = priceRowsToManagementPdf(rows, { supplier: 'Los Calvos' });
+    for (const archivo of [pdf, empleados, gestion]) {
+      expect(archivo.subarray(0, 8).toString('latin1')).toContain('%PDF-1.4');
+      expect(archivo.length).toBeGreaterThan(500);
+    }
 
     const xlsx = await priceRowsToXlsx(rows);
     expect(xlsx.subarray(0, 2).toString('ascii')).toBe('PK');
-    expect(xlsx.length).toBeGreaterThan(1000);
+    const zip = await JSZip.loadAsync(xlsx);
+    const hoja = await zip.file('xl/worksheets/sheet1.xml')!.async('string');
+    expect(hoja).toContain('Los Calvos');
+    expect(hoja).toContain('Precios');
+    expect((hoja.match(/<sheetViews>/g) ?? [])).toHaveLength(1);
   });
 });
 
