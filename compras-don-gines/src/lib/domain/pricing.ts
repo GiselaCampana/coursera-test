@@ -82,6 +82,8 @@ export interface SalePrices {
   suggestedPricePerKg: Decimal;
   /** Precio por kilo ya redondeado: es el que se muestra y se aprueba. */
   pricePerKg: Decimal;
+  /** Precio por kilo abonando en efectivo, después del descuento configurado. */
+  pricePerKgCash: Decimal;
   pricePer100g: Decimal;
   pricePerQuarter: Decimal;
   pricePerPieceDigital: Decimal | null;
@@ -133,6 +135,11 @@ export function computeSalePrices(unitCost: MoneyInput, config: PricingConfig): 
       ? null
       : toDecimal(config.pieceWeightKg);
 
+  const pricePerKgCash = applyRounding(
+    pricePerKg.times(ONE.minus(cashDiscountPct)),
+    roundingRule,
+  );
+
   const perPieceDigital =
     pieceWeightKg && pieceWeightKg.gt(0)
       ? applyRounding(pricePerKg.times(pieceWeightKg), roundingRule)
@@ -145,6 +152,7 @@ export function computeSalePrices(unitCost: MoneyInput, config: PricingConfig): 
     costBasis,
     suggestedPricePerKg,
     pricePerKg,
+    pricePerKgCash,
     pricePer100g: money(pricePerKg.div(10)),
     pricePerQuarter: money(pricePerKg.div(4)),
     pricePerPieceDigital: perPieceDigital,
