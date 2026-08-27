@@ -57,9 +57,9 @@ export function Aplicar({
       <h2>Aplicar las asociaciones seguras</h2>
       <p className="chico medio">
         Se van a completar {cantidad} renglón/es que hoy están sin producto
-        {proveedorNombre ? `, de ${proveedorNombre}` : ''}. Se toca sólo la asociación: cantidades,
-        kilos, precios, IVA, percepciones, costos e imágenes quedan como están, y no se crea ningún
-        movimiento nuevo.
+        {proveedorNombre ? `, de ${proveedorNombre}` : ''}. Se toca sólo la asociación y sus derivados: cantidades, kilos, precios impresos, IVA,
+        percepciones e imágenes quedan como están; no se crea ningún movimiento nuevo y, si faltaba,
+        se genera el historial de costo que usa la pantalla Precios.
       </p>
 
       {estado.error ? (
