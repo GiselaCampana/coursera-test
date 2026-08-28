@@ -172,8 +172,8 @@ function leerUnidad(valor: string | undefined): 'KG' | 'UNIT' | null {
   if (valor === undefined) return null;
   const v = normalizeText(valor);
   if (v === '') return null;
-  if (['kg', 'kilo', 'kilos', 'kilogramo', 'kilogramos', 'peso'].includes(v)) return 'KG';
-  if (['un', 'u', 'unit', 'unidad', 'unidades', 'bulto', 'bultos'].includes(v)) return 'UNIT';
+  if (['kg', 'kilo', 'kilos', 'kilogramo', 'kilogramos', 'peso', 'weight'].includes(v)) return 'KG';
+  if (['un', 'u', 'unit', 'unidad', 'unidades', 'bulto', 'bultos', 'piece', 'pieza', 'piezas'].includes(v)) return 'UNIT';
   return null;
 }
 
@@ -217,9 +217,18 @@ function leerJson(contenido: string): LecturaDeCatalogo {
    * exportación de una API suele venir como {"productos": [...]} o {"data":
    * [...]}, y rechazarla por eso obligaría a editar el archivo a mano.
    */
+  const objeto = (datos ?? {}) as Record<string, unknown>;
   const lista = Array.isArray(datos)
     ? datos
-    : Object.values((datos ?? {}) as Record<string, unknown>).find((v) => Array.isArray(v));
+    : Array.isArray(objeto.products)
+      ? objeto.products
+      : Array.isArray(objeto.productos)
+        ? objeto.productos
+        : Array.isArray(objeto.items)
+          ? objeto.items
+          : Array.isArray(objeto.data)
+            ? objeto.data
+            : Object.values(objeto).find((v) => Array.isArray(v));
 
   if (!Array.isArray(lista)) {
     return {
@@ -247,7 +256,28 @@ function leerJson(contenido: string): LecturaDeCatalogo {
       if (valor === null || valor === undefined) continue;
       const normal = normalizarEncabezado(clave);
       columnasVistas.add(normal);
+
+      // El endpoint oficial de Control de Stock entrega proveedor, tipo y
+      // subtipo como objetos { id, name }. String(objeto) produciría
+      // "[object Object]" y perderíamos justamente la clasificación.
+      if (typeof valor === 'object' && !Array.isArray(valor)) {
+        const nombre = (valor as Record<string, unknown>).name;
+        if (typeof nombre === 'string') {
+          porClave.set(normal, nombre);
+        }
+        continue;
+      }
+
       porClave.set(normal, typeof valor === 'boolean' ? String(valor) : String(valor));
+    }
+
+    // internalUnit es el nombre del campo en /api/integrations/catalog.
+    // Lo proyectamos a "unidad" para que la lectura existente siga siendo la
+    // única responsable de convertir piece/kg a UNIT/KG.
+    const unidadInterna = (cruda as Record<string, unknown>).internalUnit;
+    if (typeof unidadInterna === 'string') {
+      porClave.set('unidad', unidadInterna);
+      columnasVistas.add('unidad');
     }
 
     const tomar = (campo: keyof typeof COLUMNAS): string | undefined => {
