@@ -21,6 +21,24 @@ export interface ResultadoImportacion {
 
 const ORIGENES: OrigenDeFamilia[] = ['auto', 'tipo', 'subtipo', 'ninguna'];
 
+const STOCK_CATALOG_URL =
+  'https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/catalog';
+
+async function leerCatalogoDeStock(): Promise<string> {
+  const respuesta = await fetch(STOCK_CATALOG_URL, {
+    cache: 'no-store',
+    headers: { accept: 'application/json' },
+  });
+  if (!respuesta.ok) {
+    throw new Error(
+      `Control de Stock respondió ${respuesta.status}. Probá de nuevo en unos segundos.`,
+    );
+  }
+  const texto = await respuesta.text();
+  if (!texto.trim()) throw new Error('Control de Stock devolvió un catálogo vacío.');
+  return texto;
+}
+
 function leerOrigen(valor: FormDataEntryValue | null): OrigenDeFamilia {
   const v = String(valor ?? 'auto') as OrigenDeFamilia;
   return ORIGENES.includes(v) ? v : 'auto';
@@ -37,12 +55,17 @@ export async function analizarCatalogo(
   _prev: ResultadoImportacion,
   formData: FormData,
 ): Promise<ResultadoImportacion> {
-  const texto = String(formData.get('texto') ?? '');
+  let texto = String(formData.get('texto') ?? '');
   const familiaDesde = leerOrigen(formData.get('familiaDesde'));
-  if (texto.trim() === '') {
-    return { error: 'Elegí el archivo del catálogo o pegá su contenido.' };
-  }
+  const origen = String(formData.get('origen') ?? 'archivo');
+
   try {
+    if (origen === 'stock') {
+      texto = await leerCatalogoDeStock();
+    } else if (texto.trim() === '') {
+      return { error: 'Elegí el archivo del catálogo, pegá su contenido o traelo desde Control de Stock.' };
+    }
+
     const user = await requireUser();
     const informe = await importarCatalogo(user, texto, { familiaDesde });
     return { informe, texto, familiaDesde };
