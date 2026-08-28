@@ -416,7 +416,7 @@ export function priceRowsToEmployeePdf(
         margin,
         pageH - 49,
         8,
-        truncatePdf(filtersLabel(filters) || 'Todos los productos', 90),
+        truncatePdf(filters.category ? `Tipo: ${filters.category}` : 'Todos los productos', 90),
         [0.94, 0.88, 0.68],
       ),
     );
