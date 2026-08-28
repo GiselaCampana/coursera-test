@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useEffect, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import { guardarConfigPrecio, type ResultadoConfigPrecio } from './acciones';
 
@@ -45,7 +45,6 @@ export function ConfigurarPrecio({
   nombre,
   targetMarginPct,
   marginBasis,
-  roundingRule,
   saleMode,
   purchaseUnit,
   purchaseUnitWeightKg,
@@ -62,7 +61,6 @@ export function ConfigurarPrecio({
   nombre: string;
   targetMarginPct: string;
   marginBasis: 'SOBRE_COSTO' | 'SOBRE_VENTA';
-  roundingRule: string;
   saleMode: 'FETEABLE' | 'AL_CORTE';
   purchaseUnit: 'KG' | 'UNIT';
   purchaseUnitWeightKg: string | null;
@@ -80,17 +78,30 @@ export function ConfigurarPrecio({
   const [modo, setModo] = useState<'FETEABLE' | 'AL_CORTE'>(saleMode);
   const [estado, accion] = useActionState<ResultadoConfigPrecio, FormData>(guardarConfigPrecio, {});
 
-  if (estado.ok && estado.productId === productId && !abierto) {
-    return <p className="mensaje mensaje-ok mt mb0" role="status">Configuración actualizada.</p>;
-  }
+  // Estos estados son controles editables. Si el servidor refresca el producto
+  // después de guardar/importar, tienen que acompañar los valores nuevos y no
+  // quedarse con el valor que tenían cuando se montó la tarjeta.
+  useEffect(() => setModo(saleMode), [saleMode]);
+  useEffect(() => setUnidad(purchaseUnit), [purchaseUnit]);
+
+  // Al guardar correctamente cerramos el formulario. Así, al volver a abrirlo
+  // se muestran los valores efectivamente persistidos y no el reset del form.
+  useEffect(() => {
+    if (estado.ok && estado.productId === productId) setAbierto(false);
+  }, [estado.ok, estado.productId, productId]);
 
   if (!abierto) {
     return (
-      <div className="acciones">
-        <button type="button" className="boton boton-secundario boton-chico" onClick={() => setAbierto(true)}>
-          Configurar marcajes y venta
-        </button>
-      </div>
+      <>
+        {estado.ok && estado.productId === productId ? (
+          <p className="mensaje mensaje-ok mt mb0" role="status">Configuración actualizada.</p>
+        ) : null}
+        <div className="acciones">
+          <button type="button" className="boton boton-secundario boton-chico" onClick={() => setAbierto(true)}>
+            Configurar marcajes y venta
+          </button>
+        </div>
+      </>
     );
   }
 
@@ -244,18 +255,12 @@ export function ConfigurarPrecio({
         </>
       )}
 
-      <div className="campo">
-        <label htmlFor={`redondeo-${productId}`}>Redondeo</label>
-        <select id={`redondeo-${productId}`} name="roundingRule" defaultValue={roundingRule}>
-          <option value="NONE">Sin redondeo</option>
-          <option value="NEAREST_10">Al $10 más cercano</option>
-          <option value="NEAREST_50">Al $50 más cercano</option>
-          <option value="NEAREST_100">Al $100 más cercano</option>
-          <option value="UP_10">Hacia arriba al $10</option>
-          <option value="UP_50">Hacia arriba al $50</option>
-          <option value="UP_100">Hacia arriba al $100</option>
-        </select>
-      </div>
+      <input type="hidden" name="roundingRule" value="NEAREST_100" />
+      <p className="ayuda">
+        Redondeo fijo: al $100 más cercano sólo para el precio por kilo de los productos al corte
+        y para los precios por 100 g / 1/4 kg de los feteables. Horma, caja y pieza quedan con el
+        importe exacto que da su marcaje.
+      </p>
 
       <div className="acciones">
         <button type="button" className="boton boton-secundario boton-chico" onClick={() => setAbierto(false)}>
