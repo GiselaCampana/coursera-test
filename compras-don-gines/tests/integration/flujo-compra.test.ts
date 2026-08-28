@@ -3783,7 +3783,7 @@ describe('precios por kilo configurables', () => {
     const sugerencia = await suggestPricesFor(producto.id);
     expect(sugerencia.cost.unitCost?.toFixed(2)).toBe('12100.00');
     expect(sugerencia.costPerKg?.toFixed(2)).toBe('2420.00');
-    expect(sugerencia.tiers.baseKg?.toFixed(2)).toBe('3630.00');
+    expect(sugerencia.tiers.baseKg?.toFixed(2)).toBe('3600.00');
     expect(sugerencia.tiers.alCorteHormaDigitalKg?.toFixed(2)).toBe('3388.00');
     expect(sugerencia.tiers.alCorteHormaCashKg?.toFixed(2)).toBe('3146.00');
     expect(sugerencia.tiers.alCorteCajaCashKg?.toFixed(2)).toBe('3025.00');
@@ -3795,7 +3795,7 @@ describe('precios por kilo configurables', () => {
 
     await updateProductPriceConfig(escenario.admin, {
       productId,
-      targetMarginPct: '62',
+      targetMarginPct: '27',
       marginBasis: 'SOBRE_COSTO',
       alCorteHormaDigitalMarginPct: '50',
       alCorteHormaCashMarginPct: '40',
@@ -3808,13 +3808,17 @@ describe('precios por kilo configurables', () => {
     });
 
     const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
-    expect(producto.targetMarginPct.toString()).toBe('0.62');
+    expect(producto.targetMarginPct.toString()).toBe('0.27');
     expect(producto.alCorteHormaDigitalMarginPct?.toString()).toBe('0.5');
     expect(producto.alCorteHormaCashMarginPct?.toString()).toBe('0.4');
     expect(producto.alCorteCajaCashMarginPct?.toString()).toBe('0.3');
     expect(producto.wholeUnitMarginPct?.toString()).toBe('0.2');
     expect(producto.cashDiscountPct.toString()).toBe('0');
     expect(producto.purchaseUnitWeightKg?.toString()).toBe('3');
+
+    const reglaResuelta = await resolvePricingRule(productId);
+    expect(reglaResuelta.targetMarginPct).toBe('0.27');
+    expect(reglaResuelta.saleMode).toBe('AL_CORTE');
   });
 
   it('exporta los dos PDF y un Excel válido con datos', async () => {
@@ -3926,7 +3930,7 @@ describe('alta de productos desde compras sin asociación', () => {
     expect(precio.needsPurchaseUnitWeight).toBe(false);
     expect(precio.costPerKg).toBeNull();
     // El tomate se vende por botella: precio sobre costo/unidad, sin inventar kilos.
-    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('3200.00');
+    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('3158.10');
   });
 });
 
