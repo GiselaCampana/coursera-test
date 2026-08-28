@@ -149,6 +149,28 @@ export function prorate(weights: Decimal[], total: MoneyInput): Decimal[] {
   return parts;
 }
 
+
+/**
+ * Cuando el comprobante demuestra una alícuota uniforme, cada renglón debe
+ * mostrar exactamente neto × tasa. El residuo de centavos necesario para que
+ * el pie cierre se deja sólo en el último renglón, no se reparte entre todos.
+ */
+export function allocateUniformTax(
+  nets: Decimal[],
+  rate: MoneyInput,
+  printedTotal: MoneyInput,
+): Decimal[] {
+  if (nets.length === 0) return [];
+  const r = toDecimal(rate);
+  const total = money(printedTotal);
+  const direct = nets.map((net) => money(net.times(r)));
+  const sumDirect = direct.reduce<Decimal>((acc, value) => acc.plus(value), ZERO);
+  direct[direct.length - 1] = money(
+    direct[direct.length - 1]!.plus(total.minus(sumDirect)),
+  );
+  return direct;
+}
+
 /**
  * Las percepciones discriminadas, pero sólo si siguen cuadrando con el total.
  *
@@ -280,7 +302,7 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
 
   let ivaParts: Decimal[];
   if (inferUniformRate) {
-    ivaParts = prorate(nets, ivaTotal);
+    ivaParts = allocateUniformTax(nets, inferredRate, ivaTotal);
   } else {
     // Hay evidencia real de más de una tasa: ahí sí se reparte por grupos.
     ivaParts = prorateByRateGroups(nets, rates, ivaTotal);
