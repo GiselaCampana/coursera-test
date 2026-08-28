@@ -250,7 +250,6 @@ export default async function PaginaPrecios({
                   nombre={fila.name}
                   targetMarginPct={fila.targetMarginPct}
                   marginBasis={fila.marginBasis}
-                  roundingRule={fila.roundingRule}
                   saleMode={fila.saleMode}
                   purchaseUnit={fila.purchaseUnit}
                   purchaseUnitWeightKg={fila.purchaseUnitWeightKg}
