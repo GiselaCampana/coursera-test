@@ -390,9 +390,16 @@ export function priceRowsToEmployeePdf(
   const borde: [number, number, number] = [0.82, 0.80, 0.72];
 
   const ordenadas = [...rows].sort((a, b) => {
-    const tipo = (a.category ?? 'Sin tipo').localeCompare(b.category ?? 'Sin tipo', 'es');
+    // Los clasificados primero. Los que todavía no recibieron Tipo/Subtipo del
+    // catálogo quedan al final como "Pendientes de clasificar", nunca mezclados
+    // con categorías reales ni bajo un "Sin tipo" que parece una categoría.
+    const aPendiente = a.category?.trim() ? 0 : 1;
+    const bPendiente = b.category?.trim() ? 0 : 1;
+    if (aPendiente !== bPendiente) return aPendiente - bPendiente;
+
+    const tipo = (a.category ?? '').localeCompare(b.category ?? '', 'es');
     if (tipo !== 0) return tipo;
-    const subtipo = (a.subtype ?? 'Sin subtipo').localeCompare(b.subtype ?? 'Sin subtipo', 'es');
+    const subtipo = (a.subtype ?? '').localeCompare(b.subtype ?? '', 'es');
     if (subtipo !== 0) return subtipo;
     const modoA = a.soldByUnit ? 'UNIDAD' : a.saleMode;
     const modoB = b.soldByUnit ? 'UNIDAD' : b.saleMode;
@@ -452,8 +459,8 @@ export function priceRowsToEmployeePdf(
   let lastMode = '';
 
   for (const r of ordenadas) {
-    const type = r.category?.trim() || 'Sin tipo';
-    const subtype = r.subtype?.trim() || 'Sin subtipo';
+    const type = r.category?.trim() || 'Pendientes de clasificar';
+    const subtype = r.subtype?.trim() || '';
     const mode = r.soldByUnit ? 'UNIDAD' : r.saleMode;
 
     const groupChanged = type !== lastType || subtype !== lastSubtype;
@@ -471,7 +478,9 @@ export function priceRowsToEmployeePdf(
     if (type !== lastType || subtype !== lastSubtype) {
       parts.push(pdfFillRect(margin, y - 15, pageW - margin * 2, 20, crema));
       parts.push(pdfTextColor(margin + 8, y - 9, 10, type.toUpperCase(), verde, true));
-      parts.push(pdfTextColor(margin + 210, y - 9, 8.5, subtype, gris, true));
+      if (subtype) {
+        parts.push(pdfTextColor(margin + 210, y - 9, 8.5, subtype, gris, true));
+      }
       y -= 28;
       lastType = type;
       lastSubtype = subtype;
