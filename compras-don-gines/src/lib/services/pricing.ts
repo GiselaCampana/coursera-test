@@ -53,10 +53,10 @@ export async function resolvePricingRule(productId: string, at: Date = arToday()
     product,
     ruleId: effective?.id ?? null,
     ruleName: effective?.name ?? 'Configuración del producto',
-    marginBasis: (effective?.marginBasis ?? product.marginBasis) as MarginBasis,
-    targetMarginPct: (effective?.targetMarginPct ?? product.targetMarginPct).toString(),
-    cashDiscountPct: (effective?.cashDiscountPct ?? product.cashDiscountPct).toString(),
-    roundingRule: (effective?.roundingRule ?? product.roundingRule) as RoundingRule,
+    marginBasis: product.marginBasis as MarginBasis,
+    targetMarginPct: product.targetMarginPct.toString(),
+    cashDiscountPct: product.cashDiscountPct.toString(),
+    roundingRule: product.roundingRule as RoundingRule,
     saleMode: product.saleMode as SaleMode,
     pieceWeightKg: product.avgPieceWeightKg?.toString() ?? null,
     alCorteHormaDigitalMarginPct: product.alCorteHormaDigitalMarginPct?.toString() ?? null,
@@ -185,11 +185,24 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
 
   const marginFor = (specific: string | null): string =>
     specific ?? rule.targetMarginPct;
-  const tier = (specific: string | null): Decimal | null =>
+
+  // Reglas comerciales:
+  // - al corte: sólo "por kilo" se redondea al $100;
+  // - feteables: 100 g y 1/4 (ambos expresados por kg) se redondean al $100;
+  // - horma, caja y pieza quedan exactamente como da su marcaje, sin redondeo.
+  const tierExacto = (specific: string | null): Decimal | null =>
     costPerKg
-      ? priceFromMargin(costPerKg, rule.marginBasis, marginFor(specific), rule.roundingRule)
+      ? priceFromMargin(costPerKg, rule.marginBasis, marginFor(specific), 'NONE')
       : null;
-  const baseKg = tier(null);
+  const tierRedondeado100 = (specific: string | null): Decimal | null =>
+    costPerKg
+      ? priceFromMargin(costPerKg, rule.marginBasis, marginFor(specific), 'NEAREST_100')
+      : null;
+
+  const baseKg =
+    rule.saleMode === 'AL_CORTE'
+      ? tierRedondeado100(null)
+      : tierExacto(null);
   const wholeUnitTotal = soldByUnit && cost.unitCost
     ? priceFromMargin(
         cost.unitCost,
@@ -229,13 +242,13 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
       : null,
     tiers: {
       baseKg,
-      alCorteHormaDigitalKg: tier(rule.alCorteHormaDigitalMarginPct),
-      alCorteHormaCashKg: tier(rule.alCorteHormaCashMarginPct),
-      alCorteCajaCashKg: tier(rule.alCorteCajaCashMarginPct),
-      feteado100gKg: tier(rule.feteado100gMarginPct),
-      feteadoQuarterKg: tier(rule.feteadoQuarterMarginPct),
-      feteadoPieceDigitalKg: tier(rule.feteadoPieceDigitalMarginPct),
-      feteadoPieceCashKg: tier(rule.feteadoPieceCashMarginPct),
+      alCorteHormaDigitalKg: tierExacto(rule.alCorteHormaDigitalMarginPct),
+      alCorteHormaCashKg: tierExacto(rule.alCorteHormaCashMarginPct),
+      alCorteCajaCashKg: tierExacto(rule.alCorteCajaCashMarginPct),
+      feteado100gKg: tierRedondeado100(rule.feteado100gMarginPct),
+      feteadoQuarterKg: tierRedondeado100(rule.feteadoQuarterMarginPct),
+      feteadoPieceDigitalKg: tierExacto(rule.feteadoPieceDigitalMarginPct),
+      feteadoPieceCashKg: tierExacto(rule.feteadoPieceCashMarginPct),
       wholeUnitTotal,
     },
     rule,
@@ -529,7 +542,7 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
       feteadoPieceDigitalMarginPct: normalizarMarcaje(input.feteadoPieceDigitalMarginPct),
       feteadoPieceCashMarginPct: normalizarMarcaje(input.feteadoPieceCashMarginPct),
       wholeUnitMarginPct: normalizarMarcaje(input.wholeUnitMarginPct),
-      roundingRule: input.roundingRule,
+      roundingRule: 'NEAREST_100',
       saleMode: input.saleMode,
       purchaseUnit: input.purchaseUnit,
       purchaseUnitWeightKg,
