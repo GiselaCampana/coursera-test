@@ -207,14 +207,14 @@ export async function suggestPricesFor(productId: string): Promise<PriceSuggesti
         cost.unitCost,
         rule.marginBasis,
         marginFor(rule.wholeUnitMarginPct),
-        rule.roundingRule,
+        'NONE',
       )
     : costPerKg && pesoUnidad && pesoUnidad.gt(0)
       ? priceFromMargin(
           costPerKg.times(pesoUnidad),
           rule.marginBasis,
           marginFor(rule.wholeUnitMarginPct),
-          rule.roundingRule,
+          'NONE',
         )
       : null;
 
