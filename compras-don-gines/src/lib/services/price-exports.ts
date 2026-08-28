@@ -236,6 +236,46 @@ function pdfText(x: number, y: number, size: number, value: string, bold = false
   ]);
 }
 
+
+function pdfFillRect(x: number, y: number, w: number, h: number, rgb: [number, number, number]): Buffer {
+  return Buffer.from(
+    `${rgb[0]} ${rgb[1]} ${rgb[2]} rg ${x} ${y} ${w} ${h} re f\n`,
+    'ascii',
+  );
+}
+
+function pdfStrokeRect(
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  rgb: [number, number, number],
+  lineWidth = 0.7,
+): Buffer {
+  return Buffer.from(
+    `${rgb[0]} ${rgb[1]} ${rgb[2]} RG ${lineWidth} w ${x} ${y} ${w} ${h} re S\n`,
+    'ascii',
+  );
+}
+
+function pdfLine(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  rgb: [number, number, number],
+  lineWidth = 0.5,
+): Buffer {
+  return Buffer.from(
+    `${rgb[0]} ${rgb[1]} ${rgb[2]} RG ${lineWidth} w ${x1} ${y1} m ${x2} ${y2} l S\n`,
+    'ascii',
+  );
+}
+
+function truncatePdf(value: string, max: number): string {
+  return value.length <= max ? value : value.slice(0, Math.max(1, max - 3)) + '...';
+}
+
 function makePdf(pages: Buffer[], pageW: number, pageH: number): Buffer {
   const objects: Buffer[] = [];
   objects[1] = Buffer.from('<< /Type /Catalog /Pages 2 0 R >>', 'ascii');
@@ -322,33 +362,96 @@ export function priceRowsToEmployeePdf(
 ): Buffer {
   const pageW = 595;
   const pageH = 842;
-  const margin = 36;
-  const perPage = 13;
-  const pages: Buffer[] = [];
+  const margin = 30;
+  const gap = 12;
+  const colW = (pageW - margin * 2 - gap) / 2;
+  const cardH = 126;
+  const rowGap = 10;
+  const cardsPerPage = 10;
 
-  for (let start = 0; start < Math.max(rows.length, 1); start += perPage) {
-    const chunk = rows.slice(start, start + perPage);
+  // Paleta sobria y de alto contraste, cercana a la identidad visual de la app.
+  const verde: [number, number, number] = [0.08, 0.24, 0.17];
+  const crema: [number, number, number] = [0.98, 0.97, 0.92];
+  const dorado: [number, number, number] = [0.73, 0.58, 0.20];
+  const gris: [number, number, number] = [0.42, 0.42, 0.38];
+  const borde: [number, number, number] = [0.84, 0.81, 0.70];
+
+  const pages: Buffer[] = [];
+  const totalPages = Math.max(1, Math.ceil(rows.length / cardsPerPage));
+
+  for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
+    const chunk = rows.slice(pageIndex * cardsPerPage, (pageIndex + 1) * cardsPerPage);
     const parts: Buffer[] = [];
-    let y = pageH - 42;
-    parts.push(pdfText(margin, y, 17, 'Don Gines - Lista de precios de venta', true));
-    y -= 20;
-    parts.push(pdfText(margin, y, 9, filtersLabel(filters) || 'Todos los productos'));
-    y -= 25;
+
+    // Encabezado de marca.
+    parts.push(pdfFillRect(0, pageH - 92, pageW, 92, verde));
+    parts.push(pdfText(margin, pageH - 42, 20, 'Don Ginés', true));
+    parts.push(pdfText(margin, pageH - 65, 11, 'LISTA DE PRECIOS DE VENTA', true));
+
+    const filtro = filtersLabel(filters) || 'Todos los productos';
+    parts.push(pdfText(pageW - margin - 210, pageH - 42, 8, truncatePdf(filtro, 42)));
+    parts.push(
+      pdfText(
+        pageW - margin - 210,
+        pageH - 63,
+        8,
+        `Página ${pageIndex + 1} de ${totalPages}`,
+      ),
+    );
+
+    let topY = pageH - 112;
 
     if (chunk.length === 0) {
-      parts.push(pdfText(margin, y, 10, 'No hay productos para los filtros elegidos.'));
+      parts.push(pdfText(margin, topY - 20, 11, 'No hay productos para los filtros elegidos.'));
     }
 
-    for (const r of chunk) {
-      const id = r.usesPlu ? `PLU ${r.internalCode}` : `Cod. barras ${r.barcode ?? '-'}`;
-      parts.push(pdfText(margin, y, 10, `${r.name}  ·  ${id}`, true));
-      y -= 13;
-      const text = employeePriceText(r);
-      parts.push(pdfText(margin + 8, y, 8, text.join('   |   ')));
-      y -= 21;
-    }
+    chunk.forEach((r, index) => {
+      const col = index % 2;
+      const row = Math.floor(index / 2);
+      const x = margin + col * (colW + gap);
+      const y = topY - row * (cardH + rowGap) - cardH;
+
+      parts.push(pdfFillRect(x, y, colW, cardH, crema));
+      parts.push(pdfStrokeRect(x, y, colW, cardH, borde, 0.8));
+      parts.push(pdfFillRect(x, y + cardH - 24, 5, 24, dorado));
+
+      const id = r.usesPlu ? `PLU ${r.internalCode}` : `CÓD. ${r.barcode ?? '-'}`;
+      parts.push(pdfText(x + 12, y + cardH - 17, 9.5, truncatePdf(r.name, 34), true));
+      parts.push(pdfText(x + colW - 72, y + cardH - 17, 7.5, id, true));
+      parts.push(pdfLine(x + 10, y + cardH - 31, x + colW - 10, y + cardH - 31, borde));
+
+      const addPrice = (label: string, value: string | null, px: number, py: number) => {
+        parts.push(pdfText(px, py, 7.2, label));
+        parts.push(pdfText(px, py - 13, 10, value ? formatARS(value) : '-', true));
+      };
+
+      if (r.soldByUnit) {
+        addPrice('PRECIO POR UNIDAD', r.wholeUnitTotal, x + 14, y + 54);
+      } else if (r.saleMode === 'AL_CORTE') {
+        addPrice('KILO', r.salePricePerKg, x + 14, y + 68);
+        addPrice('HORMA DIGITAL / KG', r.alCorteHormaDigitalKg, x + colW / 2 + 2, y + 68);
+        addPrice('HORMA EFECTIVO / KG', r.alCorteHormaCashKg, x + 14, y + 32);
+        addPrice('CAJA EFECTIVO / KG', r.alCorteCajaCashKg, x + colW / 2 + 2, y + 32);
+      } else {
+        addPrice('100 G · PRECIO/KG', r.feteado100gKg, x + 14, y + 68);
+        addPrice('1/4 KG · PRECIO/KG', r.feteadoQuarterKg, x + colW / 2 + 2, y + 68);
+        addPrice('PIEZA DIGITAL / KG', r.feteadoPieceDigitalKg, x + 14, y + 32);
+        addPrice('PIEZA EFECTIVO / KG', r.feteadoPieceCashKg, x + colW / 2 + 2, y + 32);
+      }
+
+      if (r.wholeUnitTotal && !r.soldByUnit) {
+        parts.push(pdfText(x + 14, y + 8, 6.8, `UNIDAD ENTERA: ${formatARS(r.wholeUnitTotal)}`, true));
+      }
+    });
+
+    // Pie de página discreto.
+    parts.push(pdfLine(margin, 24, pageW - margin, 24, borde));
+    parts.push(pdfText(margin, 12, 6.8, 'Precios de venta · Uso interno de sucursales'));
+    parts.push(pdfText(pageW - margin - 105, 12, 6.8, 'Compras Don Ginés'));
+
     pages.push(Buffer.concat(parts));
   }
+
   return makePdf(pages, pageW, pageH);
 }
 
