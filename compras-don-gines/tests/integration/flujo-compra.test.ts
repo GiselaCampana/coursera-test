@@ -3746,6 +3746,53 @@ describe('recuperación administrativa de contraseña', () => {
   });
 });
 
+describe('distribución de IVA por producto', () => {
+  it('no infla los renglones con 21% cuando otro renglón perdió la tasa en OCR', () => {
+    const items = costItems(
+      [
+        {
+          lineNumber: 1,
+          description: 'Producto A',
+          quantity: '100',
+          unit: 'KG',
+          unitNetPrice: '10',
+          netAmount: '1000',
+          ivaRate: '0.21',
+        },
+        {
+          lineNumber: 2,
+          description: 'Producto B',
+          quantity: '100',
+          unit: 'KG',
+          unitNetPrice: '10',
+          netAmount: '1000',
+          // El OCR perdió el 21%; antes esto hacía que A absorbiera el IVA de B.
+          ivaRate: '0',
+        },
+      ],
+      {
+        netTotal: '2000',
+        ivaTotal: '420',
+        perceptionsTotal: '0',
+      },
+    );
+
+    expect(items[0]!.ivaAmount.toFixed(2)).toBe('210.00');
+    expect(items[1]!.ivaAmount.toFixed(2)).toBe('210.00');
+    expect(items[1]!.ivaRate.toString()).toBe('0.21');
+  });
+
+  it('Punta del Agua toma 21% sobre su neto en la factura Errecalde', async () => {
+    const documentId = await comprobanteErrecaldeValidado();
+    const item = await prisma.documentItem.findFirstOrThrow({
+      where: { documentId, supplierCode: 'ART-00228' },
+    });
+
+    expect(item.ivaRate.toString()).toBe('0.21');
+    expect(item.ivaAmount.toFixed(2)).toBe('114291.46');
+  });
+});
+
 describe('precios por kilo configurables', () => {
   beforeEach(async () => {
     await limpiarBase();
