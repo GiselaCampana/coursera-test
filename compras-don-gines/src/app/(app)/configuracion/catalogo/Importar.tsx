@@ -89,13 +89,24 @@ export function Importar() {
   return (
     <>
       <form action={accionPrevia} className="card">
-        <h2>1. Elegí el archivo</h2>
+        <h2>1. Traer el catálogo</h2>
         <p className="chico medio">
-          La exportación del catálogo de Control de Stock, en CSV o JSON. Tiene que traer al menos
-          PLU y Artículo. Para que los PDFs y filtros queden correctamente organizados, conviene
-          exportar también «Tipo de Artículo» y «Subtipo de Artículo». El PLU se copia tal cual:
-          acá no se renumera nada.
+          La fuente oficial es Control de Stock. Podés traerla directamente con el botón de abajo
+          o, como alternativa, cargar un CSV/JSON. El PLU se copia tal cual: acá no se renumera nada.
         </p>
+
+        <div className="mensaje mensaje-ok">
+          <strong>Integración disponible.</strong> Control de Stock ya publica PLU, nombre,
+          proveedor, Tipo de Artículo, Subtipo de Artículo, estado y unidad de cada producto.
+        </div>
+
+        <div className="acciones">
+          <button type="submit" className="boton" name="origen" value="stock">
+            Traer ahora desde Control de Stock
+          </button>
+        </div>
+
+        <hr />
 
         <div className="campo">
           <label htmlFor="archivo">Archivo</label>
@@ -169,7 +180,9 @@ export function Importar() {
         ) : null}
 
         <div className="acciones">
-          <Boton texto="Ver qué cambiaría" cargando="Leyendo…" />
+          <button type="submit" className="boton secundario" name="origen" value="archivo" disabled={demasiadoGrande}>
+            Ver qué cambiaría del archivo
+          </button>
         </div>
       </form>
 
