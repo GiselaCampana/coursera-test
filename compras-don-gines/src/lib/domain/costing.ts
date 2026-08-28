@@ -231,17 +231,48 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
   const ivaTotal = money(totals.ivaTotal);
   const perceptionsTotal = money(totals.perceptionsTotal);
 
-  // ¿Una sola tasa o varias?
+  /*
+   * IVA por artículo.
+   *
+   * En comprobantes fotografiados el OCR puede perder el "21%" de algún
+   * renglón y dejar tasa 0. Eso NO significa que el artículo sea exento. Si el
+   * pie del comprobante demuestra una tasa uniforme —por ejemplo IVA total /
+   * neto total = 21 %— y las tasas no nulas que sí se leyeron coinciden con
+   * ese 21 %, se prorratea el IVA entre todos los renglones por neto.
+   *
+   * Antes, un renglón con tasa perdida hacía que los que sí tenían 21 %
+   * absorbieran el IVA de los demás. Eso inflaba el IVA individual aunque el
+   * total de la factura cerrara.
+   */
   const rates = resolved.map((r) => toDecimal(r.raw.ivaRate));
   const distinctRates = new Set(rates.map((r) => r.toString()));
-  const singleRate = distinctRates.size <= 1;
+  const positiveRates = rates.filter((r) => r.gt(0));
+  const distinctPositiveRates = new Set(positiveRates.map((r) => r.toString()));
+  const netTotalForTax = money(totals.netTotal);
+  const impliedFooterRate =
+    netTotalForTax.gt(0) && ivaTotal.gt(0) ? ivaTotal.div(netTotalForTax) : ZERO;
+
+  const oneKnownPositiveRate =
+    distinctPositiveRates.size === 1 ? toDecimal([...distinctPositiveRates][0]!) : null;
+  const footerMatchesKnownRate =
+    oneKnownPositiveRate !== null &&
+    impliedFooterRate.minus(oneKnownPositiveRate).abs().lte('0.001');
+
+  const inferUniformRate =
+    distinctRates.size <= 1 ||
+    footerMatchesKnownRate ||
+    (distinctPositiveRates.size === 0 && impliedFooterRate.gt(0));
+
+  const effectiveRates =
+    inferUniformRate && impliedFooterRate.gt(0)
+      ? rates.map((r) => (r.gt(0) ? r : oneKnownPositiveRate ?? impliedFooterRate))
+      : rates;
 
   let ivaParts: Decimal[];
-  if (singleRate) {
+  if (inferUniformRate) {
     ivaParts = prorate(nets, ivaTotal);
   } else {
-    // Prorrateo por grupo de tasa. El IVA de cada grupo se estima con su tasa
-    // y luego se ajusta para que la suma total coincida exactamente.
+    // Hay evidencia real de más de una tasa: ahí sí se reparte por grupos.
     ivaParts = prorateByRateGroups(nets, rates, ivaTotal);
   }
 
@@ -322,7 +353,7 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
       discountPct: r.discountPct,
       discountAmount: r.discountAmount,
       netAmount: r.netAmount,
-      ivaRate: rates[i],
+      ivaRate: effectiveRates[i],
       ivaAmount,
       perceptionAmount,
       perceptionBreakdown: repartoPorPercepcion.map((p) => ({
