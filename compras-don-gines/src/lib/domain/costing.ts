@@ -258,14 +258,24 @@ export function costItems(items: RawItem[], totals: DocumentTotals): CostedItem[
     oneKnownPositiveRate !== null &&
     impliedFooterRate.minus(oneKnownPositiveRate).abs().lte('0.001');
 
+  // Si IVA/neto del pie cae exactamente en una alícuota argentina habitual,
+  // el pie es evidencia más fuerte que un porcentaje OCR roto en un renglón.
+  // Esto cubre Errecalde: el pie da 21 % exacto aunque varias líneas hayan
+  // perdido o deformado el "21%" durante la lectura.
+  const standardRates = [new Decimal('0.105'), new Decimal('0.21'), new Decimal('0.27')];
+  const footerStandardRate =
+    standardRates.find((r) => impliedFooterRate.minus(r).abs().lte('0.0001')) ?? null;
+
   const inferUniformRate =
     distinctRates.size <= 1 ||
     footerMatchesKnownRate ||
+    footerStandardRate !== null ||
     (distinctPositiveRates.size === 0 && impliedFooterRate.gt(0));
 
+  const inferredRate = footerStandardRate ?? oneKnownPositiveRate ?? impliedFooterRate;
   const effectiveRates =
-    inferUniformRate && impliedFooterRate.gt(0)
-      ? rates.map((r) => (r.gt(0) ? r : oneKnownPositiveRate ?? impliedFooterRate))
+    inferUniformRate && inferredRate.gt(0)
+      ? rates.map(() => inferredRate)
       : rates;
 
   let ivaParts: Decimal[];
