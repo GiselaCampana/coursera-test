@@ -147,6 +147,8 @@ export async function importarCatalogo(
     codigosPorAprender: [],
     problemas: [...lectura.problemas],
     columnas: lectura.columnas,
+    traeTipo: lectura.filas.some((f) => Boolean(f.categoria?.trim())),
+    traeSubtipo: lectura.filas.some((f) => Boolean(f.subtipo?.trim())),
     aplicados: 0,
   };
   if (lectura.filas.length === 0) return informe;
