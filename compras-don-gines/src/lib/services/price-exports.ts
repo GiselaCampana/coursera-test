@@ -69,6 +69,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     'Código de barras',
     'Producto',
     'Tipo',
+    'Subtipo',
     'Proveedor',
     'Modo de venta',
     'Unidad de compra',
@@ -106,6 +107,7 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
       r.barcode ?? '',
       r.name,
       r.category ?? '',
+      r.subtype ?? '',
       r.supplierName ?? '',
       r.saleMode === 'AL_CORTE' ? 'Al corte' : 'Feteable',
       r.purchaseUnit === 'UNIT' ? 'Unidad' : 'Kg',
@@ -136,8 +138,8 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
     ]),
   ];
 
-  const moneyColumns = new Set([10, 11, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]);
-  const pctColumns = new Set([12, 13, 14, 15, 16, 17, 18, 19, 20]);
+  const moneyColumns = new Set([11, 12, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]);
+  const pctColumns = new Set([13, 14, 15, 16, 17, 18, 19, 20, 21]);
 
   const rowsXml = data
     .map((row, ri) => {
@@ -378,99 +380,145 @@ export function priceRowsToEmployeePdf(
   rows: PriceExportRow[],
   filters: PriceExportFilters = {},
 ): Buffer {
-  const pageW = 595;
-  const pageH = 842;
-  const margin = 30;
-  const gap = 12;
-  const colW = (pageW - margin * 2 - gap) / 2;
-  const cardH = 126;
-  const rowGap = 10;
-  const cardsPerPage = 10;
-
-  // Paleta sobria y de alto contraste, cercana a la identidad visual de la app.
+  const pageW = 842;
+  const pageH = 595;
+  const margin = 28;
   const verde: [number, number, number] = [0.08, 0.24, 0.17];
-  const crema: [number, number, number] = [0.98, 0.97, 0.92];
   const dorado: [number, number, number] = [0.73, 0.58, 0.20];
-  const gris: [number, number, number] = [0.42, 0.42, 0.38];
-  const borde: [number, number, number] = [0.84, 0.81, 0.70];
+  const crema: [number, number, number] = [0.97, 0.95, 0.88];
+  const gris: [number, number, number] = [0.45, 0.45, 0.42];
+  const borde: [number, number, number] = [0.82, 0.80, 0.72];
+
+  const ordenadas = [...rows].sort((a, b) => {
+    const tipo = (a.category ?? 'Sin tipo').localeCompare(b.category ?? 'Sin tipo', 'es');
+    if (tipo !== 0) return tipo;
+    const subtipo = (a.subtype ?? 'Sin subtipo').localeCompare(b.subtype ?? 'Sin subtipo', 'es');
+    if (subtipo !== 0) return subtipo;
+    const modoA = a.soldByUnit ? 'UNIDAD' : a.saleMode;
+    const modoB = b.soldByUnit ? 'UNIDAD' : b.saleMode;
+    const modo = modoA.localeCompare(modoB, 'es');
+    if (modo !== 0) return modo;
+    return a.name.localeCompare(b.name, 'es');
+  });
 
   const pages: Buffer[] = [];
-  const totalPages = Math.max(1, Math.ceil(rows.length / cardsPerPage));
+  let parts: Buffer[] = [];
+  let y = 0;
+  let pageNumber = 0;
 
-  for (let pageIndex = 0; pageIndex < totalPages; pageIndex++) {
-    const chunk = rows.slice(pageIndex * cardsPerPage, (pageIndex + 1) * cardsPerPage);
-    const parts: Buffer[] = [];
-
-    // Encabezado de marca.
-    parts.push(pdfFillRect(0, pageH - 92, pageW, 92, verde));
-    parts.push(pdfTextColor(margin, pageH - 42, 20, 'Don Ginés', [1, 1, 1], true));
-    parts.push(pdfTextColor(margin, pageH - 65, 11, 'LISTA DE PRECIOS DE VENTA', [0.94, 0.88, 0.68], true));
-
-    const filtro = filtersLabel(filters) || 'Todos los productos';
-    parts.push(pdfTextColor(pageW - margin - 210, pageH - 42, 8, truncatePdf(filtro, 42), [1, 1, 1]));
+  const startPage = () => {
+    pageNumber += 1;
+    parts = [];
+    parts.push(pdfFillRect(0, pageH - 64, pageW, 64, verde));
+    parts.push(pdfTextColor(margin, pageH - 30, 17, 'Don Ginés · Lista de precios de venta', [1, 1, 1], true));
     parts.push(
       pdfTextColor(
-        pageW - margin - 210,
-        pageH - 63,
+        margin,
+        pageH - 49,
         8,
-        `Página ${pageIndex + 1} de ${totalPages}`,
+        truncatePdf(filtersLabel(filters) || 'Todos los productos', 90),
         [0.94, 0.88, 0.68],
       ),
     );
+    y = pageH - 82;
+  };
 
-    let topY = pageH - 112;
-
-    if (chunk.length === 0) {
-      parts.push(pdfText(margin, topY - 20, 11, 'No hay productos para los filtros elegidos.'));
-    }
-
-    chunk.forEach((r, index) => {
-      const col = index % 2;
-      const row = Math.floor(index / 2);
-      const x = margin + col * (colW + gap);
-      const y = topY - row * (cardH + rowGap) - cardH;
-
-      parts.push(pdfFillRect(x, y, colW, cardH, crema));
-      parts.push(pdfStrokeRect(x, y, colW, cardH, borde, 0.8));
-      parts.push(pdfFillRect(x, y + cardH - 24, 5, 24, dorado));
-
-      const id = r.usesPlu ? `PLU ${r.internalCode}` : `CÓD. ${r.barcode ?? '-'}`;
-      parts.push(pdfText(x + 12, y + cardH - 17, 9.5, truncatePdf(r.name, 27), true));
-      parts.push(pdfTextColor(x + colW - 72, y + cardH - 17, 7.5, id, verde, true));
-      parts.push(pdfLine(x + 10, y + cardH - 31, x + colW - 10, y + cardH - 31, borde));
-
-      const addPrice = (label: string, value: string | null, px: number, py: number) => {
-        parts.push(pdfText(px, py, 7.2, label));
-        parts.push(pdfText(px, py - 13, 10, value ? formatARS(value) : '-', true));
-      };
-
-      if (r.soldByUnit) {
-        addPrice('PRECIO POR UNIDAD', r.wholeUnitTotal, x + 14, y + 54);
-      } else if (r.saleMode === 'AL_CORTE') {
-        addPrice('KILO', r.salePricePerKg, x + 14, y + 68);
-        addPrice('HORMA DIGITAL / KG', r.alCorteHormaDigitalKg, x + colW / 2 + 2, y + 68);
-        addPrice('HORMA EFECTIVO / KG', r.alCorteHormaCashKg, x + 14, y + 32);
-        addPrice('CAJA EFECTIVO / KG', r.alCorteCajaCashKg, x + colW / 2 + 2, y + 32);
-      } else {
-        addPrice('100 G · PRECIO/KG', r.feteado100gKg, x + 14, y + 68);
-        addPrice('1/4 KG · PRECIO/KG', r.feteadoQuarterKg, x + colW / 2 + 2, y + 68);
-        addPrice('PIEZA DIGITAL / KG', r.feteadoPieceDigitalKg, x + 14, y + 32);
-        addPrice('PIEZA EFECTIVO / KG', r.feteadoPieceCashKg, x + colW / 2 + 2, y + 32);
-      }
-
-      if (r.wholeUnitTotal && !r.soldByUnit) {
-        parts.push(pdfText(x + 14, y + 8, 6.8, `UNIDAD ENTERA: ${formatARS(r.wholeUnitTotal)}`, true));
-      }
-    });
-
-    // Pie de página discreto.
-    parts.push(pdfLine(margin, 24, pageW - margin, 24, borde));
-    parts.push(pdfText(margin, 12, 6.8, 'Precios de venta · Uso interno de sucursales'));
-    parts.push(pdfText(pageW - margin - 105, 12, 6.8, 'Compras Don Ginés'));
-
+  const flush = () => {
+    parts.push(pdfLine(margin, 22, pageW - margin, 22, borde));
+    parts.push(pdfText(margin, 10, 6.5, 'Uso interno de sucursales · sólo precios de venta'));
+    parts.push(pdfText(pageW - margin - 70, 10, 6.5, `Página ${pageNumber}`));
     pages.push(Buffer.concat(parts));
+  };
+
+  const ensure = (needed: number) => {
+    if (y - needed < 34) {
+      flush();
+      startPage();
+      return true;
+    }
+    return false;
+  };
+
+  startPage();
+
+  if (ordenadas.length === 0) {
+    parts.push(pdfText(margin, y, 10, 'No hay productos para los filtros elegidos.'));
+    flush();
+    return makePdf(pages, pageW, pageH);
   }
 
+  let lastType = '';
+  let lastSubtype = '';
+  let lastMode = '';
+
+  for (const r of ordenadas) {
+    const type = r.category?.trim() || 'Sin tipo';
+    const subtype = r.subtype?.trim() || 'Sin subtipo';
+    const mode = r.soldByUnit ? 'UNIDAD' : r.saleMode;
+
+    const groupChanged = type !== lastType || subtype !== lastSubtype;
+    const modeChanged = groupChanged || mode !== lastMode;
+
+    const needed = (groupChanged ? 36 : 0) + (modeChanged ? 22 : 0) + 20;
+    const newPage = ensure(needed);
+    if (newPage) {
+      // Repetir los encabezados del grupo al continuar en una página nueva.
+      lastType = '';
+      lastSubtype = '';
+      lastMode = '';
+    }
+
+    if (type !== lastType || subtype !== lastSubtype) {
+      parts.push(pdfFillRect(margin, y - 15, pageW - margin * 2, 20, crema));
+      parts.push(pdfTextColor(margin + 8, y - 9, 10, type.toUpperCase(), verde, true));
+      parts.push(pdfTextColor(margin + 210, y - 9, 8.5, subtype, gris, true));
+      y -= 28;
+      lastType = type;
+      lastSubtype = subtype;
+      lastMode = '';
+    }
+
+    if (mode !== lastMode) {
+      if (mode === 'AL_CORTE') {
+        const xs = [30, 82, 360, 475, 595, 710];
+        const heads = ['PLU/CÓD.', 'PRODUCTO', 'KILO', 'HORMA DIGITAL', 'HORMA EFECTIVO', 'CAJA EFECTIVO'];
+        heads.forEach((h, i) => parts.push(pdfTextColor(xs[i]!, y, 7, h, verde, true)));
+      } else if (mode === 'FETEABLE') {
+        const xs = [30, 82, 360, 475, 595, 710];
+        const heads = ['PLU/CÓD.', 'PRODUCTO', '100 G · $/KG', '1/4 KG · $/KG', 'PIEZA DIGITAL', 'PIEZA EFECTIVO'];
+        heads.forEach((h, i) => parts.push(pdfTextColor(xs[i]!, y, 7, h, verde, true)));
+      } else {
+        const xs = [30, 82, 650];
+        const heads = ['CÓDIGO', 'PRODUCTO', 'PRECIO UNIDAD'];
+        heads.forEach((h, i) => parts.push(pdfTextColor(xs[i]!, y, 7, h, verde, true)));
+      }
+      y -= 8;
+      parts.push(pdfLine(margin, y, pageW - margin, y, dorado, 0.8));
+      y -= 12;
+      lastMode = mode;
+    }
+
+    const ident = r.usesPlu ? r.internalCode : r.barcode ?? r.internalCode;
+    parts.push(pdfText(30, y, 7.2, truncatePdf(ident, 12)));
+    parts.push(pdfText(82, y, 7.4, truncatePdf(r.name, 43), true));
+
+    if (mode === 'AL_CORTE') {
+      const values = [r.salePricePerKg, r.alCorteHormaDigitalKg, r.alCorteHormaCashKg, r.alCorteCajaCashKg];
+      const xs = [360, 475, 595, 710];
+      values.forEach((v, i) => parts.push(pdfText(xs[i]!, y, 7.2, v ? formatARS(v) : '-')));
+    } else if (mode === 'FETEABLE') {
+      const values = [r.feteado100gKg, r.feteadoQuarterKg, r.feteadoPieceDigitalKg, r.feteadoPieceCashKg];
+      const xs = [360, 475, 595, 710];
+      values.forEach((v, i) => parts.push(pdfText(xs[i]!, y, 7.2, v ? formatARS(v) : '-')));
+    } else {
+      parts.push(pdfText(650, y, 8, r.wholeUnitTotal ? formatARS(r.wholeUnitTotal) : '-', true));
+    }
+
+    y -= 17;
+    parts.push(pdfLine(margin, y + 5, pageW - margin, y + 5, borde, 0.35));
+  }
+
+  flush();
   return makePdf(pages, pageW, pageH);
 }
 
