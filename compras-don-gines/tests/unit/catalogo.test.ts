@@ -99,6 +99,42 @@ describe('leer el archivo del catálogo', () => {
     expect(envuelto.filas[0].plu).toBe('1211');
   });
 
+  it('lee la estructura real de /api/integrations/catalog y no confunde branches con products', () => {
+    const endpoint = leerCatalogo(
+      JSON.stringify({
+        ok: true,
+        branches: [{ id: 'b1', code: 'devoto', name: 'Devoto' }],
+        suppliers: [{ id: 's1', code: 'errecalde', name: 'Errecalde' }],
+        productTypes: [{ id: 't1', name: 'Quesos' }],
+        productSubtypes: [{ id: 'st1', typeId: 't1', name: 'Cremosos' }],
+        products: [
+          {
+            id: 'p1',
+            plu: '1211',
+            name: 'Cremoso Punta del Agua',
+            supplier: { id: 's1', name: 'Errecalde' },
+            type: { id: 't1', name: 'Quesos' },
+            subtype: { id: 'st1', name: 'Cremosos' },
+            internalUnit: 'piece',
+            active: true,
+          },
+        ],
+      }),
+    );
+
+    expect(endpoint.problemas).toEqual([]);
+    expect(endpoint.filas).toHaveLength(1);
+    expect(endpoint.filas[0]).toMatchObject({
+      plu: '1211',
+      nombre: 'Cremoso Punta del Agua',
+      proveedor: 'Errecalde',
+      categoria: 'Quesos',
+      subtipo: 'Cremosos',
+      unidad: 'UNIT',
+      activo: true,
+    });
+  });
+
   it('señala la línea de la fila que no se puede importar', () => {
     const { filas, problemas } = leerCatalogo(
       ['PLU,Nombre', '1211,Cremoso', ',Sin PLU', '1300,'].join('\n'),
