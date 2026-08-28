@@ -6,7 +6,6 @@ import { branchScopeFilter, hasPermission, type AuthUser } from '@/lib/auth/sess
 import { Decimal, money, toDecimal } from '@/lib/money';
 import { arToday, parseArDate } from '@/lib/datetime';
 import {
-  applyRounding,
   computeSalePrices,
   priceFromMargin,
   type MarginBasis,
