@@ -230,7 +230,25 @@ function pdfEscapeLatin1(s: string): Buffer {
 
 function pdfText(x: number, y: number, size: number, value: string, bold = false): Buffer {
   return Buffer.concat([
-    Buffer.from(`BT /F${bold ? 2 : 1} ${size} Tf ${x} ${y} Td (`, 'ascii'),
+    Buffer.from(`0 0 0 rg BT /F${bold ? 2 : 1} ${size} Tf ${x} ${y} Td (`, 'ascii'),
+    pdfEscapeLatin1(value),
+    Buffer.from(') Tj ET\n', 'ascii'),
+  ]);
+}
+
+function pdfTextColor(
+  x: number,
+  y: number,
+  size: number,
+  value: string,
+  rgb: [number, number, number],
+  bold = false,
+): Buffer {
+  return Buffer.concat([
+    Buffer.from(
+      `${rgb[0]} ${rgb[1]} ${rgb[2]} rg BT /F${bold ? 2 : 1} ${size} Tf ${x} ${y} Td (`,
+      'ascii',
+    ),
     pdfEscapeLatin1(value),
     Buffer.from(') Tj ET\n', 'ascii'),
   ]);
@@ -385,17 +403,18 @@ export function priceRowsToEmployeePdf(
 
     // Encabezado de marca.
     parts.push(pdfFillRect(0, pageH - 92, pageW, 92, verde));
-    parts.push(pdfText(margin, pageH - 42, 20, 'Don Ginés', true));
-    parts.push(pdfText(margin, pageH - 65, 11, 'LISTA DE PRECIOS DE VENTA', true));
+    parts.push(pdfTextColor(margin, pageH - 42, 20, 'Don Ginés', [1, 1, 1], true));
+    parts.push(pdfTextColor(margin, pageH - 65, 11, 'LISTA DE PRECIOS DE VENTA', [0.94, 0.88, 0.68], true));
 
     const filtro = filtersLabel(filters) || 'Todos los productos';
-    parts.push(pdfText(pageW - margin - 210, pageH - 42, 8, truncatePdf(filtro, 42)));
+    parts.push(pdfTextColor(pageW - margin - 210, pageH - 42, 8, truncatePdf(filtro, 42), [1, 1, 1]));
     parts.push(
-      pdfText(
+      pdfTextColor(
         pageW - margin - 210,
         pageH - 63,
         8,
         `Página ${pageIndex + 1} de ${totalPages}`,
+        [0.94, 0.88, 0.68],
       ),
     );
 
@@ -416,8 +435,8 @@ export function priceRowsToEmployeePdf(
       parts.push(pdfFillRect(x, y + cardH - 24, 5, 24, dorado));
 
       const id = r.usesPlu ? `PLU ${r.internalCode}` : `CÓD. ${r.barcode ?? '-'}`;
-      parts.push(pdfText(x + 12, y + cardH - 17, 9.5, truncatePdf(r.name, 34), true));
-      parts.push(pdfText(x + colW - 72, y + cardH - 17, 7.5, id, true));
+      parts.push(pdfText(x + 12, y + cardH - 17, 9.5, truncatePdf(r.name, 27), true));
+      parts.push(pdfTextColor(x + colW - 72, y + cardH - 17, 7.5, id, verde, true));
       parts.push(pdfLine(x + 10, y + cardH - 31, x + colW - 10, y + cardH - 31, borde));
 
       const addPrice = (label: string, value: string | null, px: number, py: number) => {
