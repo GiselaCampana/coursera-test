@@ -340,6 +340,7 @@ export interface PriceBoardRow {
   internalCode: string;
   name: string;
   category: string | null;
+  subtype: string | null;
   saleMode: SaleMode;
   purchaseUnit: 'KG' | 'UNIT';
   purchaseUnitWeightKg: string | null;
@@ -408,6 +409,7 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       internalCode: product.internalCode,
       name: product.normalizedName,
       category: product.category,
+      subtype: product.subtype,
       saleMode: product.saleMode as SaleMode,
       purchaseUnit: suggestion.purchaseUnit,
       purchaseUnitWeightKg: suggestion.purchaseUnitWeightKg,
