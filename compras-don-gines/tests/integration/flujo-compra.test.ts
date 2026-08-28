@@ -31,6 +31,7 @@ import {
   approveSalePrice,
   getLatestCost,
   updateProductPriceConfig,
+  resolvePricingRule,
 } from '@/lib/services/pricing';
 import {
   getPriceExportRows,
