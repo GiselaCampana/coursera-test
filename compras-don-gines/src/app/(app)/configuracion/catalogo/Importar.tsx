@@ -92,8 +92,9 @@ export function Importar() {
         <h2>1. Elegí el archivo</h2>
         <p className="chico medio">
           La exportación del catálogo de Control de Stock, en CSV o JSON. Tiene que traer al menos
-          el PLU y el nombre; si además trae familia, categoría, proveedor, código del proveedor o
-          activo, se usan. El PLU se copia tal cual: acá no se renumera nada.
+          PLU y Artículo. Para que los PDFs y filtros queden correctamente organizados, conviene
+          exportar también «Tipo de Artículo» y «Subtipo de Artículo». El PLU se copia tal cual:
+          acá no se renumera nada.
         </p>
 
         <div className="campo">
@@ -205,6 +206,25 @@ export function Importar() {
             {informe.columnas.length > 0 ? (
               <p className="ayuda">Columnas reconocidas: {informe.columnas.join(', ')}.</p>
             ) : null}
+            {!informe.traeTipo || !informe.traeSubtipo ? (
+              <div className="mensaje mensaje-aviso" role="alert">
+                <strong>La clasificación está incompleta.</strong>{' '}
+                {!informe.traeTipo && !informe.traeSubtipo
+                  ? 'Este archivo no trae Tipo de Artículo ni Subtipo de Artículo.'
+                  : !informe.traeTipo
+                    ? 'Este archivo no trae Tipo de Artículo.'
+                    : 'Este archivo no trae Subtipo de Artículo.'}{' '}
+                Los productos se pueden importar igual, pero los que no tengan clasificación
+                quedarán al final del PDF como «Pendientes de clasificar». Para completar el
+                catálogo, exportá Hoja 1 incluyendo esas columnas y volvé a importar: se actualiza
+                por PLU sin tocar compras, costos ni marcajes.
+              </div>
+            ) : (
+              <p className="mensaje mensaje-ok">
+                El archivo trae Tipo de Artículo y Subtipo de Artículo. La clasificación se
+                actualizará por PLU.
+              </p>
+            )}
           </div>
 
           {/*
