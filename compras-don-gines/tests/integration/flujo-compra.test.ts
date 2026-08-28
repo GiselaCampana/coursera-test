@@ -3899,6 +3899,7 @@ describe('precios por kilo configurables', () => {
     const empleadosTexto = empleados.toString('latin1');
     expect(empleadosTexto).toContain('FIAMBRES');
     expect(empleadosTexto).toContain('Jamones cocidos');
+    expect(empleadosTexto).not.toContain('Sin subtipo');
     expect(empleadosTexto).not.toContain('Los Calvos');
 
     const xlsx = await priceRowsToXlsx(rows);
