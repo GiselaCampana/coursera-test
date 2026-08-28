@@ -89,6 +89,9 @@ export interface InformeDeCatalogo {
   codigosPorAprender: { plu: string; proveedor: string; codigo: string }[];
   problemas: string[];
   columnas: string[];
+  /** Si la fuente trajo los dos niveles de clasificación del catálogo maestro. */
+  traeTipo: boolean;
+  traeSubtipo: boolean;
   /** Cuántos se escribieron. Cero mientras es sólo un informe. */
   aplicados: number;
 }
