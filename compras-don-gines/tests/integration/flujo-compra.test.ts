@@ -3871,6 +3871,10 @@ describe('precios por kilo configurables', () => {
 
   it('exporta los dos PDF y un Excel válido con datos', async () => {
     const productId = escenario.productos['1001'];
+    await prisma.product.update({
+      where: { id: productId },
+      data: { category: 'Fiambres', subtype: 'Jamones cocidos' },
+    });
     await prisma.costHistory.create({
       data: {
         productId,
@@ -3892,6 +3896,10 @@ describe('precios por kilo configurables', () => {
       expect(archivo.subarray(0, 8).toString('latin1')).toContain('%PDF-1.4');
       expect(archivo.length).toBeGreaterThan(500);
     }
+    const empleadosTexto = empleados.toString('latin1');
+    expect(empleadosTexto).toContain('FIAMBRES');
+    expect(empleadosTexto).toContain('Jamones cocidos');
+    expect(empleadosTexto).not.toContain('Los Calvos');
 
     const xlsx = await priceRowsToXlsx(rows);
     expect(xlsx.subarray(0, 2).toString('ascii')).toBe('PK');
