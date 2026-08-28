@@ -59,6 +59,36 @@ test.describe('catálogo Don Ginés', () => {
     await expect(page.locator('table tbody tr')).toHaveCount(antes);
   });
 
+  test('avisa si el archivo de Stock no trae Tipo y Subtipo', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/catalogo');
+
+    await page.locator('#texto').fill(
+      'PLU;Artículo;Proveedor;Sucursal;Cantidad\n1211;Cremoso Punta del Agua;Errecalde;General;0',
+    );
+    await page.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+
+    await expect(page.getByText('La clasificación está incompleta.')).toBeVisible();
+    await expect(page.getByText(/no trae Tipo de Artículo ni Subtipo de Artículo/)).toBeVisible();
+  });
+
+  test('confirma cuando Hoja 1 trae Tipo y Subtipo', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/catalogo');
+
+    await page.locator('#texto').fill(
+      [
+        'PLU;Artículo;Proveedor;Tipo de Artículo;Subtipo de Artículo',
+        '1211;Cremoso Punta del Agua;Errecalde;Quesos;Cremosos',
+      ].join('\n'),
+    );
+    await page.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+
+    await expect(
+      page.getByText(/El archivo trae Tipo de Artículo y Subtipo de Artículo/),
+    ).toBeVisible();
+  });
+
   test('avisa cuando el archivo no trae las columnas que hacen falta', async ({ page }) => {
     await ingresar(page, 'admin');
     await page.goto('/configuracion/catalogo');
