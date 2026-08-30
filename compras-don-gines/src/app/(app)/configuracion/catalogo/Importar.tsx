@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useRef, useState } from 'react';
+import { useActionState, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import {
   analizarCatalogo,
@@ -74,54 +74,6 @@ export function Importar() {
   );
   const [texto, setTexto] = useState('');
   const [nombreArchivo, setNombreArchivo] = useState<string | null>(null);
-  const [cargandoStock, setCargandoStock] = useState(false);
-  const [errorStock, setErrorStock] = useState<string | null>(null);
-  const formPreviaRef = useRef<HTMLFormElement>(null);
-  const botonArchivoRef = useRef<HTMLButtonElement>(null);
-
-  const traerDesdeStock = async () => {
-    setCargandoStock(true);
-    setErrorStock(null);
-    try {
-      /*
-       * Este dominio abre bien desde los teléfonos pero algunos servidores no
-       * lo resuelven por DNS. Por eso la lectura se hace desde el navegador
-       * del usuario y luego se manda el JSON al mismo analizador que usamos
-       * para archivos: no hay dos caminos de importación distintos.
-       */
-      const respuesta = await fetch(
-        'https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/catalog',
-        {
-          cache: 'no-store',
-          headers: { accept: 'application/json' },
-        },
-      );
-      if (!respuesta.ok) {
-        throw new Error(`Control de Stock respondió ${respuesta.status}.`);
-      }
-      const contenido = await respuesta.text();
-      if (!contenido.trim()) throw new Error('Control de Stock devolvió un catálogo vacío.');
-
-      setTexto(contenido);
-      setNombreArchivo('Control de Stock · catálogo en vivo');
-
-      // Esperamos a que React refleje el JSON en el textarea controlado antes
-      // de pedir la vista previa.
-      window.setTimeout(() => {
-        if (formPreviaRef.current && botonArchivoRef.current) {
-          formPreviaRef.current.requestSubmit(botonArchivoRef.current);
-        }
-      }, 0);
-    } catch (error) {
-      setErrorStock(
-        error instanceof Error
-          ? `No pude leer Control de Stock desde este navegador: ${error.message}`
-          : 'No pude leer Control de Stock desde este navegador.',
-      );
-    } finally {
-      setCargandoStock(false);
-    }
-  };
 
   const informe = previa.informe;
 
@@ -136,7 +88,7 @@ export function Importar() {
 
   return (
     <>
-      <form ref={formPreviaRef} action={accionPrevia} className="card">
+      <form action={accionPrevia} className="card">
         <h2>1. Traer el catálogo</h2>
         <p className="chico medio">
           La fuente oficial es Control de Stock. Podés traerla directamente con el botón de abajo
@@ -149,20 +101,10 @@ export function Importar() {
         </div>
 
         <div className="acciones">
-          <button
-            type="button"
-            className="boton"
-            onClick={traerDesdeStock}
-            disabled={cargandoStock}
-          >
-            {cargandoStock ? 'Leyendo Control de Stock…' : 'Traer ahora desde Control de Stock'}
+          <button type="submit" className="boton" name="origen" value="stock">
+            Traer ahora desde Control de Stock
           </button>
         </div>
-        {errorStock ? (
-          <p className="mensaje mensaje-error" role="alert">
-            {errorStock}
-          </p>
-        ) : null}
 
         <hr />
 
@@ -239,7 +181,6 @@ export function Importar() {
 
         <div className="acciones">
           <button
-            ref={botonArchivoRef}
             type="submit"
             className="boton secundario"
             name="origen"
