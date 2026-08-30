@@ -3,7 +3,8 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireUser } from '@/lib/auth/session';
-import { toUserMessage } from '@/lib/errors';
+import { AppError, toUserMessage } from '@/lib/errors';
+import https from 'node:https';
 import {
   importarCatalogo,
   type InformeDeCatalogo,
@@ -21,22 +22,124 @@ export interface ResultadoImportacion {
 
 const ORIGENES: OrigenDeFamilia[] = ['auto', 'tipo', 'subtipo', 'ninguna'];
 
-const STOCK_CATALOG_URL =
-  'https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/catalog';
+const STOCK_CATALOG_HOST =
+  'control-stock-don-gines.gisela-campana.chatgpt.site';
+const STOCK_CATALOG_PATH = '/api/integrations/catalog';
+const STOCK_CATALOG_URL = `https://${STOCK_CATALOG_HOST}${STOCK_CATALOG_PATH}`;
+
+type DnsGoogleResponse = {
+  Answer?: Array<{ type?: number; data?: string }>;
+};
+
+async function resolverStockPorDoh(): Promise<string[]> {
+  const respuesta = await fetch(
+    `https://dns.google/resolve?name=${encodeURIComponent(STOCK_CATALOG_HOST)}&type=A`,
+    {
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(8_000),
+    },
+  );
+  if (!respuesta.ok) {
+    throw new Error(`DNS-over-HTTPS respondió ${respuesta.status}`);
+  }
+
+  const datos = (await respuesta.json()) as DnsGoogleResponse;
+  return (datos.Answer ?? [])
+    .filter((a) => a.type === 1 && typeof a.data === 'string')
+    .map((a) => a.data as string);
+}
+
+async function descargarStockPorIp(ip: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const pedido = https.request(
+      {
+        hostname: ip,
+        port: 443,
+        path: STOCK_CATALOG_PATH,
+        method: 'GET',
+        servername: STOCK_CATALOG_HOST,
+        headers: {
+          host: STOCK_CATALOG_HOST,
+          accept: 'application/json',
+          'user-agent': 'Compras-Don-Gines/1.0',
+        },
+        timeout: 12_000,
+        rejectUnauthorized: true,
+      },
+      (respuesta) => {
+        const estado = respuesta.statusCode ?? 0;
+        if (estado < 200 || estado >= 300) {
+          respuesta.resume();
+          reject(new Error(`Control de Stock respondió ${estado}`));
+          return;
+        }
+
+        let total = 0;
+        const partes: Buffer[] = [];
+        respuesta.on('data', (chunk: Buffer) => {
+          total += chunk.length;
+          if (total > 5_000_000) {
+            pedido.destroy(new Error('El catálogo de Control de Stock supera 5 MB.'));
+            return;
+          }
+          partes.push(chunk);
+        });
+        respuesta.on('end', () => resolve(Buffer.concat(partes).toString('utf8')));
+      },
+    );
+
+    pedido.on('timeout', () => pedido.destroy(new Error('Timeout leyendo Control de Stock')));
+    pedido.on('error', reject);
+    pedido.end();
+  });
+}
 
 async function leerCatalogoDeStock(): Promise<string> {
-  const respuesta = await fetch(STOCK_CATALOG_URL, {
-    cache: 'no-store',
-    headers: { accept: 'application/json' },
-  });
-  if (!respuesta.ok) {
-    throw new Error(
-      `Control de Stock respondió ${respuesta.status}. Probá de nuevo en unos segundos.`,
-    );
+  let ultimoError: unknown;
+
+  // Camino normal. Es el más rápido cuando el DNS del host funciona en Render.
+  try {
+    const respuesta = await fetch(STOCK_CATALOG_URL, {
+      cache: 'no-store',
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(12_000),
+    });
+    if (!respuesta.ok) {
+      throw new Error(`Control de Stock respondió ${respuesta.status}`);
+    }
+    const texto = await respuesta.text();
+    if (!texto.trim()) throw new Error('catálogo vacío');
+    return texto;
+  } catch (error) {
+    ultimoError = error;
   }
-  const texto = await respuesta.text();
-  if (!texto.trim()) throw new Error('Control de Stock devolvió un catálogo vacío.');
-  return texto;
+
+  /*
+   * chatgpt.site puede resolver en Safari y, sin embargo, fallar en el DNS del
+   * servidor de Render. En ese caso resolvemos el A mediante DNS-over-HTTPS y
+   * abrimos TLS contra la IP usando el hostname original como SNI/Host.
+   * Seguimos validando el certificado: no se desactiva TLS.
+   */
+  try {
+    const ips = await resolverStockPorDoh();
+    for (const ip of ips) {
+      try {
+        const texto = await descargarStockPorIp(ip);
+        if (texto.trim()) return texto;
+      } catch (error) {
+        ultimoError = error;
+      }
+    }
+  } catch (error) {
+    ultimoError = error;
+  }
+
+  console.error('No se pudo leer catálogo de Control de Stock', ultimoError);
+  throw new AppError(
+    'No pude conectarme con Control de Stock automáticamente. No se modificó ningún dato. Probá nuevamente en unos segundos.',
+    { status: 502, code: 'STOCK_NO_DISPONIBLE' },
+  );
 }
 
 function leerOrigen(valor: FormDataEntryValue | null): OrigenDeFamilia {
