@@ -56,6 +56,9 @@ export default async function PaginaProductos({
       }
     : {};
 
+  const porcentaje = (valor: { toString(): string } | null | undefined): string =>
+    valor == null ? '' : String(Number(valor.toString()) * 100);
+
   const [productos, proveedores] = await Promise.all([
     prisma.product.findMany({
       where: filtro,
@@ -197,7 +200,7 @@ export default async function PaginaProductos({
             required
           />
           <p className="ayuda">
-            Los marcajes específicos de horma, caja, feteado y efectivo se ajustan en la pantalla Precios.
+            Si no definís un marcaje específico abajo, esta base se usa para esa modalidad.
           </p>
         </div>
         <div className="campo">
@@ -210,6 +213,113 @@ export default async function PaginaProductos({
             <option value="SOBRE_COSTO">Sobre el costo · precio = costo × (1 + marcaje)</option>
             <option value="SOBRE_VENTA">Sobre la venta · precio = costo / (1 − marcaje)</option>
           </select>
+        </div>
+      </div>
+
+      <div className="card card-compacta">
+        <h4>Marcajes específicos</h4>
+        <p className="ayuda">
+          Si un campo queda vacío, usa el marcaje base. Así podés definir desde acá los mismos
+          marcajes de horma, caja, 100 g, 1/4 kg y pieza que aparecen en Precios.
+        </p>
+
+        <h5>Productos al corte</h5>
+        <div className="fila fila-3">
+          <div className="campo">
+            <label htmlFor={`${prefijo}-horma-dig`}>Horma digital (%)</label>
+            <input
+              id={`${prefijo}-horma-dig`}
+              name="alCorteHormaDigitalMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.alCorteHormaDigitalMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+          <div className="campo">
+            <label htmlFor={`${prefijo}-horma-ef`}>Horma efectivo (%)</label>
+            <input
+              id={`${prefijo}-horma-ef`}
+              name="alCorteHormaCashMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.alCorteHormaCashMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+          <div className="campo">
+            <label htmlFor={`${prefijo}-caja-ef`}>Caja efectivo (%)</label>
+            <input
+              id={`${prefijo}-caja-ef`}
+              name="alCorteCajaCashMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.alCorteCajaCashMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+        </div>
+
+        <h5>Productos feteables</h5>
+        <div className="fila fila-2">
+          <div className="campo">
+            <label htmlFor={`${prefijo}-100g`}>Venta 100 g (%)</label>
+            <input
+              id={`${prefijo}-100g`}
+              name="feteado100gMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.feteado100gMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+          <div className="campo">
+            <label htmlFor={`${prefijo}-cuarto`}>Venta 1/4 kg (%)</label>
+            <input
+              id={`${prefijo}-cuarto`}
+              name="feteadoQuarterMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.feteadoQuarterMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+        </div>
+        <div className="fila fila-2">
+          <div className="campo">
+            <label htmlFor={`${prefijo}-pieza-dig`}>Pieza entera digital (%)</label>
+            <input
+              id={`${prefijo}-pieza-dig`}
+              name="feteadoPieceDigitalMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.feteadoPieceDigitalMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+          <div className="campo">
+            <label htmlFor={`${prefijo}-pieza-ef`}>Pieza entera efectivo (%)</label>
+            <input
+              id={`${prefijo}-pieza-ef`}
+              name="feteadoPieceCashMarginPct"
+              type="text"
+              inputMode="decimal"
+              defaultValue={porcentaje(p?.feteadoPieceCashMarginPct)}
+              placeholder="Usa marcaje base"
+            />
+          </div>
+        </div>
+
+        <div className="campo">
+          <label htmlFor={`${prefijo}-unidad-entera`}>Unidad / lata / cajón entero (%)</label>
+          <input
+            id={`${prefijo}-unidad-entera`}
+            name="wholeUnitMarginPct"
+            type="text"
+            inputMode="decimal"
+            defaultValue={porcentaje(p?.wholeUnitMarginPct)}
+            placeholder="Usa marcaje base"
+          />
         </div>
       </div>
 
