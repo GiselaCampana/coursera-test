@@ -187,6 +187,39 @@ async function sembrarCon(prisma: PrismaClient) {
     },
   });
 
+  /*
+   * El cremoso: PLU 1211, el único artículo cuya correspondencia con Errecalde
+   * está confirmada por la usuaria (ART-00228 → 1211).
+   *
+   * Está acá porque es el artículo sobre el que se prueban los marcajes
+   * específicos. Sin él, la pantalla de Productos no tiene nada que editar y la
+   * prueba falla por falta de dato, no por un defecto de la aplicación.
+   */
+  await prisma.product.create({
+    data: {
+      internalCode: '1211',
+      normalizedName: 'Cremoso Punta del Agua',
+      category: 'Quesos',
+      purchaseUnit: 'KG',
+      saleMode: 'AL_CORTE',
+      avgPieceWeightKg: '4.000',
+      defaultSupplierId: errecalde.id,
+      targetMarginPct: '0.45',
+      marginBasis: 'SOBRE_COSTO',
+      cashDiscountPct: '0.10',
+      roundingRule: 'NEAREST_100',
+      aliases: {
+        create: {
+          supplierId: errecalde.id,
+          supplierCode: 'ART-00228',
+          alias: 'CREMOSO PUNTA DEL AGUA',
+          normalized: normalizeText('CREMOSO PUNTA DEL AGUA'),
+          origin: 'MANUAL',
+        },
+      },
+    },
+  });
+
   const producto = await prisma.product.create({
     data: {
       internalCode: '1001',

@@ -988,8 +988,27 @@ export async function learnProductAlias(
       where: { supplierId: input.supplierId, supplierCode: codigo },
     });
     if (!tomado) {
+      /*
+       * La fila con esta misma grafía sirve para colgarle el código, pero sólo
+       * si todavía no tiene uno.
+       *
+       * Un proveedor puede facturar el mismo artículo con dos códigos —la
+       * muzzarella Barraza en plancha viene como ART-01611 de 10 kg y como
+       * ART-82444 de 5 kg, y para Don Ginés las dos son el PLU 1317—. Si el
+       * segundo código se escribiera encima del primero, el primero dejaría de
+       * reconocerse y esa factura volvería a quedar sin asociar.
+       *
+       * Un código apunta a un artículo y a uno solo; al revés no: un artículo
+       * puede tener varios códigos del mismo proveedor. La asimetría es la que
+       * sostiene el índice único, y hay que respetarla en las dos direcciones.
+       */
       const mismaGrafia = await tx.productAlias.findFirst({
-        where: { productId: input.productId, supplierId: input.supplierId, normalized },
+        where: {
+          productId: input.productId,
+          supplierId: input.supplierId,
+          normalized,
+          supplierCode: null,
+        },
       });
       if (mismaGrafia) {
         await tx.productAlias.update({
@@ -998,13 +1017,28 @@ export async function learnProductAlias(
         });
         return;
       }
+
+      /*
+       * Si la grafía ya está usada por otro código del mismo artículo, la fila
+       * nueva se identifica por el código.
+       *
+       * `normalized` es único por producto y proveedor, así que no puede
+       * repetirse el texto. Al segundo código se le pone el propio código
+       * normalizado: no va a coincidir nunca con una descripción de factura
+       * —que es lo que busca el paso por grafía— y deja intacta la búsqueda por
+       * código, que es para lo que existe esta fila.
+       */
+      const grafiaLibre = await tx.productAlias.findFirst({
+        where: { productId: input.productId, supplierId: input.supplierId, normalized },
+      });
       await tx.productAlias.create({
         data: {
           productId: input.productId,
           supplierId: input.supplierId,
           supplierCode: codigo,
           alias: input.description,
-          normalized: normalized.length >= 3 ? normalized : normalizeText(codigo),
+          normalized:
+            grafiaLibre || normalized.length < 3 ? normalizeText(codigo) : normalized,
           origin: 'MANUAL',
         },
       });

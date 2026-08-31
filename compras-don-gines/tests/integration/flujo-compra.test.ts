@@ -4446,3 +4446,72 @@ describe('el catálogo tal como lo exporta la Hoja 1', () => {
     expect(await prisma.productAlias.count()).toBe(0);
   });
 });
+
+describe('un proveedor que factura el mismo artículo con dos códigos', () => {
+  beforeEach(async () => {
+    await limpiarBase();
+    escenario = await sembrarEscenario();
+  });
+
+  /*
+   * Errecalde factura la muzzarella Barraza en plancha con dos códigos —una
+   * presentación de 10 kg y otra de 5 kg— y para Don Ginés es un solo artículo,
+   * el PLU 1317. Los dos códigos tienen que llevar al mismo PLU.
+   *
+   * Al revés no: un código apunta a un artículo y a uno solo. Es la asimetría
+   * que sostiene el índice único, y no es simétrica por una razón concreta: si
+   * ART-01611 significara dos cosas no habría forma de saber a cuál cargarle la
+   * compra, mientras que dos códigos del mismo artículo se cargan los dos ahí.
+   */
+
+  it('los dos códigos llevan al mismo PLU, y ninguno se pierde', async () => {
+    const archivo = [
+      'PLU;Artículo;Proveedor;Codigo Proveedor',
+      '1317;Muzzarella Barraza Plancha;Distribución Errecalde;ART-01611',
+      '1317;Muzzarella Barraza Plancha;Distribución Errecalde;ART-82444',
+    ].join('\n');
+    await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+
+    const producto = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1317' } });
+    for (const codigo of ['ART-01611', 'ART-82444']) {
+      const alias = await prisma.productAlias.findFirst({
+        where: { supplierId: escenario.proveedorErrecaldeId, supplierCode: codigo },
+      });
+      expect(alias, `se perdió el código ${codigo}`).not.toBeNull();
+      expect(alias!.productId).toBe(producto.id);
+    }
+  });
+
+  it('y los dos reconocen el renglón de la factura', async () => {
+    const archivo = [
+      'PLU;Artículo;Proveedor;Codigo Proveedor',
+      '1317;Muzzarella Barraza Plancha;Distribución Errecalde;ART-01611',
+      '1317;Muzzarella Barraza Plancha;Distribución Errecalde;ART-82444',
+    ].join('\n');
+    await importarCatalogo(escenario.admin, archivo, { aplicar: true });
+    const producto = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1317' } });
+
+    for (const codigo of ['ART-01611', 'ART-82444']) {
+      const [resultado] = await matchItemsToProducts(
+        costItems(
+          [
+            {
+              lineNumber: 1,
+              supplierCode: codigo,
+              description: 'PLANCHA BARRAZA XIOKG',
+              quantity: '1',
+              unit: 'KG',
+              unitNetPrice: '100',
+              discountPct: '0',
+              ivaRate: '0.21',
+            },
+          ],
+          { netTotal: '100', ivaTotal: '21', perceptionsTotal: '0' },
+        ),
+        escenario.proveedorErrecaldeId,
+      );
+      expect(resultado.method, `${codigo} no entró por código`).toBe('SUPPLIER_CODE');
+      expect(resultado.productId).toBe(producto.id);
+    }
+  });
+});

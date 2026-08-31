@@ -158,6 +158,8 @@ export async function importarCatalogo(
 
   // --- Un PLU repetido dentro del mismo archivo -----------------------------
   const porPlu = new Map<string, FilaDeCatalogo>();
+  /** Códigos adicionales del mismo PLU, traídos por filas repetidas. */
+  const codigosExtra = new Map<string, { proveedor: string | null; codigo: string }[]>();
   for (const fila of lectura.filas) {
     const previa = porPlu.get(fila.plu);
     if (!previa) {
@@ -172,8 +174,28 @@ export async function importarCatalogo(
           `(línea ${previa.linea}) y «${fila.nombre}» (línea ${fila.linea}).`,
       });
       porPlu.delete(fila.plu);
+      continue;
     }
-    // Repetido con el mismo nombre: es la misma fila dos veces, no molesta.
+
+    /*
+     * Mismo PLU, mismo nombre y **otro** código de proveedor: no es la fila
+     * repetida, es un código más para el mismo artículo.
+     *
+     * Errecalde factura la muzzarella Barraza en plancha con dos códigos según
+     * la presentación —ART-01611 de 10 kg y ART-82444 de 5 kg— y para Don Ginés
+     * las dos son el PLU 1317. Descartar la segunda fila por "duplicada"
+     * perdería ese código, y la próxima factura que lo traiga entraría sin
+     * asociar sin que nadie entienda por qué.
+     */
+    if (
+      fila.codigoProveedor &&
+      normalizarCodigo(fila.codigoProveedor) !== normalizarCodigo(previa.codigoProveedor ?? '')
+    ) {
+      const extras = codigosExtra.get(fila.plu) ?? [];
+      extras.push({ proveedor: fila.proveedor ?? previa.proveedor, codigo: fila.codigoProveedor });
+      codigosExtra.set(fila.plu, extras);
+    }
+    // Repetido con el mismo nombre y el mismo código: es la misma fila dos veces.
   }
   const conflictivos = new Set(informe.conflictos.map((c) => c.plu));
 
@@ -431,23 +453,40 @@ export async function importarCatalogo(
         informe.proveedoresDesconocidos.push(fila.proveedor);
       }
     }
-    if (proveedor && fila.codigoProveedor) {
-      const llave = `${proveedor.id}|${normalizarCodigo(fila.codigoProveedor)}`;
+    /*
+     * Todos los códigos de este PLU: el de su fila más los que hayan traído
+     * las filas repetidas. Un artículo puede tener más de un código del mismo
+     * proveedor, y todos tienen que quedar aprendidos.
+     */
+    const codigosDeLaFila: { proveedor: string | null; codigo: string }[] = [
+      ...(fila.codigoProveedor
+        ? [{ proveedor: fila.proveedor, codigo: fila.codigoProveedor }]
+        : []),
+      ...(codigosExtra.get(fila.plu) ?? []),
+    ];
+
+    for (const entrada of codigosDeLaFila) {
+      const suProveedor = entrada.proveedor
+        ? (proveedorPorNombre.get(normalizeText(entrada.proveedor)) ?? proveedor)
+        : proveedor;
+      if (!suProveedor) continue;
+
+      const llave = `${suProveedor.id}|${normalizarCodigo(entrada.codigo)}`;
       const dueno = duenoDelCodigo.get(llave);
       if (dueno && dueno !== existente?.id) {
         const otro = existentes.find((p) => p.id === dueno);
         informe.conflictos.push({
           plu: fila.plu,
           motivo:
-            `El código ${fila.codigoProveedor} de ${fila.proveedor} ya está asignado al PLU ` +
+            `El código ${entrada.codigo} de ${suProveedor.tradeName} ya está asignado al PLU ` +
             `${otro?.internalCode ?? '?'}. No se cambia solo: un código de proveedor apunta a ` +
             'un artículo y a uno solo.',
         });
       } else if (!dueno) {
         informe.codigosPorAprender.push({
           plu: fila.plu,
-          proveedor: proveedor.tradeName,
-          codigo: fila.codigoProveedor,
+          proveedor: suProveedor.tradeName,
+          codigo: entrada.codigo,
         });
       }
     }
@@ -487,8 +526,12 @@ export async function importarCatalogo(
         });
     informe.aplicados += 1;
 
-    if (proveedor && fila.codigoProveedor) {
-      const llave = `${proveedor.id}|${normalizarCodigo(fila.codigoProveedor)}`;
+    for (const entrada of codigosDeLaFila) {
+      const suProveedor = entrada.proveedor
+        ? (proveedorPorNombre.get(normalizeText(entrada.proveedor)) ?? proveedor)
+        : proveedor;
+      if (!suProveedor) continue;
+      const llave = `${suProveedor.id}|${normalizarCodigo(entrada.codigo)}`;
       if (!duenoDelCodigo.has(llave)) {
         /*
          * Se aprende con la misma función que usa la confirmación de una
@@ -501,8 +544,8 @@ export async function importarCatalogo(
          */
         await learnProductAlias(prisma, {
           productId: producto.id,
-          supplierId: proveedor.id,
-          supplierCode: fila.codigoProveedor,
+          supplierId: suProveedor.id,
+          supplierCode: entrada.codigo,
           description: fila.nombre,
         });
         duenoDelCodigo.set(llave, producto.id);
