@@ -9,6 +9,20 @@ import { ingresar, sinScrollHorizontal, soloEnIphone } from './ayudas';
  * en dos pasos —mirar primero, escribir después—. Los números de qué entra y
  * qué no se prueban en la integración, que es donde se puede armar el caso.
  */
+test.describe('configuración de marcajes por producto', () => {
+  test('permite editar horma y 1/4 además del marcaje base', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/productos?q=1211');
+
+    await page.getByRole('button', { name: /Editar Cremoso Punta del Agua/i }).click();
+
+    await expect(page.getByLabel('Marcaje base (%)')).toBeVisible();
+    await expect(page.getByLabel('Horma digital (%)')).toBeVisible();
+    await expect(page.getByLabel('Horma efectivo (%)')).toBeVisible();
+    await expect(page.getByLabel('Venta 1/4 kg (%)')).toBeVisible();
+  });
+});
+
 test.describe('catálogo Don Ginés', () => {
   test('se llega desde Configuración y muestra PLU, familia y códigos', async ({ page }) => {
     await ingresar(page, 'admin');
