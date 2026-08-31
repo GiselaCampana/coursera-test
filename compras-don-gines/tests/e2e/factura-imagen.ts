@@ -31,6 +31,33 @@ const IZQUIERDA = 80;
 const MONO = 'Liberation Mono, DejaVu Sans Mono, monospace';
 const SANS = 'Liberation Sans, DejaVu Sans, sans-serif';
 
+/**
+ * Quién emite el comprobante.
+ *
+ * Se puede cambiar porque hace falta poder fabricar la factura de un proveedor
+ * que la base **no** tiene cargado: es el caso que ejercita el alta de
+ * proveedor desde la propia revisión, y con el emisor fijo no había manera de
+ * llegar a él.
+ */
+export interface Emisor {
+  nombre: string;
+  rubro: string;
+  cuit: string;
+}
+
+export const LOS_CALVOS: Emisor = {
+  nombre: 'LOS CALVOS S.A.',
+  rubro: 'Fabrica de chacinados',
+  cuit: '30-61234567-9',
+};
+
+/** Un proveedor que no está en la base: el que dispara el alta desde la factura. */
+export const PROVEEDOR_DESCONOCIDO: Emisor = {
+  nombre: 'FIAMBRES DEL OESTE S R L',
+  rubro: 'Distribuidora de fiambres',
+  cuit: '30-59876543-2',
+};
+
 interface Renglon {
   codigo: string;
   descripcion: string;
@@ -118,6 +145,7 @@ export function svgFactura(
    * la prueba quería probar.
    */
   numero = '00212356',
+  emisor: Emisor = LOS_CALVOS,
 ): string {
   const partes: string[] = [];
   const chico = deterioro === 'borroso';
@@ -125,9 +153,9 @@ export function svgFactura(
   partes.push(`<rect width="${ANCHO}" height="${ALTO}" fill="#ffffff"/>`);
 
   // --- Encabezado ---------------------------------------------------------
-  partes.push(texto('LOS CALVOS S.A.', { x: 90, y: 110, tamano: 46, familia: SANS, peso: 'bold' }));
-  partes.push(texto('Fabrica de chacinados', { x: 90, y: 158, tamano: 26, familia: SANS }));
-  partes.push(texto('CUIT: 30-61234567-9', { x: 90, y: 200, tamano: 30 }));
+  partes.push(texto(emisor.nombre, { x: 90, y: 110, tamano: 46, familia: SANS, peso: 'bold' }));
+  partes.push(texto(emisor.rubro, { x: 90, y: 158, tamano: 26, familia: SANS }));
+  partes.push(texto(`CUIT: ${emisor.cuit}`, { x: 90, y: 200, tamano: 30 }));
   partes.push(texto('Ingresos Brutos: 901-234567-8', { x: 90, y: 240, tamano: 28 }));
 
   partes.push(texto('FACTURA', { x: DERECHA, y: 110, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
@@ -219,6 +247,8 @@ export async function facturaLosCalvosJpeg(
     totalAlterado?: boolean;
     /** Número del comprobante, para no chocar con los ya sembrados. */
     numero?: string;
+    /** Quién la emite. Por omisión, Los Calvos. */
+    emisor?: Emisor;
   } = {},
 ): Promise<Buffer> {
   let imagen = sharp(
@@ -227,6 +257,7 @@ export async function facturaLosCalvosJpeg(
         opciones.deterioro ?? 'nitido',
         opciones.totalAlterado ?? false,
         opciones.numero ?? '00212356',
+        opciones.emisor ?? LOS_CALVOS,
       ),
     ),
     { density: 96 },

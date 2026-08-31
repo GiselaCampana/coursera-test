@@ -95,6 +95,13 @@ export interface ComprobanteRevision {
   id: string;
   sucursal: Opcion;
   proveedor: Opcion | null;
+  /**
+   * Razón social y CUIT tal como los leyó el OCR.
+   *
+   * Puede haber lectura sin proveedor: es justamente el caso de la factura de
+   * un proveedor que todavía no está cargado.
+   */
+  proveedorLeido: { nombre: string | null; cuit: string | null } | null;
   tipo: 'FACTURA' | 'REMITO';
   letra: string | null;
   puntoDeVenta: string;

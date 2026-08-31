@@ -127,6 +127,64 @@ export function PasoRevision({
     })),
   );
 
+  /*
+   * El alta de un proveedor que todavía no existe, sin salir del comprobante.
+   *
+   * Cuando aparece una factura de un proveedor nuevo, todo el trabajo ya está
+   * hecho: la foto sacada, el OCR corrido, los renglones asociados a mano.
+   * Mandar a Configuración → Proveedores en ese momento tira todo eso, así que
+   * el alta pasa acá, con lo que se leyó del papel ya cargado en los campos.
+   */
+  const leido = comprobante.proveedorLeido;
+  const [proveedoresDisponibles, setProveedoresDisponibles] = useState(proveedores);
+  const [altaProveedorAbierta, setAltaProveedorAbierta] = useState(false);
+  const [proveedorNombre, setProveedorNombre] = useState(leido?.nombre ?? '');
+  const [proveedorCuit, setProveedorCuit] = useState(leido?.cuit ?? '');
+  const [proveedorGuardando, setProveedorGuardando] = useState(false);
+  const [proveedorError, setProveedorError] = useState<string | null>(null);
+  const [proveedorAviso, setProveedorAviso] = useState<string | null>(null);
+
+  const crearProveedorRapido = async () => {
+    setProveedorError(null);
+    setProveedorAviso(null);
+    setProveedorGuardando(true);
+    try {
+      const respuesta = await fetch('/api/proveedores/rapido', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nombre: proveedorNombre,
+          razonSocial: leido?.nombre ?? null,
+          cuit: proveedorCuit || null,
+        }),
+      });
+      const datos = await respuesta.json();
+      if (!respuesta.ok) throw new AppError(datos.error ?? 'No pudimos crear el proveedor.');
+
+      setProveedoresDisponibles((prev) =>
+        prev.some((p) => p.id === datos.id) ? prev : [...prev, { id: datos.id, nombre: datos.nombre }],
+      );
+      setProveedorId(datos.id);
+      setAltaProveedorAbierta(false);
+      /*
+       * Si el CUIT ya estaba cargado no se creó nada: se enganchó al que existe.
+       * Decirlo importa, porque si no la pantalla mostraría un proveedor con
+       * otro nombre que el tipeado y parecería un error.
+       */
+      if (!datos.creado) {
+        setProveedorAviso(
+          datos.motivo === 'CUIT'
+            ? `Ese CUIT ya estaba cargado como ${datos.nombre}: se usó el proveedor que ya existía.`
+            : `Ya había un proveedor llamado ${datos.nombre}: se usó ése.`,
+        );
+      }
+    } catch (e) {
+      setProveedorError(toUserMessage(e));
+    } finally {
+      setProveedorGuardando(false);
+    }
+  };
+
   const [productosDisponibles, setProductosDisponibles] = useState(productos);
   const [altaProductoClave, setAltaProductoClave] = useState<string | null>(null);
   const [altaNombre, setAltaNombre] = useState('');
@@ -648,8 +706,110 @@ export function PasoRevision({
         </div>
       ) : null}
 
+      {/*
+        Un proveedor que no está cargado tiene que decirse antes que nada.
+
+        Sin este aviso, el comprobante llega a la revisión con el desplegable de
+        proveedor vacío y no hay forma de distinguir "el OCR no lo reconoció" de
+        "este proveedor no existe todavía". Son dos problemas distintos y se
+        arreglan distinto.
+      */}
+      {!proveedorId && leido ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Proveedor nuevo</h2>
+          </div>
+          <p className="mensaje mensaje-info" role="status">
+            Este comprobante lo emite{' '}
+            <strong>{leido.nombre ?? 'un proveedor sin nombre legible'}</strong>
+            {leido.cuit ? (
+              <>
+                {' '}
+                (CUIT <strong>{leido.cuit}</strong>)
+              </>
+            ) : null}
+            , que todavía no está cargado. Podés darlo de alta acá mismo sin perder la lectura ni
+            las asociaciones que ya hiciste.
+          </p>
+          {proveedorError ? (
+            <p className="mensaje mensaje-error" role="alert">
+              {proveedorError}
+            </p>
+          ) : null}
+          {altaProveedorAbierta ? (
+            <>
+              <div className="fila fila-2">
+                <div className="campo">
+                  <label htmlFor="alta-proveedor-nombre">Nombre del proveedor</label>
+                  <input
+                    id="alta-proveedor-nombre"
+                    type="text"
+                    value={proveedorNombre}
+                    onChange={(e) => setProveedorNombre(e.target.value)}
+                  />
+                </div>
+                <div className="campo">
+                  <label htmlFor="alta-proveedor-cuit">CUIT</label>
+                  <input
+                    id="alta-proveedor-cuit"
+                    type="text"
+                    inputMode="numeric"
+                    value={proveedorCuit}
+                    onChange={(e) => setProveedorCuit(e.target.value)}
+                    placeholder="30-12345678-9"
+                  />
+                </div>
+              </div>
+              <p className="ayuda">
+                Queda con lo que se lee del papel. El plazo de pago y las tasas se cargan después en
+                Configuración → Proveedores; hasta entonces la fecha prevista de pago se completa a
+                mano.
+              </p>
+              <div className="acciones">
+                <button
+                  type="button"
+                  className="boton boton-secundario"
+                  onClick={() => setAltaProveedorAbierta(false)}
+                  disabled={proveedorGuardando}
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  className="boton"
+                  onClick={crearProveedorRapido}
+                  disabled={proveedorGuardando}
+                >
+                  {proveedorGuardando ? 'Creando…' : 'Crear proveedor y continuar'}
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="acciones">
+              <button
+                type="button"
+                className="boton"
+                onClick={() => {
+                  setProveedorNombre(leido.nombre ?? '');
+                  setProveedorCuit(leido.cuit ?? '');
+                  setProveedorError(null);
+                  setAltaProveedorAbierta(true);
+                }}
+              >
+                Crear proveedor y continuar
+              </button>
+            </div>
+          )}
+        </div>
+      ) : null}
+
       <div className="card">
         <h2>El comprobante</h2>
+        {proveedorAviso ? (
+          <p className="mensaje mensaje-info" role="status">
+            {proveedorAviso}
+          </p>
+        ) : null}
         <div className="fila fila-2">
           <div className="campo">
             <label htmlFor="proveedor">Proveedor</label>
@@ -659,7 +819,7 @@ export function PasoRevision({
               onChange={(e) => setProveedorId(e.target.value)}
             >
               <option value="">Elegí el proveedor…</option>
-              {proveedores.map((p) => (
+              {proveedoresDisponibles.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.nombre}
                 </option>
@@ -980,7 +1140,8 @@ export function PasoRevision({
                     />
                     <span>
                       Recordar esta asociación para futuras facturas de{' '}
-                      {proveedores.find((p) => p.id === proveedorId)?.nombre ?? 'este proveedor'}
+                      {proveedoresDisponibles.find((p) => p.id === proveedorId)?.nombre ??
+                        'este proveedor'}
                     </span>
                   </label>
                 ) : null}

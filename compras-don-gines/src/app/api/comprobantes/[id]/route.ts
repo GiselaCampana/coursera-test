@@ -31,6 +31,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
       proveedor: document.supplier
         ? { id: document.supplier.id, nombre: document.supplier.tradeName }
         : null,
+      /*
+       * Quién firma el comprobante según el papel.
+       *
+       * Va aparte de `proveedor` porque son dos cosas distintas: éste es lo que
+       * se leyó, aquél es a qué ficha se lo pudo enganchar. Cuando hay lectura y
+       * no hay ficha, la pantalla tiene con qué ofrecer el alta sin mandar a
+       * nadie a mirar la foto de nuevo.
+       */
+      proveedorLeido:
+        document.readSupplierName || document.readSupplierCuit
+          ? { nombre: document.readSupplierName, cuit: document.readSupplierCuit }
+          : null,
       tipo: document.docType,
       letra: document.letter,
       puntoDeVenta: document.pointOfSale,

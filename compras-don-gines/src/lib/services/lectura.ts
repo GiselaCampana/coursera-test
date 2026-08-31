@@ -25,7 +25,7 @@ import type { OcrHeader, OcrSummary, ZonaAReleer } from '@/lib/ocr/types';
 import { env } from '@/lib/env';
 import { versionEnEjecucion } from '@/lib/version';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
-import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
+import { findSupplierByReading, formatCuit, getSupplierConditions } from '@/lib/services/suppliers';
 import {
   createTaxLines,
   itemToColumns,
@@ -239,6 +239,16 @@ export async function registrarLectura(
         where: { id: documentId },
         data: {
           supplierId: proveedor.supplierId,
+          /*
+           * Quién emitió el comprobante, según el papel.
+           *
+           * Se guarda siempre, coincida o no con un proveedor de la base. Si
+           * coincide es un dato de auditoría; si no coincide es lo único con lo
+           * que la pantalla de revisión puede ofrecer darlo de alta sin obligar
+           * a volver a mirar la foto.
+           */
+          readSupplierName: encabezado?.legalName ?? encabezado?.supplierName ?? null,
+          readSupplierCuit: formatCuit(encabezado?.cuit),
           docType: mejor.header?.docType === 'REMITO' ? 'REMITO' : 'FACTURA',
           letter: mejor.header?.letter ?? null,
           pointOfSale: mejor.header?.pointOfSale ?? '',

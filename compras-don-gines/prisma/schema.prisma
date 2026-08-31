@@ -389,6 +389,15 @@ model Document {
   supplierId String?
   supplier   Supplier? @relation(fields: [supplierId], references: [id])
 
+  /// Razón social y CUIT tal como los leyó el OCR del papel.
+  ///
+  /// Se guardan aunque el proveedor no exista todavía —de hecho, sobre todo en
+  /// ese caso—: sin esto, una factura de un proveedor desconocido llega a la
+  /// pantalla de revisión sin ningún dato de quién la emitió, y el operador
+  /// tiene que volver a mirar la foto para poder darlo de alta.
+  readSupplierName String?
+  readSupplierCuit String?
+
   docType       DocType @default(FACTURA)
   /// Letra de la factura: A, B, C, M, X…
   letter        String?
