@@ -84,14 +84,27 @@ test.describe('asociaciones históricas', () => {
     await expect(page.getByLabel('CSV o texto')).toContainText('ART-00228;1211');
     await expect(page.getByLabel('CSV o texto')).toContainText('ART-00758;1551');
 
-    // Para probar la vista previa con un caso aplicable usamos un PLU que sí
-    // existe en la semilla E2E y todavía no tiene código del proveedor.
+    /*
+     * Para la vista previa se usa un código que no aparece en ninguna factura
+     * de prueba.
+     *
+     * Antes se usaba ART-01477, y eso ataba esta prueba al orden de la suite:
+     * la lectura de la factura real de Errecalde asocia ese código a mano al
+     * revisarla, y a partir de ahí queda aprendido. Cuando el proyecto de
+     * escritorio llegaba acá ya no había nada que aplicar, y la prueba fallaba
+     * por un motivo que no tenía nada que ver con lo que quiere comprobar.
+     *
+     * Lo que se prueba es la pantalla, no los códigos reales de Errecalde: esos
+     * están en las dos comprobaciones del preset, más arriba.
+     */
     await page
       .getByLabel('CSV o texto')
-      .fill('Código proveedor;PLU\nART-01477;2002');
+      .fill('Código proveedor;PLU\nCOD-PRUEBA-9999;2002');
     await page.getByRole('button', { name: 'Ver propuesta' }).click();
 
-    await expect(page.getByText('ART-01477')).toBeVisible();
+    // Exacto: el código también está escrito en el textarea de arriba, y sin
+    // acotar el localizador encuentra los dos.
+    await expect(page.getByText('COD-PRUEBA-9999', { exact: true })).toBeVisible();
     await expect(page.getByText('Tomate en botella')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Aplicar 1 código/s' })).toBeVisible();
   });

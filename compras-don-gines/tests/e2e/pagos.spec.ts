@@ -119,9 +119,15 @@ test.describe('precios y compras', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Precios');
     await expect(page.getByText('Longaniza corta')).toBeVisible();
     await expect(page.getByText('Último costo')).toBeVisible();
-    await expect(page.getByText('Por 100 g')).toBeVisible();
-    await expect(page.getByText('Por 1/4 kg')).toBeVisible();
-    await expect(page.getByText('Por pieza (efectivo)')).toBeVisible();
+    /*
+     * Las etiquetas son las de la pantalla, que cambiaron al separar los
+     * marcajes por modalidad: ahora cada precio dice también sobre qué unidad
+     * está expresado, porque «por 1/4 kg» a secas no aclaraba si el número era
+     * el del cuarto o el del kilo.
+     */
+    await expect(page.getByText('Venta por 100 g')).toBeVisible();
+    await expect(page.getByText('Venta por 1/4 kg')).toBeVisible();
+    await expect(page.getByText('Pieza entera efectivo')).toBeVisible();
 
     await sinScrollHorizontal(page);
   });
