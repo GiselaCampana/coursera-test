@@ -457,6 +457,13 @@ function parseTasa(valor: string, etiqueta: string) {
   return normalizada;
 }
 
+function parseMarcajeOpcional(form: FormData, campo: string, etiqueta: string) {
+  if (!form.has(campo)) return undefined;
+  const valor = texto(form.get(campo));
+  if (!valor) return null;
+  return parseTasa(valor, etiqueta).toString();
+}
+
 // ---------------------------------------------------------------------------
 // Productos
 // ---------------------------------------------------------------------------
@@ -534,6 +541,42 @@ export async function saveProduct(user: AuthUser, form: FormData) {
     targetMarginPct: margen.toString(),
     marginBasis,
     cashDiscountPct: '0',
+    alCorteHormaDigitalMarginPct: parseMarcajeOpcional(
+      form,
+      'alCorteHormaDigitalMarginPct',
+      'horma digital',
+    ),
+    alCorteHormaCashMarginPct: parseMarcajeOpcional(
+      form,
+      'alCorteHormaCashMarginPct',
+      'horma efectivo',
+    ),
+    alCorteCajaCashMarginPct: parseMarcajeOpcional(
+      form,
+      'alCorteCajaCashMarginPct',
+      'caja efectivo',
+    ),
+    feteado100gMarginPct: parseMarcajeOpcional(form, 'feteado100gMarginPct', '100 g'),
+    feteadoQuarterMarginPct: parseMarcajeOpcional(
+      form,
+      'feteadoQuarterMarginPct',
+      '1/4 kg',
+    ),
+    feteadoPieceDigitalMarginPct: parseMarcajeOpcional(
+      form,
+      'feteadoPieceDigitalMarginPct',
+      'pieza digital',
+    ),
+    feteadoPieceCashMarginPct: parseMarcajeOpcional(
+      form,
+      'feteadoPieceCashMarginPct',
+      'pieza efectivo',
+    ),
+    wholeUnitMarginPct: parseMarcajeOpcional(
+      form,
+      'wholeUnitMarginPct',
+      'unidad entera',
+    ),
     usesPlu,
     barcode: barcode || null,
     roundingRule,
