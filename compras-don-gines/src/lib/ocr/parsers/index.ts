@@ -1,6 +1,7 @@
 import { analizadorGenerico } from '@/lib/ocr/parsers/generico';
 import { analizadorLosCalvos } from '@/lib/ocr/parsers/los-calvos';
 import { analizadorErrecalde } from '@/lib/ocr/parsers/errecalde';
+import { analizadorMabelherdi } from '@/lib/ocr/parsers/mabelherdi';
 import type { AnalizadorComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
 
 /**
@@ -12,6 +13,7 @@ import type { AnalizadorComprobante, TextosComprobante } from '@/lib/ocr/parsers
 export const ANALIZADORES: AnalizadorComprobante[] = [
   analizadorLosCalvos,
   analizadorErrecalde,
+  analizadorMabelherdi,
   analizadorGenerico,
 ];
 
@@ -30,5 +32,5 @@ export function elegirAnalizador(textos: TextosComprobante): AnalizadorElegido {
   return mejor;
 }
 
-export { analizadorGenerico, analizadorLosCalvos, analizadorErrecalde };
+export { analizadorGenerico, analizadorLosCalvos, analizadorErrecalde, analizadorMabelherdi };
 export * from '@/lib/ocr/parsers/tipos';
