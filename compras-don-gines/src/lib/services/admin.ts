@@ -620,6 +620,45 @@ export async function saveProduct(user: AuthUser, form: FormData) {
 }
 
 /**
+ * Alta mínima de un artículo, desde la revisión de la factura donde apareció.
+ *
+ * Sirve para no obligar a abandonar el comprobante cuando llega algo que el
+ * catálogo no tiene todavía. Deja la ficha con lo indispensable —nombre, PLU o
+ * código de barras y unidad de compra— y valores de arranque para el resto; la
+ * familia, los marcajes propios y el proveedor habitual se completan después en
+ * Configuración → Productos.
+ *
+ * Pasa por `saveProduct` a propósito y no escribe la fila por su cuenta: así
+ * los controles que valen para un alta completa —PLU repetido, código de barras
+ * de otro artículo, margen imposible— valen igual para ésta. Un atajo que se
+ * saltee esas comprobaciones termina metiendo en el catálogo justo lo que el
+ * catálogo no puede tener.
+ */
+export async function crearProductoRapido(
+  user: AuthUser,
+  input: {
+    nombre: string;
+    plu?: string | null;
+    usaPlu: boolean;
+    codigoBarras?: string | null;
+    unidadCompra?: 'KG' | 'UNIT';
+  },
+) {
+  const form = new FormData();
+  form.set('normalizedName', String(input.nombre ?? '').trim());
+  form.set('internalCode', String(input.plu ?? '').trim());
+  form.set('barcode', String(input.codigoBarras ?? '').trim());
+  if (input.usaPlu) form.set('usesPlu', 'on');
+  form.set('purchaseUnit', input.unidadCompra === 'UNIT' ? 'UNIT' : 'KG');
+  form.set('saleMode', 'FETEABLE');
+  form.set('targetMarginPct', '45');
+  form.set('marginBasis', 'SOBRE_COSTO');
+  form.set('roundingRule', 'NEAREST_100');
+  form.set('active', 'on');
+  return saveProduct(user, form);
+}
+
+/**
  * Guarda el código con el que un proveedor identifica un producto interno.
  *
  * Son dos códigos distintos y conviene no confundirlos: el PLU es con el que

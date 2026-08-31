@@ -1168,6 +1168,9 @@ tbody tr:last-child td {
 .mb0 {
   margin-bottom: 0;
 }
+.mb-chico {
+  margin-bottom: 7px;
+}
 .separador {
   height: 1px;
   background: var(--borde);

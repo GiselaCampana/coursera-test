@@ -7,6 +7,7 @@ import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL } from '@/lib/domain/payments';
 import { formatARS, formatQty } from '@/lib/money';
 import { AppError, toUserMessage } from '@/lib/errors';
 import { consultar, pedir } from '@/lib/cliente/red';
+import { filtrarCatalogo } from '@/lib/catalogo-busqueda';
 import { ListaControles, Semaforo } from '@/components/Estado';
 import { Pasos } from './NuevaCompra';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -186,6 +187,8 @@ export function PasoRevision({
   };
 
   const [productosDisponibles, setProductosDisponibles] = useState(productos);
+  /** Lo que se está escribiendo en el buscador de catálogo de cada renglón. */
+  const [busquedaProducto, setBusquedaProducto] = useState<Record<string, string>>({});
   const [altaProductoClave, setAltaProductoClave] = useState<string | null>(null);
   const [altaNombre, setAltaNombre] = useState('');
   const [altaPlu, setAltaPlu] = useState('');
@@ -224,6 +227,9 @@ export function PasoRevision({
       }
       setProductosDisponibles((prev) => [...prev, datos]);
       actualizarArticulo(articulo.clave, 'productoId', datos.id);
+      // El buscador vuelve a cero: lo que se buscaba ya no hace falta, y con el
+      // filtro puesto el artículo recién creado podría no verse en la lista.
+      setBusquedaProducto((prev) => ({ ...prev, [articulo.clave]: '' }));
       setAltaProductoClave(null);
     } catch (e) {
       setAltaError(toUserMessage(e));
@@ -983,6 +989,30 @@ export function PasoRevision({
                   </div>
                   <div className="campo">
                     <label htmlFor={`prod-${articulo.clave}`}>PLU Don Ginés</label>
+                    {/*
+                      Buscar en el catálogo antes de elegir.
+
+                      Con ciento veinticinco PLU, el desplegable solo obliga a
+                      barrer la lista entera con el pulgar en cada renglón. Acá
+                      se escribe cualquier pedazo de lo que se está mirando —el
+                      PLU, una palabra del nombre, el código que imprime el
+                      proveedor— y quedan a la vista las pocas opciones que
+                      pueden ser.
+                    */}
+                    <input
+                      id={`buscar-${articulo.clave}`}
+                      type="search"
+                      className="mb-chico"
+                      value={busquedaProducto[articulo.clave] ?? ''}
+                      placeholder="Buscar por PLU, nombre o código del proveedor…"
+                      aria-label={`Buscar el producto del renglón ${articulo.renglon}`}
+                      onChange={(e) =>
+                        setBusquedaProducto((prev) => ({
+                          ...prev,
+                          [articulo.clave]: e.target.value,
+                        }))
+                      }
+                    />
                     <select
                       id={`prod-${articulo.clave}`}
                       value={articulo.productoId}
@@ -998,7 +1028,11 @@ export function PasoRevision({
                         se lo sabe de memoria, el nombre si no, y el código que
                         se está mirando en el papel.
                       */}
-                      {productosDisponibles.map((p) => (
+                      {filtrarCatalogo(
+                        productosDisponibles,
+                        busquedaProducto[articulo.clave],
+                        articulo.productoId,
+                      ).map((p) => (
                         <option key={p.id} value={p.id}>
                           {p.codigo} · {p.nombre}
                           {p.codigosDeProveedor && p.codigosDeProveedor.length > 0
