@@ -17,6 +17,31 @@ import { Decimal } from '@/lib/money';
 /** Cero, para ir sumando importes del calendario. */
 const ZERO_PAGOS = new Decimal(0);
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
+import { creditoAplicadoA } from '@/lib/services/notas-credito';
+
+/**
+ * Lo que de verdad hay que pagar de cada comprobante agendado.
+ *
+ * Es lo previsto menos las notas de crédito confirmadas que lo corrigen. Sin
+ * esto la agenda muestra el importe de la factura y alguien transfiere de más:
+ * la nota de crédito existe, está cargada, y vive en otra pantalla.
+ *
+ * Nunca da negativo. Una nota de crédito mayor que la factura que corrige deja
+ * el comprobante en cero y el excedente queda en el saldo del proveedor, que es
+ * donde corresponde: no se le puede cobrar plata a una factura.
+ */
+async function importesAPagar(
+  schedules: { id: string; documentId: string; plannedAmount: { toString(): string } }[],
+): Promise<Map<string, { credito: Decimal; aPagar: Decimal }>> {
+  const creditos = await creditoAplicadoA([...new Set(schedules.map((s) => s.documentId))]);
+  return new Map(
+    schedules.map((s) => {
+      const credito = creditos.get(s.documentId) ?? new Decimal(0);
+      const neto = toDecimal(s.plannedAmount.toString()).minus(credito);
+      return [s.id, { credito, aPagar: neto.isNegative() ? new Decimal(0) : money(neto) }];
+    }),
+  );
+}
 
 /**
  * Pone al día los estados de la agenda.
@@ -29,8 +54,24 @@ export async function refreshPaymentStatuses(now: Date = new Date()): Promise<nu
   const today = arToday(now);
   const open = await prisma.paymentSchedule.findMany({
     where: { status: { in: ['AGENDADO', 'VENCE_HOY', 'VENCIDO'] } },
-    select: { id: true, dueDate: true, plannedAmount: true, paidAmount: true, status: true },
+    select: {
+      id: true,
+      documentId: true,
+      dueDate: true,
+      plannedAmount: true,
+      paidAmount: true,
+      status: true,
+    },
   });
+
+  /*
+   * El estado se calcula contra lo que hay que pagar, no contra lo facturado.
+   *
+   * Una factura de $100.000 con una nota de crédito de $12.000 queda saldada
+   * pagando $88.000. Si el estado se calculara contra los $100.000, ese
+   * comprobante seguiría figurando como pendiente para siempre.
+   */
+  const netos = await importesAPagar(open);
 
   const updates = open
     .map((schedule) => ({
@@ -39,7 +80,7 @@ export async function refreshPaymentStatuses(now: Date = new Date()): Promise<nu
       next: computePaymentStatus(
         {
           dueDate: schedule.dueDate,
-          plannedAmount: schedule.plannedAmount.toString(),
+          plannedAmount: (netos.get(schedule.id)?.aPagar ?? toDecimal(schedule.plannedAmount.toString())).toString(),
           paidAmount: schedule.paidAmount.toString(),
         },
         now,
@@ -96,8 +137,11 @@ export async function confirmPayment(user: AuthUser, input: ConfirmPaymentInput)
     throw new ValidationError('Indicá con qué forma de pago se abonó.');
   }
 
+  // Lo que falta pagar es lo previsto menos las notas de crédito menos lo ya
+  // pagado. Sin descontar el crédito, la aplicación deja pagar de más.
+  const neto = (await importesAPagar([schedule])).get(schedule.id)!;
   const pending = remainingAmount({
-    plannedAmount: schedule.plannedAmount.toString(),
+    plannedAmount: neto.aPagar.toString(),
     paidAmount: schedule.paidAmount.toString(),
   });
   const amount = input.amount ? money(input.amount) : pending;
@@ -111,7 +155,7 @@ export async function confirmPayment(user: AuthUser, input: ConfirmPaymentInput)
   const newPaid = money(toDecimal(schedule.paidAmount.toString()).plus(amount));
   const status = computePaymentStatus({
     dueDate: schedule.dueDate,
-    plannedAmount: schedule.plannedAmount.toString(),
+    plannedAmount: neto.aPagar.toString(),
     paidAmount: newPaid,
   });
 
@@ -143,6 +187,7 @@ export async function confirmPayment(user: AuthUser, input: ConfirmPaymentInput)
       comprobante: schedule.document.fullNumber,
       proveedor: schedule.document.supplier?.tradeName ?? null,
       importe: amount.toString(),
+      notaDeCreditoAplicada: neto.credito.gt(0) ? neto.credito.toFixed(2) : null,
       fechaEfectiva: effectiveDate.toISOString().slice(0, 10),
       fechaPrevista: schedule.dueDate.toISOString().slice(0, 10),
       formaDePago: input.paymentMethod.trim(),
@@ -247,12 +292,29 @@ export async function listPayments(user: AuthUser) {
     orderBy: [{ dueDate: 'asc' }],
   });
 
+  /*
+   * Cada comprobante viaja con el crédito que tiene aplicado y con lo que queda
+   * por pagar de él. Los tres números juntos, porque la pantalla necesita poder
+   * decir "la factura es de $100.000, la nota de crédito descuenta $12.000, hay
+   * que transferir $88.000": mostrar sólo el último no dejaría explicar de
+   * dónde salió.
+   */
+  const netos = await importesAPagar(schedules);
+  const conCredito = schedules.map((s) => {
+    const neto = netos.get(s.id)!;
+    return {
+      ...s,
+      creditoAplicado: neto.credito.toFixed(2),
+      importeAPagar: neto.aPagar.toFixed(2),
+    };
+  });
+
   return {
-    venceHoy: schedules.filter((s) => s.status === 'VENCE_HOY'),
-    vencidos: schedules.filter((s) => s.status === 'VENCIDO'),
-    proximos: schedules.filter((s) => s.status === 'AGENDADO'),
-    pagados: schedules.filter((s) => s.status === 'PAGADO').reverse(),
-    cancelados: schedules.filter((s) => s.status === 'CANCELADO'),
+    venceHoy: conCredito.filter((s) => s.status === 'VENCE_HOY'),
+    vencidos: conCredito.filter((s) => s.status === 'VENCIDO'),
+    proximos: conCredito.filter((s) => s.status === 'AGENDADO'),
+    pagados: conCredito.filter((s) => s.status === 'PAGADO').reverse(),
+    cancelados: conCredito.filter((s) => s.status === 'CANCELADO'),
   };
 }
 
@@ -355,6 +417,8 @@ export interface PagoDelCalendario {
   /** Lo que falta pagar. Un pago parcial sigue en la agenda por el saldo. */
   saldo: string;
   plannedAmount: string;
+  /** Notas de crédito confirmadas que descuentan de este comprobante. */
+  creditoAplicado: string;
   paidAmount: string;
   status: PaymentStatus;
   paymentMethod: string;
@@ -447,6 +511,8 @@ export async function getPaymentCalendar(
     orderBy: [{ dueDate: 'asc' }],
   });
 
+  const netos = await importesAPagar(schedules.map((s) => ({ ...s, documentId: s.document.id })));
+
   const porDia = new Map<string, DiaDelCalendario>();
   let previsto = ZERO_PAGOS;
   let pagado = ZERO_PAGOS;
@@ -454,8 +520,9 @@ export async function getPaymentCalendar(
 
   for (const s of schedules) {
     const fecha = toISODate(s.dueDate);
+    const neto = netos.get(s.id)!;
     const saldo = remainingAmount({
-      plannedAmount: s.plannedAmount.toString(),
+      plannedAmount: neto.aPagar.toString(),
       paidAmount: s.paidAmount.toString(),
     });
 
@@ -474,6 +541,7 @@ export async function getPaymentCalendar(
       branchName: s.document.branch.name,
       saldo: saldo.toFixed(2),
       plannedAmount: s.plannedAmount.toFixed(2),
+      creditoAplicado: neto.credito.toFixed(2),
       paidAmount: s.paidAmount.toFixed(2),
       status: s.status as PaymentStatus,
       paymentMethod: s.plannedPaymentMethod,
@@ -498,7 +566,8 @@ export async function getPaymentCalendar(
     dia.estado = masUrgente(dia.estado, s.status as PaymentStatus);
     porDia.set(fecha, dia);
 
-    previsto = previsto.plus(s.plannedAmount.toString());
+    // Lo previsto es lo que hay que pagar, ya descontadas las notas de crédito.
+    previsto = previsto.plus(neto.aPagar);
     pagado = pagado.plus(s.paidAmount.toString());
     if (s.status === 'VENCIDO') vencido = vencido.plus(saldo);
   }

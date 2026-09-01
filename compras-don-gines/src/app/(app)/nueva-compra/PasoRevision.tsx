@@ -49,7 +49,27 @@ interface ArticuloEditable {
   asociacionOriginal: string;
   /** ¿Se guarda la asociación para las próximas facturas del proveedor? */
   recordar: boolean;
+  /**
+   * En una nota de crédito: ¿volvió mercadería por este renglón?
+   *
+   * Se contesta renglón por renglón y arranca en "no". Que exista una nota de
+   * crédito no dice nada sobre si algo volvió al proveedor: una bonificación
+   * no saca un kilo del mostrador, y descontarla del stock lo dejaría corto
+   * para siempre.
+   */
+  devolucion: boolean;
 }
+
+/** Los motivos por los que un proveedor emite una nota de crédito. */
+const MOTIVOS_DE_CREDITO = [
+  { valor: 'BONIFICACION', texto: 'Bonificación', mueveStock: false },
+  { valor: 'DIFERENCIA_PRECIO', texto: 'Diferencia de precio', mueveStock: false },
+  { valor: 'DESCUENTO_COMERCIAL', texto: 'Descuento comercial', mueveStock: false },
+  { valor: 'CORRECCION_FISCAL', texto: 'Corrección fiscal', mueveStock: false },
+  { valor: 'DEVOLUCION_PERCEPCION', texto: 'Devolución de percepción', mueveStock: false },
+  { valor: 'DEVOLUCION_MERCADERIA', texto: 'Devolución de mercadería', mueveStock: true },
+  { valor: 'OTRO', texto: 'Otro', mueveStock: true },
+] as const;
 
 const vacio = (v: string | null | undefined) => (v === null || v === undefined ? '' : v);
 
@@ -81,7 +101,8 @@ export function PasoRevision({
   onGuardado,
 }: Props) {
   const [proveedorId, setProveedorId] = useState(comprobante.proveedor?.id ?? '');
-  const [tipo, setTipo] = useState<'FACTURA' | 'REMITO'>(comprobante.tipo);
+  const [tipo, setTipo] = useState<'FACTURA' | 'REMITO' | 'NOTA_CREDITO'>(comprobante.tipo);
+  const esNotaDeCredito = tipo === 'NOTA_CREDITO';
   const [letra, setLetra] = useState(vacio(comprobante.letra));
   const [puntoDeVenta, setPuntoDeVenta] = useState(comprobante.puntoDeVenta);
   const [numero, setNumero] = useState(comprobante.numero);
@@ -115,6 +136,7 @@ export function PasoRevision({
       ivaTasa: a.ivaTasa,
       productoId: a.productoId ?? '',
       asociacionOriginal: a.asociacion,
+      devolucion: a.devolucion === true,
       /*
        * ¿Se guarda la asociación para las próximas facturas?
        *
@@ -185,6 +207,25 @@ export function PasoRevision({
       setProveedorGuardando(false);
     }
   };
+
+  /*
+   * Lo que una nota de crédito necesita y una factura no.
+   *
+   * El motivo no está en el papel de forma que se pueda leer con confianza, y
+   * de él depende si la aplicación va a aceptar que además haya vuelto
+   * mercadería. Por eso lo elige una persona.
+   */
+  const [motivoCredito, setMotivoCredito] = useState(
+    comprobante.motivoCredito ?? 'BONIFICACION',
+  );
+  const [facturaRelacionada, setFacturaRelacionada] = useState(
+    comprobante.comprobanteRelacionadoId ?? '',
+  );
+  const [facturasDelProveedor, setFacturasDelProveedor] = useState<
+    { id: string; numero: string; fecha: string | null; total: string; creditoAplicado: string }[]
+  >([]);
+  const motivoMueveStock =
+    MOTIVOS_DE_CREDITO.find((m) => m.valor === motivoCredito)?.mueveStock ?? false;
 
   const [productosDisponibles, setProductosDisponibles] = useState(productos);
   /** Lo que se está escribiendo en el buscador de catálogo de cada renglón. */
@@ -383,6 +424,48 @@ export function PasoRevision({
     };
   }, [proveedorId, fecha]);
 
+  /*
+   * Las facturas del proveedor, para poder decir cuál corrige la nota.
+   *
+   * Se piden sólo cuando hacen falta. Relacionarla no es obligatorio —hay notas
+   * de crédito generales, como una bonificación trimestral— pero cuando se sabe
+   * a qué factura corresponde conviene decirlo: es lo que permite después
+   * mostrar esa factura por lo que de verdad hay que pagar.
+   */
+  useEffect(() => {
+    if (!esNotaDeCredito || !proveedorId) {
+      setFacturasDelProveedor([]);
+      return;
+    }
+    let cancelado = false;
+    consultar(`/api/proveedores/${proveedorId}/facturas`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((datos) => {
+        if (!cancelado && datos) setFacturasDelProveedor(datos.facturas ?? []);
+      })
+      .catch(() => {
+        // Sin la lista, la nota se puede guardar igual sin relacionar.
+      });
+    return () => {
+      cancelado = true;
+    };
+  }, [esNotaDeCredito, proveedorId]);
+
+  /*
+   * Un motivo sólo financiero borra las devoluciones que hubiera marcadas.
+   *
+   * Sin esto quedaría una casilla tildada que la pantalla ya no muestra y que
+   * el servidor rechaza: el operador vería un error sobre un renglón que no
+   * tiene delante.
+   */
+  useEffect(() => {
+    if (esNotaDeCredito && !motivoMueveStock) {
+      setArticulos((prev) =>
+        prev.some((a) => a.devolucion) ? prev.map((a) => ({ ...a, devolucion: false })) : prev,
+      );
+    }
+  }, [esNotaDeCredito, motivoMueveStock]);
+
   const actualizarArticulo = (
     clave: string,
     campo: keyof ArticuloEditable,
@@ -417,6 +500,7 @@ export function PasoRevision({
         productoId: '',
         asociacionOriginal: 'MANUAL',
         recordar: true,
+        devolucion: false,
       },
     ]);
   };
@@ -438,12 +522,27 @@ export function PasoRevision({
       );
       return;
     }
+    if (esNotaDeCredito && motivoCredito === 'DEVOLUCION_MERCADERIA'
+        && !articulos.some((a) => a.devolucion)) {
+      setError(
+        'Marcá en qué renglones volvió la mercadería. Si no volvió nada, elegí otro motivo: ' +
+          'la nota de crédito descuenta del saldo igual.',
+      );
+      return;
+    }
 
     setGuardando(true);
     try {
       const cuerpo = {
         supplierId: proveedorId,
         docType: tipo,
+        /*
+         * Lo propio de la nota de crédito. En una factura viajan en null y el
+         * servidor los ignora: es el mismo endpoint porque es el mismo acto
+         * —confirmar lo que dice el papel—, pero lo que se deriva es distinto.
+         */
+        motivo: esNotaDeCredito ? motivoCredito : undefined,
+        relatedDocumentId: esNotaDeCredito ? facturaRelacionada || null : undefined,
         letter: letra || null,
         pointOfSale: puntoDeVenta.trim(),
         number: numero.trim(),
@@ -481,12 +580,20 @@ export function PasoRevision({
            */
           learnAlias:
             Boolean(a.productoId) && a.recordar && a.asociacionOriginal !== 'SUPPLIER_CODE',
+          /*
+           * La respuesta a "¿volvió la mercadería?", renglón por renglón.
+           *
+           * Viaja siempre explícita y nunca deducida: es la diferencia entre
+           * una nota de crédito que sólo corrige plata y una que además saca
+           * kilos del negocio, y esa diferencia no se puede adivinar.
+           */
+          stockReturn: esNotaDeCredito ? a.devolucion : undefined,
         })),
-        payment: {
-          dueDate: vencimiento,
-          paymentMethod: formaDePago,
-          notes: observaciones || null,
-        },
+        // Una nota de crédito no se agenda para pagar: se descuenta.
+        payment: esNotaDeCredito
+          ? undefined
+          : { dueDate: vencimiento, paymentMethod: formaDePago, notes: observaciones || null },
+        notes: esNotaDeCredito ? observaciones || null : undefined,
         override: quiereForzar ? { reason: motivoForzado } : undefined,
       };
 
@@ -511,7 +618,7 @@ export function PasoRevision({
   if (paso === 3) {
     return (
       <>
-        <h1>Guardar y agendar el pago</h1>
+        <h1>{esNotaDeCredito ? 'Guardar la nota de crédito' : 'Guardar y agendar el pago'}</h1>
         <Pasos actual={3} />
 
         {error ? (
@@ -522,6 +629,63 @@ export function PasoRevision({
 
         <Semaforo report={informe} />
 
+        {esNotaDeCredito ? (
+          /*
+           * El paso final de una nota de crédito no es una agenda.
+           *
+           * Acá va lo que va a pasar cuando se guarde, dicho de la manera en
+           * que le importa a quien la está cargando: cuánto deja de deberse y
+           * si sale mercadería. Ofrecer una fecha de pago para un comprobante
+           * que no se paga sería, además de inútil, una invitación a agendar
+           * plata que nadie va a transferir.
+           */
+          <div className="card">
+            <h2>Qué va a pasar</h2>
+            <dl style={{ margin: '0 0 6px' }}>
+              <div className="dato destacado">
+                <dt>Se descuenta del saldo con el proveedor</dt>
+                <dd>−{formatARS(totalAPagar)}</dd>
+              </div>
+              <div className="dato">
+                <dt>Motivo</dt>
+                <dd>
+                  {MOTIVOS_DE_CREDITO.find((m) => m.valor === motivoCredito)?.texto ?? motivoCredito}
+                </dd>
+              </div>
+              <div className="dato">
+                <dt>Factura que corrige</dt>
+                <dd>
+                  {facturasDelProveedor.find((f) => f.id === facturaRelacionada)?.numero ??
+                    'Ninguna en particular'}
+                </dd>
+              </div>
+              <div className="dato">
+                <dt>Mercadería devuelta</dt>
+                <dd>
+                  {articulos.filter((a) => a.devolucion).length === 0
+                    ? 'Ninguna: no se mueve stock'
+                    : `${articulos.filter((a) => a.devolucion).length} de ${articulos.length} renglones`}
+                </dd>
+              </div>
+            </dl>
+
+            <div className="campo">
+              <label htmlFor="observaciones-nc">Observaciones</label>
+              <textarea
+                id="observaciones-nc"
+                value={observaciones}
+                onChange={(e) => setObservaciones(e.target.value)}
+                placeholder="Opcional: qué se acordó con el proveedor."
+              />
+            </div>
+
+            <p className="mensaje mensaje-info mb0">
+              La nota de crédito <strong>no se agenda para pagar</strong>. Queda restando en la
+              cuenta del proveedor, y las facturas que corrige se van a mostrar por lo que de
+              verdad hay que transferir.
+            </p>
+          </div>
+        ) : (
         <div className="card">
           <h2>El pago</h2>
           <dl style={{ margin: '0 0 6px' }}>
@@ -587,6 +751,7 @@ export function PasoRevision({
             pago desde la pantalla de Pagos cuando efectivamente se abone.
           </p>
         </div>
+        )}
 
         {!informe.canSave ? (
           <div className="card">
@@ -646,7 +811,11 @@ export function PasoRevision({
               onClick={guardar}
               disabled={guardando || (!informe.canSave && !quiereForzar)}
             >
-              {guardando ? 'Guardando…' : 'Guardar y agendar el pago'}
+              {guardando
+                ? 'Guardando…'
+                : esNotaDeCredito
+                  ? 'Guardar la nota de crédito'
+                  : 'Guardar y agendar el pago'}
             </button>
           </div>
         </div>
@@ -849,10 +1018,13 @@ export function PasoRevision({
             <select
               id="tipo"
               value={tipo}
-              onChange={(e) => setTipo(e.target.value as 'FACTURA' | 'REMITO')}
+              onChange={(e) =>
+                setTipo(e.target.value as 'FACTURA' | 'REMITO' | 'NOTA_CREDITO')
+              }
             >
               <option value="FACTURA">Factura</option>
               <option value="REMITO">Remito</option>
+              <option value="NOTA_CREDITO">Nota de crédito</option>
             </select>
           </div>
           <div className="campo">
@@ -892,9 +1064,75 @@ export function PasoRevision({
         </div>
       </div>
 
+      {esNotaDeCredito ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Nota de crédito</h2>
+          </div>
+          {/*
+            Lo primero y en grande: qué hace este comprobante.
+
+            Una nota de crédito cargada como si fuera una factura suma en la
+            cuenta corriente en vez de restar, y el error se descubre pagando
+            de más. Decirlo acá, antes de cualquier otro campo, es lo que evita
+            que alguien la revise en piloto automático.
+          */}
+          <p className="mensaje mensaje-info" role="status">
+            <strong>Este comprobante reduce el saldo con el proveedor.</strong> No se agenda para
+            pagar: descuenta de lo que hay que pagarle.
+          </p>
+
+          <div className="campo">
+            <label htmlFor="motivo-credito">Motivo</label>
+            <select
+              id="motivo-credito"
+              value={motivoCredito}
+              onChange={(e) => setMotivoCredito(e.target.value)}
+            >
+              {MOTIVOS_DE_CREDITO.map((m) => (
+                <option key={m.valor} value={m.valor}>
+                  {m.texto}
+                </option>
+              ))}
+            </select>
+            <p className="ayuda">
+              {motivoMueveStock
+                ? 'Con este motivo podés marcar, renglón por renglón, si la mercadería volvió al proveedor.'
+                : 'Este motivo es sólo financiero: descuenta plata y no mueve mercadería. Si además volvió mercadería, elegí «Devolución de mercadería».'}
+            </p>
+          </div>
+
+          <div className="campo">
+            <label htmlFor="factura-relacionada">Factura que corrige</label>
+            <select
+              id="factura-relacionada"
+              value={facturaRelacionada}
+              onChange={(e) => setFacturaRelacionada(e.target.value)}
+            >
+              <option value="">Ninguna en particular</option>
+              {facturasDelProveedor.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.numero}
+                  {f.fecha ? ` · ${f.fecha.split('-').reverse().join('/')}` : ''} ·{' '}
+                  {formatARS(f.total)}
+                  {Number(f.creditoAplicado) > 0
+                    ? ` · ya acreditado ${formatARS(f.creditoAplicado)}`
+                    : ''}
+                </option>
+              ))}
+            </select>
+            <p className="ayuda mb0">
+              Opcional. Si la relacionás, la agenda de pagos va a mostrar esa factura por lo que
+              de verdad hay que transferir. Si no, la nota descuenta del saldo general del
+              proveedor.
+            </p>
+          </div>
+        </div>
+      ) : null}
+
       <div className="card">
         <div className="card-titulo">
-          <h2>Artículos</h2>
+          <h2>{esNotaDeCredito ? 'Renglones acreditados' : 'Artículos'}</h2>
           <span className="chico medio">
             {articulos.length === 1 ? '1 renglón' : `${articulos.length} renglones`}
           </span>
@@ -1121,6 +1359,52 @@ export function PasoRevision({
                       </button>
                     </div>
                   </div>
+                ) : null}
+
+                {/*
+                  La pregunta que decide si este renglón mueve mercadería.
+
+                  Va con las dos respuestas a la vista y sin ninguna elegida de
+                  antemano por conveniencia: la que está marcada al abrir es
+                  "no", que es la que no toca el stock. Deducir que hubo
+                  devolución porque hay una nota de crédito es exactamente el
+                  error que deja el stock corto sin que nadie se entere.
+                */}
+                {esNotaDeCredito && motivoMueveStock ? (
+                  <fieldset className="campo" style={{ border: 0, margin: 0, padding: 0 }}>
+                    <legend className="etiqueta">
+                      ¿Hubo devolución física de mercadería?
+                    </legend>
+                    <div className="acciones" style={{ marginTop: 0 }}>
+                      <label className="casilla">
+                        <input
+                          type="radio"
+                          name={`devolucion-${articulo.clave}`}
+                          checked={articulo.devolucion}
+                          onChange={() =>
+                            actualizarArticulo(articulo.clave, 'devolucion', true)
+                          }
+                        />
+                        <span>Sí, volvió al proveedor</span>
+                      </label>
+                      <label className="casilla">
+                        <input
+                          type="radio"
+                          name={`devolucion-${articulo.clave}`}
+                          checked={!articulo.devolucion}
+                          onChange={() =>
+                            actualizarArticulo(articulo.clave, 'devolucion', false)
+                          }
+                        />
+                        <span>No, sólo corrige el importe</span>
+                      </label>
+                    </div>
+                    <p className="ayuda mb0">
+                      {articulo.devolucion
+                        ? 'Se va a registrar el movimiento inverso: salen del negocio los kilos o las unidades de este renglón.'
+                        : 'No se mueve mercadería. El importe se descuenta del saldo y ajusta el costo del artículo.'}
+                    </p>
+                  </fieldset>
                 ) : null}
 
                 {/*

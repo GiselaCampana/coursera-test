@@ -45,6 +45,8 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
           : null,
       tipo: document.docType,
       letra: document.letter,
+      motivoCredito: document.creditReason,
+      comprobanteRelacionadoId: document.relatedDocumentId,
       puntoDeVenta: document.pointOfSale,
       numero: document.number,
       fecha: document.issueDate ? toISODate(document.issueDate) : null,
@@ -108,6 +110,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         productoId: item.productId,
         producto: item.product?.normalizedName ?? null,
         asociacion: item.matchMethod,
+        devolucion: item.stockReturn,
       })),
       paginas,
       /*

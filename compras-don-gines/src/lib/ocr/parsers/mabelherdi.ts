@@ -1,3 +1,4 @@
+import { esNotaDeCredito } from '@/lib/ocr/text-parser';
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
@@ -139,7 +140,7 @@ export const analizadorMabelherdi: AnalizadorComprobante = {
 
 function analizarEncabezado(texto: string): OcrHeader {
   const header: OcrHeader = {
-    docType: 'FACTURA',
+    docType: esNotaDeCredito(texto) ? 'NOTA_CREDITO' : 'FACTURA',
     // La letra va en un recuadro aparte que el recorte casi nunca agarra. Este
     // proveedor factura A a responsables inscriptos; si el recuadro se lee, lo
     // leído manda.

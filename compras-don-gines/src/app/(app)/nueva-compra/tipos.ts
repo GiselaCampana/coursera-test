@@ -43,6 +43,8 @@ export interface ArticuloRevision {
   productoId: string | null;
   producto: string | null;
   asociacion: string;
+  /** Sólo en notas de crédito: ¿volvió mercadería por este renglón? */
+  devolucion: boolean;
 }
 
 export interface ResumenComprobante {
@@ -102,7 +104,7 @@ export interface ComprobanteRevision {
    * un proveedor que todavía no está cargado.
    */
   proveedorLeido: { nombre: string | null; cuit: string | null } | null;
-  tipo: 'FACTURA' | 'REMITO';
+  tipo: 'FACTURA' | 'REMITO' | 'NOTA_CREDITO';
   letra: string | null;
   puntoDeVenta: string;
   numero: string;
@@ -121,6 +123,10 @@ export interface ComprobanteRevision {
     iibbTasa: string | null;
     vencimiento: string | null;
   };
+  /** Motivo, cuando el comprobante es una nota de crédito. */
+  motivoCredito: string | null;
+  /** La factura que la nota de crédito corrige, si ya está relacionada. */
+  comprobanteRelacionadoId: string | null;
   articulos: ArticuloRevision[];
   paginas: PaginaComprobante[];
   /** La versión del código que está corriendo ahora. */

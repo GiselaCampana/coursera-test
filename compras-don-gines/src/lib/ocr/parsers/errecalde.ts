@@ -1,3 +1,4 @@
+import { esNotaDeCredito } from '@/lib/ocr/text-parser';
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
@@ -231,7 +232,7 @@ export const analizadorErrecalde: AnalizadorComprobante = {
 
 function analizarEncabezado(texto: string): OcrHeader {
   const header: OcrHeader = {
-    docType: 'FACTURA',
+    docType: esNotaDeCredito(texto) ? 'NOTA_CREDITO' : 'FACTURA',
     letter: 'A',
     pointOfSale: null,
     number: null,

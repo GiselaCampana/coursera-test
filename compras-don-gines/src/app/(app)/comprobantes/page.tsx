@@ -179,7 +179,11 @@ export default async function PaginaComprobantes({ searchParams }: Props) {
                 </div>
                 <div className="fila-dato-meta">
                   <span>
-                    {doc.docType === 'REMITO' ? 'Remito' : `Factura ${doc.letter ?? ''}`.trim()}{' '}
+                    {doc.docType === 'REMITO'
+                      ? 'Remito'
+                      : doc.docType === 'NOTA_CREDITO'
+                        ? `Nota de crédito ${doc.letter ?? ''}`.trim()
+                        : `Factura ${doc.letter ?? ''}`.trim()}{' '}
                     {doc.fullNumber || 'sin número'}
                   </span>
                   <span>{formatDateAr(doc.issueDate)}</span>

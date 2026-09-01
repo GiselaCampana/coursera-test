@@ -115,6 +115,23 @@ const SUMMARY_PATTERNS: { key: 'grossSubtotal' | 'discountTotal' | 'netTotal' | 
   { key: 'total', match: /^total\b|^importe\s+total\b/i },
 ];
 
+/**
+ * ¿El comprobante es una nota de crédito?
+ *
+ * Vive acá y lo usan todos los analizadores, incluidos los de proveedor, porque
+ * es la clase de cosa que no se puede resolver una vez por formato: un
+ * analizador que da por sentado que su proveedor sólo emite facturas convierte
+ * la nota de crédito de ese proveedor en una factura, y la nota pasa a **sumar**
+ * en la cuenta corriente en lugar de restar.
+ *
+ * Casi todas las notas de crédito traen impresa la palabra "FACTURA" en alguna
+ * parte —"por la factura 0003-00012345"—, así que buscar "factura" no alcanza:
+ * hay que buscar la nota primero y que le gane.
+ */
+export function esNotaDeCredito(texto: string): boolean {
+  return /\bnotas?\s+de\s+cr[eé]dito\b|\bn\s*\/?\s*c\s+[ABCEM]\b/i.test(texto);
+}
+
 export function parseHeaderFromText(text: string): OcrHeader {
   const header: OcrHeader = {
     docType: null,
@@ -131,8 +148,12 @@ export function parseHeaderFromText(text: string): OcrHeader {
 
   if (/\bremito\b/i.test(text)) header.docType = 'REMITO';
   if (/\bfactura\b/i.test(text)) header.docType = 'FACTURA';
+  // Última, para que le gane a "factura": ver esNotaDeCredito.
+  if (esNotaDeCredito(text)) header.docType = 'NOTA_CREDITO';
 
-  const letter = text.match(/\bfactura\s+([ABCEM])\b/i);
+  const letter = text.match(
+    /\b(?:factura|nota\s+de\s+cr[eé]dito|n\s*\/?\s*c)\s+([ABCEM])\b/i,
+  );
   if (letter) header.letter = letter[1].toUpperCase();
 
   const pos = text.match(/punto\s+de\s+venta\s*[:.]?\s*(\d{1,5})/i);

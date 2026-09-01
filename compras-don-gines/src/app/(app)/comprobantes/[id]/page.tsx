@@ -118,7 +118,11 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
       ) : null}
 
       <h1>
-        {documento.docType === 'REMITO' ? 'Remito' : `Factura ${documento.letter ?? ''}`.trim()}{' '}
+        {documento.docType === 'REMITO'
+          ? 'Remito'
+          : documento.docType === 'NOTA_CREDITO'
+            ? `Nota de crédito ${documento.letter ?? ''}`.trim()
+            : `Factura ${documento.letter ?? ''}`.trim()}{' '}
         {documento.fullNumber || 'sin número'}
       </h1>
       <div className="fila-dato-meta" style={{ marginBottom: 14 }}>

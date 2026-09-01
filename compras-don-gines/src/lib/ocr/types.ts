@@ -32,7 +32,7 @@
 export type ZonaAReleer = 'BORDE_INFERIOR_TABLA';
 
 export interface OcrHeader {
-  docType?: 'FACTURA' | 'REMITO' | null;
+  docType?: 'FACTURA' | 'REMITO' | 'NOTA_CREDITO' | null;
   letter?: string | null;
   pointOfSale?: string | null;
   number?: string | null;

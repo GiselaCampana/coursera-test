@@ -185,9 +185,16 @@ export default async function PaginaPagos({
     | 'pagados';
   const lista = agenda[activo];
 
+  /*
+   * Lo que hay que transferir, no lo que dicen las facturas.
+   *
+   * `importeAPagar` ya viene con las notas de crédito descontadas. Sumar los
+   * importes facturados acá daría un total mayor que la plata que de verdad
+   * sale, que es el número que alguien usa para decidir cuánto tiene que tener
+   * en la cuenta.
+   */
   const totalPendiente = lista.reduce(
-    (acc, s) =>
-      acc.plus(toDecimal(s.plannedAmount.toString()).minus(toDecimal(s.paidAmount.toString()))),
+    (acc, s) => acc.plus(toDecimal(s.importeAPagar).minus(toDecimal(s.paidAmount.toString()))),
     toDecimal('0'),
   );
 
@@ -269,6 +276,13 @@ export default async function PaginaPagos({
                     <span>Vence {formatDateAr(schedule.dueDate)}</span>
                     <span>{schedule.document.branch.name}</span>
                   </div>
+                  {toDecimal(schedule.creditoAplicado).gt(0) ? (
+                    <p className="chico medio mt mb0">
+                      Nota de crédito aplicada: −{formatARS(schedule.creditoAplicado)} · A pagar:{' '}
+                      <strong>{formatARS(schedule.importeAPagar)}</strong>
+                    </p>
+                  ) : null}
+
                   <div className="fila-dato-meta mt">
                     <EtiquetaPago estado={schedule.status} />
                   </div>
@@ -286,7 +300,7 @@ export default async function PaginaPagos({
                   {puedeConfirmar && schedule.status !== 'PAGADO' && schedule.status !== 'CANCELADO' ? (
                     <FichaPago
                       scheduleId={schedule.id}
-                      importePendiente={toDecimal(schedule.plannedAmount.toString())
+                      importePendiente={toDecimal(schedule.importeAPagar)
                         .minus(toDecimal(schedule.paidAmount.toString()))
                         .toFixed(2)}
                       formaDePago={schedule.plannedPaymentMethod}

@@ -249,7 +249,20 @@ export async function registrarLectura(
            */
           readSupplierName: encabezado?.legalName ?? encabezado?.supplierName ?? null,
           readSupplierCuit: formatCuit(encabezado?.cuit),
-          docType: mejor.header?.docType === 'REMITO' ? 'REMITO' : 'FACTURA',
+          /*
+           * El tipo sale de lo que dice el papel, incluida la nota de crédito.
+           *
+           * Que se detecte sola no la confirma: la lectura deja el comprobante
+           * en revisión y la persona elige el motivo y contesta si volvió
+           * mercadería. Lo que sí evita es que una nota de crédito llegue a esa
+           * pantalla presentada como factura.
+           */
+          docType:
+            mejor.header?.docType === 'REMITO'
+              ? 'REMITO'
+              : mejor.header?.docType === 'NOTA_CREDITO'
+                ? 'NOTA_CREDITO'
+                : 'FACTURA',
           letter: mejor.header?.letter ?? null,
           pointOfSale: mejor.header?.pointOfSale ?? '',
           number: mejor.header?.number ?? '',

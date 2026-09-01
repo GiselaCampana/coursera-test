@@ -870,6 +870,16 @@ export async function verificarDerivados(
   documentId: string,
   renglonesEsperados: number,
   totalDelComprobante: Decimal,
+  /*
+   * Qué se espera encontrar cuando el comprobante no es una factura.
+   *
+   * Una nota de crédito no se paga, así que no tiene agenda; y ajusta el costo
+   * sólo de los renglones que corrigen precio, no de los que documentan una
+   * devolución, así que sus entradas de costo son menos que sus renglones
+   * asociados. Los valores por omisión son los de una factura, que es lo que
+   * esta comprobación viene cuidando desde siempre.
+   */
+  esperado: { agendasEsperadas?: number; costosEsperados?: number } = {},
 ): Promise<void> {
   const falla = (motivo: string): never => {
     throw new AppError(
@@ -911,16 +921,18 @@ export async function verificarDerivados(
 
   // 3. Historial de costos para todo lo que quedó asociado: es lo que lee
   //    Precios. Sin esto el artículo existe y no tiene costo.
-  const asociados = renglones.filter((r) => r.productId).length;
+  const asociados = esperado.costosEsperados ?? renglones.filter((r) => r.productId).length;
   const costos = await tx.costHistory.count({ where: { documentId } });
   if (costos !== asociados) {
-    falla(`hay ${asociados} renglones con producto y ${costos} entradas de costo`);
+    falla(`se esperaban ${asociados} entradas de costo y quedaron ${costos}`);
   }
 
-  // 4. Exactamente una agenda de pago: es lo que lee Pagos.
+  // 4. La agenda de pago: es lo que lee Pagos. Una factura tiene exactamente
+  //    una; una nota de crédito, ninguna, porque no se paga: se descuenta.
+  const agendasEsperadas = esperado.agendasEsperadas ?? 1;
   const agendas = await tx.paymentSchedule.count({ where: { documentId } });
-  if (agendas !== 1) {
-    falla(`quedaron ${agendas} agendas de pago y tiene que haber una`);
+  if (agendas !== agendasEsperadas) {
+    falla(`quedaron ${agendas} agendas de pago y tiene que haber ${agendasEsperadas}`);
   }
 
   /*
@@ -1255,6 +1267,23 @@ export async function acceptReadDocument(
     throw new ValidationError('El comprobante no tiene ningún artículo cargado.');
   }
 
+  /*
+   * Una nota de crédito no se acepta por este camino.
+   *
+   * Le faltan dos decisiones que no están en el papel y que nadie puede tomar
+   * por quien lo tiene delante: por qué la emitió el proveedor, y en qué
+   * renglones —si en alguno— volvió mercadería. Aceptarla "con lo que está
+   * guardado" significaría elegir un motivo por omisión y dar por hecho que no
+   * volvió nada, que es exactamente la clase de suposición silenciosa que hay
+   * que evitar en un comprobante que mueve plata y stock.
+   */
+  if (document.docType === 'NOTA_CREDITO') {
+    throw new ValidationError(
+      'Esta es una nota de crédito: abrila desde la carga para indicar el motivo y si hubo ' +
+        'devolución de mercadería.',
+    );
+  }
+
   const conditions = await getSupplierConditions(document.supplierId, document.issueDate);
   const dueDate =
     document.appliedDueDate ??
@@ -1268,7 +1297,7 @@ export async function acceptReadDocument(
   return confirmDocument(user, {
     documentId,
     supplierId: document.supplierId,
-    docType: document.docType,
+    docType: document.docType === 'REMITO' ? 'REMITO' : 'FACTURA',
     letter: document.letter,
     pointOfSale: document.pointOfSale,
     number: document.number,

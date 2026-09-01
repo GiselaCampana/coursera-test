@@ -19,56 +19,56 @@ datasource db {
 /// (ver src/lib/auth/permissions.ts) para poder agregar roles nuevos —
 /// supervisor, encargado, contador — sin tocar el código.
 model Role {
-  id                String   @id @default(cuid())
-  code              String   @unique
-  name              String
-  description       String?
+  id               String   @id @default(cuid())
+  code             String   @unique
+  name             String
+  description      String?
   /// Lista de permisos otorgados. Ver PERMISSIONS en el código.
-  permissions       String[]
+  permissions      String[]
   /// Si es true el rol ve todas las sucursales; si es false queda limitado a
   /// la sucursal asignada al usuario.
-  scopeAllBranches  Boolean  @default(false)
+  scopeAllBranches Boolean  @default(false)
   /// Los roles de sistema no se pueden borrar (sí editar su nombre).
-  isSystem          Boolean  @default(false)
-  active            Boolean  @default(true)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  isSystem         Boolean  @default(false)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  users             User[]
+  users User[]
 
   @@map("roles")
 }
 
 model User {
-  id             String    @id @default(cuid())
-  email          String    @unique
-  name           String
+  id                 String    @id @default(cuid())
+  email              String    @unique
+  name               String
   /// Hash scrypt de la contraseña, o la marca "supabase-auth" cuando las
   /// contraseñas las guarda Supabase Auth. Ver src/lib/auth/proveedor.ts.
-  passwordHash   String
+  passwordHash       String
   /// Id del usuario en Supabase Auth, cuando se usa ese proveedor.
-  supabaseUserId String?   @unique
-  roleId         String
-  role           Role      @relation(fields: [roleId], references: [id])
+  supabaseUserId     String?   @unique
+  roleId             String
+  role               Role      @relation(fields: [roleId], references: [id])
   /// Sucursal asignada. Obligatoria para roles sin scopeAllBranches.
-  branchId       String?
-  branch         Branch?   @relation(fields: [branchId], references: [id])
-  active         Boolean   @default(true)
-  mustChangePassword Boolean @default(false)
-  lastLoginAt    DateTime?
-  failedLogins   Int       @default(0)
-  lockedUntil    DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  branchId           String?
+  branch             Branch?   @relation(fields: [branchId], references: [id])
+  active             Boolean   @default(true)
+  mustChangePassword Boolean   @default(false)
+  lastLoginAt        DateTime?
+  failedLogins       Int       @default(0)
+  lockedUntil        DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   sessions           Session[]
-  documentsCreated   Document[]     @relation("DocumentCreatedBy")
-  documentsValidated Document[]     @relation("DocumentValidatedBy")
-  documentsVoided    Document[]     @relation("DocumentVoidedBy")
+  documentsCreated   Document[]         @relation("DocumentCreatedBy")
+  documentsValidated Document[]         @relation("DocumentValidatedBy")
+  documentsVoided    Document[]         @relation("DocumentVoidedBy")
   paymentEvents      PaymentEvent[]
   auditLogs          AuditLog[]
   salePricesApproved SalePriceHistory[]
-  archivosArchivados DocumentFile[] @relation("ArchivosArchivados")
+  archivosArchivados DocumentFile[]     @relation("ArchivosArchivados")
 
   @@index([roleId])
   @@index([branchId])
@@ -76,16 +76,16 @@ model User {
 }
 
 model Session {
-  id        String   @id @default(cuid())
+  id         String   @id @default(cuid())
   /// SHA-256 del token de sesión. El token en claro sólo vive en la cookie.
-  tokenHash String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
   lastSeenAt DateTime @default(now())
-  ip        String?
-  userAgent String?
+  ip         String?
+  userAgent  String?
 
   @@index([userId])
   @@index([expiresAt])
@@ -128,21 +128,21 @@ enum TermType {
 }
 
 model Supplier {
-  id         String   @id @default(cuid())
-  tradeName  String
-  legalName  String?
-  cuit       String?
-  currency   String   @default("ARS")
-  active     Boolean  @default(true)
-  notes      String?
+  id              String    @id @default(cuid())
+  tradeName       String
+  legalName       String?
+  cuit            String?
+  currency        String    @default("ARS")
+  active          Boolean   @default(true)
+  notes           String?
   /// Cuándo se espera la próxima factura o visita de este proveedor.
   ///
   /// Sólo tiene sentido con la condición "factura contra factura": sirve para
   /// poder agendar el pago de la factura de hoy mientras la siguiente todavía
   /// no llegó. Cuando llega, la fecha real reemplaza a la prevista.
   nextInvoiceDate DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   aliases           SupplierAlias[]
   paymentTerms      SupplierPaymentTerm[]
@@ -175,17 +175,17 @@ model SupplierAlias {
 /// Historial de condiciones de pago. Las facturas guardan una copia del plazo
 /// vigente al momento de la carga (ver Document.appliedTermType).
 model SupplierPaymentTerm {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   supplierId    String
-  supplier      Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  supplier      Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
   termType      TermType
   /// Cantidad de días cuando termType = DAYS.
-  days          Int      @default(0)
-  paymentMethod String   @default("TRANSFERENCIA")
+  days          Int       @default(0)
+  paymentMethod String    @default("TRANSFERENCIA")
   validFrom     DateTime
   validTo       DateTime?
   notes         String?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   @@index([supplierId, validFrom])
   @@map("supplier_payment_terms")
@@ -193,17 +193,17 @@ model SupplierPaymentTerm {
 
 /// Historial de reglas impositivas por proveedor.
 model SupplierTaxRule {
-  id         String   @id @default(cuid())
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
-  ivaRate    Decimal  @db.Decimal(9, 6)
-  iibbRate   Decimal  @default(0) @db.Decimal(9, 6)
+  id               String    @id @default(cuid())
+  supplierId       String
+  supplier         Supplier  @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  ivaRate          Decimal   @db.Decimal(9, 6)
+  iibbRate         Decimal   @default(0) @db.Decimal(9, 6)
   /// Otras percepciones: [{ label, rate }]
-  otherPerceptions Json @default("[]")
-  validFrom  DateTime
-  validTo    DateTime?
-  notes      String?
-  createdAt  DateTime @default(now())
+  otherPerceptions Json      @default("[]")
+  validFrom        DateTime
+  validTo          DateTime?
+  notes            String?
+  createdAt        DateTime  @default(now())
 
   @@index([supplierId, validFrom])
   @@map("supplier_tax_rules")
@@ -240,66 +240,66 @@ enum MarginBasis {
 ///
 /// No reemplaza al PLU ni compite con él. Un producto puede no tener familia.
 model ProductFamily {
-  id        String    @id @default(cuid())
+  id         String   @id @default(cuid())
   /// Código de la familia en el catálogo de origen, si lo trae.
-  code      String?   @unique
-  name      String    @unique
+  code       String?  @unique
+  name       String   @unique
   normalized String
-  active    Boolean   @default(true)
-  createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  products  Product[]
+  products Product[]
 
   @@index([normalized])
   @@map("product_families")
 }
 
 model Product {
-  id                String       @id @default(cuid())
+  id                           String         @id @default(cuid())
   /// Código interno o PLU
-  internalCode      String       @unique
-  normalizedName    String
-  category          String?
+  internalCode                 String         @unique
+  normalizedName               String
+  category                     String?
   /// Subtipo del catálogo de origen, cuando lo trae. Es informativo.
-  subtype           String?
-  familyId          String?
-  family            ProductFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
+  subtype                      String?
+  familyId                     String?
+  family                       ProductFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
   /// Cuándo se actualizó por última vez desde el catálogo de Control de Stock.
-  catalogSyncedAt   DateTime?
-  purchaseUnit      PurchaseUnit @default(KG)
-  saleMode          SaleMode     @default(FETEABLE)
+  catalogSyncedAt              DateTime?
+  purchaseUnit                 PurchaseUnit   @default(KG)
+  saleMode                     SaleMode       @default(FETEABLE)
   /// Peso habitual de la pieza u horma, en kg.
-  avgPieceWeightKg  Decimal?     @db.Decimal(14, 4)
+  avgPieceWeightKg             Decimal?       @db.Decimal(14, 4)
   /// Peso neto, en kg, de una unidad de compra cuando el proveedor factura por
   /// unidad pero Don Ginés vende por kilo. Ej.: lata de dulce 5 kg, postre de
   /// maní 3 kg. Permite convertir costo por unidad -> costo por kilo.
-  purchaseUnitWeightKg Decimal?  @db.Decimal(14, 4)
-  defaultSupplierId String?
-  defaultSupplier   Supplier?    @relation(fields: [defaultSupplierId], references: [id])
+  purchaseUnitWeightKg         Decimal?       @db.Decimal(14, 4)
+  defaultSupplierId            String?
+  defaultSupplier              Supplier?      @relation(fields: [defaultSupplierId], references: [id])
   /// Margen base por kilo, expresado como fracción (0.45 = 45 %).
-  targetMarginPct   Decimal      @default(0.45) @db.Decimal(9, 6)
-  marginBasis       MarginBasis  @default(SOBRE_COSTO)
+  targetMarginPct              Decimal        @default(0.45) @db.Decimal(9, 6)
+  marginBasis                  MarginBasis    @default(SOBRE_COSTO)
   /// Marcajes específicos por forma de venta. Si están en null usan el marcaje base.
-  alCorteHormaDigitalMarginPct Decimal? @db.Decimal(9, 6)
-  alCorteHormaCashMarginPct    Decimal? @db.Decimal(9, 6)
-  alCorteCajaCashMarginPct     Decimal? @db.Decimal(9, 6)
-  feteado100gMarginPct         Decimal? @db.Decimal(9, 6)
-  feteadoQuarterMarginPct      Decimal? @db.Decimal(9, 6)
-  feteadoPieceDigitalMarginPct Decimal? @db.Decimal(9, 6)
-  feteadoPieceCashMarginPct    Decimal? @db.Decimal(9, 6)
+  alCorteHormaDigitalMarginPct Decimal?       @db.Decimal(9, 6)
+  alCorteHormaCashMarginPct    Decimal?       @db.Decimal(9, 6)
+  alCorteCajaCashMarginPct     Decimal?       @db.Decimal(9, 6)
+  feteado100gMarginPct         Decimal?       @db.Decimal(9, 6)
+  feteadoQuarterMarginPct      Decimal?       @db.Decimal(9, 6)
+  feteadoPieceDigitalMarginPct Decimal?       @db.Decimal(9, 6)
+  feteadoPieceCashMarginPct    Decimal?       @db.Decimal(9, 6)
   /// Para artículos que se venden también por unidad completa (lata/cajón/postre).
-  wholeUnitMarginPct           Decimal? @db.Decimal(9, 6)
+  wholeUnitMarginPct           Decimal?       @db.Decimal(9, 6)
   /// Queda por compatibilidad histórica; los precios en efectivo ya no se calculan como descuento.
-  cashDiscountPct   Decimal      @default(0) @db.Decimal(9, 6)
+  cashDiscountPct              Decimal        @default(0) @db.Decimal(9, 6)
   /// Algunos artículos no usan PLU en la balanza y se identifican por código de barras.
-  usesPlu           Boolean      @default(true)
-  barcode           String?      @unique
+  usesPlu                      Boolean        @default(true)
+  barcode                      String?        @unique
   /// Regla de redondeo: NONE | NEAREST_10 | NEAREST_50 | NEAREST_100 | UP_100
-  roundingRule      String       @default("NEAREST_100")
-  active            Boolean      @default(true)
-  createdAt         DateTime     @default(now())
-  updatedAt         DateTime     @updatedAt
+  roundingRule                 String         @default("NEAREST_100")
+  active                       Boolean        @default(true)
+  createdAt                    DateTime       @default(now())
+  updatedAt                    DateTime       @updatedAt
 
   aliases           ProductAlias[]
   documentItems     DocumentItem[]
@@ -353,6 +353,40 @@ model ProductAlias {
 enum DocType {
   FACTURA
   REMITO
+  /// Nota de crédito del proveedor. Resta en la cuenta corriente; que además
+  /// mueva mercadería depende de cada renglón, no del tipo de comprobante.
+  NOTA_CREDITO
+}
+
+/// Por qué el proveedor emitió la nota de crédito.
+///
+/// No es una etiqueta decorativa: separa las que sólo corrigen plata de la que
+/// además implica mercadería que volvió. Con una sola categoría, "nota de
+/// crédito" y "devolución" terminarían siendo lo mismo, y no lo son.
+enum CreditReason {
+  /// Bonificación por volumen, por pronto pago o acordada.
+  BONIFICACION
+  /// El precio facturado no era el pactado.
+  DIFERENCIA_PRECIO
+  /// Descuento comercial posterior a la factura.
+  DESCUENTO_COMERCIAL
+  /// Corrección de un error fiscal del comprobante original.
+  CORRECCION_FISCAL
+  /// Devolución de una percepción mal aplicada.
+  DEVOLUCION_PERCEPCION
+  /// Mercadería devuelta al proveedor.
+  DEVOLUCION_MERCADERIA
+  OTRO
+}
+
+/// De dónde sale un renglón del historial de costos.
+///
+/// El costo que originó una factura y el ajuste que le hizo después una nota de
+/// crédito son dos hechos distintos y los dos tienen que quedar: pisar el
+/// primero con el segundo haría desaparecer de dónde salió el costo vigente.
+enum CostEntryKind {
+  COMPRA
+  AJUSTE_NC
 }
 
 enum DocumentStatus {
@@ -383,9 +417,9 @@ enum CheckState {
 }
 
 model Document {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   branchId   String
-  branch     Branch   @relation(fields: [branchId], references: [id])
+  branch     Branch    @relation(fields: [branchId], references: [id])
   supplierId String?
   supplier   Supplier? @relation(fields: [supplierId], references: [id])
 
@@ -398,30 +432,41 @@ model Document {
   readSupplierName String?
   readSupplierCuit String?
 
-  docType       DocType @default(FACTURA)
+  docType DocType @default(FACTURA)
   /// Letra de la factura: A, B, C, M, X…
-  letter        String?
-  pointOfSale   String  @default("")
-  number        String  @default("")
+  letter  String?
+
+  /// Motivo de la nota de crédito. Null en facturas y remitos.
+  creditReason      CreditReason?
+  /// La factura que esta nota de crédito corrige, cuando se sabe cuál es.
+  ///
+  /// Puede quedar en null a propósito: hay notas de crédito generales —una
+  /// bonificación trimestral, una corrección de cuenta— que no corresponden a
+  /// un comprobante en particular y se aplican al proveedor.
+  relatedDocumentId String?
+  relatedDocument   Document?     @relation("NotaDeCreditoDe", fields: [relatedDocumentId], references: [id], onDelete: SetNull)
+  creditNotes       Document[]    @relation("NotaDeCreditoDe")
+  pointOfSale       String        @default("")
+  number            String        @default("")
   /// "0010-00212356"
-  fullNumber    String  @default("")
-  issueDate     DateTime?
-  currency      String  @default("ARS")
+  fullNumber        String        @default("")
+  issueDate         DateTime?
+  currency          String        @default("ARS")
 
   // Resumen impreso del comprobante
-  grossSubtotal     Decimal? @db.Decimal(18, 4)
-  discountTotal     Decimal? @db.Decimal(18, 4)
-  netTotal          Decimal? @db.Decimal(18, 4)
-  ivaTotal          Decimal? @db.Decimal(18, 4)
-  perceptionsTotal  Decimal? @db.Decimal(18, 4)
-  total             Decimal? @db.Decimal(18, 4)
-  printedLineCount  Int?
+  grossSubtotal      Decimal? @db.Decimal(18, 4)
+  discountTotal      Decimal? @db.Decimal(18, 4)
+  netTotal           Decimal? @db.Decimal(18, 4)
+  ivaTotal           Decimal? @db.Decimal(18, 4)
+  perceptionsTotal   Decimal? @db.Decimal(18, 4)
+  total              Decimal? @db.Decimal(18, 4)
+  printedLineCount   Int?
   printedNetWeightKg Decimal? @db.Decimal(14, 4)
-  printedTotalUnits Decimal? @db.Decimal(14, 4)
-  packageCount      Int?
+  printedTotalUnits  Decimal? @db.Decimal(14, 4)
+  packageCount       Int?
 
-  status     DocumentStatus @default(BORRADOR)
-  checkState CheckState     @default(PENDIENTE)
+  status      DocumentStatus @default(BORRADOR)
+  checkState  CheckState     @default(PENDIENTE)
   /// Resultado detallado del validador (ver src/lib/domain/validation.ts).
   checkReport Json?
 
@@ -429,8 +474,8 @@ model Document {
   appliedTermType      TermType?
   appliedTermDays      Int?
   appliedPaymentMethod String?
-  appliedIvaRate       Decimal? @db.Decimal(9, 6)
-  appliedIibbRate      Decimal? @db.Decimal(9, 6)
+  appliedIvaRate       Decimal?  @db.Decimal(9, 6)
+  appliedIibbRate      Decimal?  @db.Decimal(9, 6)
   appliedDueDate       DateTime?
 
   /// Clave de deduplicación. Vale "ACTIVE" sólo mientras el comprobante está
@@ -447,10 +492,10 @@ model Document {
   validatedAt   DateTime?
 
   /// Anulación administrativa: siempre exige motivo y queda en auditoría.
-  voidReason  String?
-  voidedById  String?
-  voidedBy    User?     @relation("DocumentVoidedBy", fields: [voidedById], references: [id])
-  voidedAt    DateTime?
+  voidReason String?
+  voidedById String?
+  voidedBy   User?     @relation("DocumentVoidedBy", fields: [voidedById], references: [id])
+  voidedAt   DateTime?
 
   notes     String?
   createdAt DateTime @default(now())
@@ -468,35 +513,36 @@ model Document {
   @@index([branchId, issueDate])
   @@index([supplierId, issueDate])
   @@index([status])
+  @@index([relatedDocumentId])
   @@map("documents")
 }
 
 model DocumentFile {
-  id          String   @id @default(cuid())
-  documentId  String
-  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  pageOrder   Int
+  id                String    @id @default(cuid())
+  documentId        String
+  document          Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  pageOrder         Int
   /// Clave en el storage. Es la única versión que se guarda: la optimizada.
-  storageKey  String
-  mimeType    String
+  storageKey        String
+  mimeType          String
   /// Tipo del archivo tal como llegó del teléfono (HEIC, PNG…). El archivo en
   /// sí no se guarda: sólo el dato, para poder explicar qué se recibió.
-  originalMimeType String?
-  sizeBytes   Int
+  originalMimeType  String?
+  sizeBytes         Int
   /// Cuánto pesaba al llegar, antes de optimizar.
   originalSizeBytes Int?
   /// SHA-256 del contenido original: evita cargar dos veces la misma foto.
-  sha256      String
-  width       Int?
-  height      Int?
-  createdAt   DateTime @default(now())
+  sha256            String
+  width             Int?
+  height            Int?
+  createdAt         DateTime  @default(now())
   /// Cuándo se archivó la imagen para liberar espacio. Los datos extraídos del
   /// comprobante —artículos, costos, pagos— se conservan siempre; lo que se
   /// borra es la foto, y sólo después de exportarla.
-  archivedAt  DateTime?
+  archivedAt        DateTime?
   /// Quién archivó la imagen.
-  archivedById String?
-  archivedBy   User? @relation("ArchivosArchivados", fields: [archivedById], references: [id])
+  archivedById      String?
+  archivedBy        User?     @relation("ArchivosArchivados", fields: [archivedById], references: [id])
 
   @@unique([documentId, sha256])
   @@index([documentId, pageOrder])
@@ -504,31 +550,31 @@ model DocumentFile {
 }
 
 model OcrAttempt {
-  id            String   @id @default(cuid())
-  documentId    String
-  document      Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  attemptNumber Int
+  id                String    @id @default(cuid())
+  documentId        String
+  document          Document  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  attemptNumber     Int
   /// HEADER | ITEMS | SUMMARY | FULL | ITEMS_FOCUSED | SUMMARY_FOCUSED
-  stage         String
+  stage             String
   /// Descripción de la estrategia aplicada (recorte, contraste, zoom…).
-  strategy      String?
-  provider      String
-  model         String?
-  success       Boolean  @default(false)
-  startedAt     DateTime
-  finishedAt    DateTime?
-  durationMs    Int?
+  strategy          String?
+  provider          String
+  model             String?
+  success           Boolean   @default(false)
+  startedAt         DateTime
+  finishedAt        DateTime?
+  durationMs        Int?
   /// Respuesta cruda del proveedor, tal cual llegó.
-  rawResponse   Json?
-  recognizedText String?
-  overallConfidence Decimal? @db.Decimal(5, 4)
+  rawResponse       Json?
+  recognizedText    String?
+  overallConfidence Decimal?  @db.Decimal(5, 4)
   /// { campo: confianza }
-  fieldConfidences Json?
-  error         String?
+  fieldConfidences  Json?
+  error             String?
   /// Commit del código que produjo esta lectura, para saber si un resultado
   /// guardado viene de una versión anterior a un despliegue.
-  buildSha      String?
-  createdAt     DateTime @default(now())
+  buildSha          String?
+  createdAt         DateTime  @default(now())
 
   @@index([documentId, attemptNumber])
   @@map("ocr_attempts")
@@ -555,39 +601,48 @@ model DocumentTaxLine {
 }
 
 model DocumentItem {
-  id           String   @id @default(cuid())
-  documentId   String
-  document     Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  lineNumber   Int
-  supplierCode String?
-  description  String
-  quantity     Decimal  @db.Decimal(14, 4)
-  unit         PurchaseUnit @default(KG)
-  pieceCount   Int?
-  totalWeightKg Decimal? @db.Decimal(14, 4)
-  avgPieceWeightKg Decimal? @db.Decimal(14, 4)
+  id               String       @id @default(cuid())
+  documentId       String
+  document         Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  lineNumber       Int
+  supplierCode     String?
+  description      String
+  quantity         Decimal      @db.Decimal(14, 4)
+  unit             PurchaseUnit @default(KG)
+  pieceCount       Int?
+  totalWeightKg    Decimal?     @db.Decimal(14, 4)
+  avgPieceWeightKg Decimal?     @db.Decimal(14, 4)
 
-  unitNetPrice  Decimal @db.Decimal(18, 4)
-  grossSubtotal Decimal @db.Decimal(18, 4)
+  unitNetPrice     Decimal @db.Decimal(18, 4)
+  grossSubtotal    Decimal @db.Decimal(18, 4)
   /// true si el importe del renglón salió impreso del comprobante; false si se
   /// calculó como cantidad × precio. Un importe calculado no verifica nada.
-  grossFromPrint Boolean @default(true)
-  discountPct   Decimal @default(0) @db.Decimal(9, 6)
-  discountAmount Decimal @default(0) @db.Decimal(18, 4)
-  netAmount     Decimal @db.Decimal(18, 4)
-  ivaRate       Decimal @default(0) @db.Decimal(9, 6)
-  ivaAmount     Decimal @default(0) @db.Decimal(18, 4)
+  grossFromPrint   Boolean @default(true)
+  discountPct      Decimal @default(0) @db.Decimal(9, 6)
+  discountAmount   Decimal @default(0) @db.Decimal(18, 4)
+  netAmount        Decimal @db.Decimal(18, 4)
+  ivaRate          Decimal @default(0) @db.Decimal(9, 6)
+  ivaAmount        Decimal @default(0) @db.Decimal(18, 4)
   perceptionAmount Decimal @default(0) @db.Decimal(18, 4)
-  totalCost     Decimal @db.Decimal(18, 4)
-  unitCost      Decimal @db.Decimal(18, 4)
+  totalCost        Decimal @db.Decimal(18, 4)
+  unitCost         Decimal @db.Decimal(18, 4)
 
-  productId    String?
-  product      Product? @relation(fields: [productId], references: [id])
+  productId   String?
+  product     Product? @relation(fields: [productId], references: [id])
+  /// ¿Este renglón implicó mercadería que volvió al proveedor?
+  ///
+  /// Sólo tiene sentido en una nota de crédito, y se decide renglón por
+  /// renglón: una misma nota puede corregir el precio de un artículo y
+  /// documentar la devolución de otro. Por omisión es falso, que es la regla
+  /// que importa: la existencia de una nota de crédito **no** implica que haya
+  /// vuelto mercadería.
+  stockReturn Boolean  @default(false)
+
   /// SUPPLIER_CODE | ALIAS | FUZZY | MANUAL | NONE
-  matchMethod  String   @default("NONE")
-  matchScore   Decimal? @db.Decimal(5, 4)
+  matchMethod String   @default("NONE")
+  matchScore  Decimal? @db.Decimal(5, 4)
   /// Confianza por campo devuelta por el OCR.
-  confidence   Json?
+  confidence  Json?
 
   @@unique([documentId, lineNumber])
   @@index([productId])
@@ -607,11 +662,11 @@ enum PaymentStatus {
 }
 
 model PaymentSchedule {
-  id         String   @id @default(cuid())
-  documentId String   @unique
-  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  id                   String        @id @default(cuid())
+  documentId           String        @unique
+  document             Document      @relation(fields: [documentId], references: [id], onDelete: Cascade)
   /// Fecha prevista. Nunca se pisa con la fecha efectiva.
-  dueDate    DateTime
+  dueDate              DateTime
   /// ¿La fecha prevista es todavía una estimación?
   ///
   /// Sólo pasa con las condiciones "factura contra factura": el pago se hace
@@ -619,15 +674,15 @@ model PaymentSchedule {
   /// que hay es la fecha en que se la espera. Marcarlo permite mostrarla como
   /// provisoria y confirmarla después contra la fecha real, en vez de que
   /// conviva con las fechas firmes sin distinguirse.
-  dueDateProvisional Boolean @default(false)
-  plannedAmount Decimal @db.Decimal(18, 4)
+  dueDateProvisional   Boolean       @default(false)
+  plannedAmount        Decimal       @db.Decimal(18, 4)
   plannedPaymentMethod String
   /// Acumulado de pagos confirmados. Permite pagos parciales a futuro.
-  paidAmount Decimal  @default(0) @db.Decimal(18, 4)
-  status     PaymentStatus @default(AGENDADO)
-  notes      String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  paidAmount           Decimal       @default(0) @db.Decimal(18, 4)
+  status               PaymentStatus @default(AGENDADO)
+  notes                String?
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
 
   events PaymentEvent[]
 
@@ -643,19 +698,19 @@ enum PaymentEventKind {
 }
 
 model PaymentEvent {
-  id         String   @id @default(cuid())
-  scheduleId String
-  schedule   PaymentSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  kind       PaymentEventKind
-  amount     Decimal? @db.Decimal(18, 4)
+  id            String           @id @default(cuid())
+  scheduleId    String
+  schedule      PaymentSchedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  kind          PaymentEventKind
+  amount        Decimal?         @db.Decimal(18, 4)
   /// Fecha efectiva del pago (distinta de la prevista).
   effectiveDate DateTime?
   paymentMethod String?
-  reference  String?
-  notes      String?
-  userId     String
-  user       User     @relation(fields: [userId], references: [id])
-  createdAt  DateTime @default(now())
+  reference     String?
+  notes         String?
+  userId        String
+  user          User             @relation(fields: [userId], references: [id])
+  createdAt     DateTime         @default(now())
 
   @@index([scheduleId, createdAt])
   @@map("payment_events")
@@ -668,31 +723,31 @@ model PaymentEvent {
 /// Una fila por artículo comprado. Es la tabla de hechos para los reportes de
 /// kilos, unidades e importes por producto / proveedor / sucursal / período.
 model PurchaseMovement {
-  id             String   @id @default(cuid())
-  documentId     String
-  document       Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
-  documentItemId String   @unique
-  productId      String?
-  product        Product? @relation(fields: [productId], references: [id])
-  supplierId     String?
-  supplier       Supplier? @relation(fields: [supplierId], references: [id])
-  branchId       String
-  branch         Branch   @relation(fields: [branchId], references: [id])
-  date           DateTime
-  description    String
-  quantity       Decimal  @db.Decimal(14, 4)
-  unit           PurchaseUnit
-  pieceCount     Int?
-  weightKg       Decimal? @db.Decimal(14, 4)
-  avgPieceWeightKg Decimal? @db.Decimal(14, 4)
-  unitNetPrice   Decimal  @db.Decimal(18, 4)
-  discountAmount Decimal  @db.Decimal(18, 4)
-  netAmount      Decimal  @db.Decimal(18, 4)
-  ivaAmount      Decimal  @db.Decimal(18, 4)
-  perceptionAmount Decimal @db.Decimal(18, 4)
-  totalCost      Decimal  @db.Decimal(18, 4)
-  unitCost       Decimal  @db.Decimal(18, 4)
-  createdAt      DateTime @default(now())
+  id               String       @id @default(cuid())
+  documentId       String
+  document         Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  documentItemId   String       @unique
+  productId        String?
+  product          Product?     @relation(fields: [productId], references: [id])
+  supplierId       String?
+  supplier         Supplier?    @relation(fields: [supplierId], references: [id])
+  branchId         String
+  branch           Branch       @relation(fields: [branchId], references: [id])
+  date             DateTime
+  description      String
+  quantity         Decimal      @db.Decimal(14, 4)
+  unit             PurchaseUnit
+  pieceCount       Int?
+  weightKg         Decimal?     @db.Decimal(14, 4)
+  avgPieceWeightKg Decimal?     @db.Decimal(14, 4)
+  unitNetPrice     Decimal      @db.Decimal(18, 4)
+  discountAmount   Decimal      @db.Decimal(18, 4)
+  netAmount        Decimal      @db.Decimal(18, 4)
+  ivaAmount        Decimal      @db.Decimal(18, 4)
+  perceptionAmount Decimal      @db.Decimal(18, 4)
+  totalCost        Decimal      @db.Decimal(18, 4)
+  unitCost         Decimal      @db.Decimal(18, 4)
+  createdAt        DateTime     @default(now())
 
   @@index([productId, date])
   @@index([supplierId, date])
@@ -704,24 +759,27 @@ model PurchaseMovement {
 /// Historial de costos unitarios finales, con el costo anterior para poder
 /// calcular la variación sin recorrer toda la serie.
 model CostHistory {
-  id           String   @id @default(cuid())
-  productId    String
-  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  supplierId   String?
-  supplier     Supplier? @relation(fields: [supplierId], references: [id])
-  branchId     String?
-  branch       Branch?  @relation(fields: [branchId], references: [id])
-  documentId   String?
-  document     Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
-  date         DateTime
-  unitNetPrice Decimal  @db.Decimal(18, 4)
-  unitCost     Decimal  @db.Decimal(18, 4)
-  previousUnitCost Decimal? @db.Decimal(18, 4)
+  id               String        @id @default(cuid())
+  productId        String
+  product          Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  supplierId       String?
+  supplier         Supplier?     @relation(fields: [supplierId], references: [id])
+  branchId         String?
+  branch           Branch?       @relation(fields: [branchId], references: [id])
+  documentId       String?
+  document         Document?     @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  date             DateTime
+  /// Si este renglón es la compra que originó el costo o el ajuste que le hizo
+  /// después una nota de crédito.
+  kind             CostEntryKind @default(COMPRA)
+  unitNetPrice     Decimal       @db.Decimal(18, 4)
+  unitCost         Decimal       @db.Decimal(18, 4)
+  previousUnitCost Decimal?      @db.Decimal(18, 4)
   /// unitCost - previousUnitCost
-  deltaAmount  Decimal? @db.Decimal(18, 4)
+  deltaAmount      Decimal?      @db.Decimal(18, 4)
   /// Fracción: 0.12 = +12 %
-  deltaPct     Decimal? @db.Decimal(12, 6)
-  createdAt    DateTime @default(now())
+  deltaPct         Decimal?      @db.Decimal(12, 6)
+  createdAt        DateTime      @default(now())
 
   @@index([productId, date])
   @@map("cost_history")
@@ -752,25 +810,25 @@ model PricingRule {
 }
 
 model SalePriceHistory {
-  id            String   @id @default(cuid())
-  productId     String
-  product       Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  id                   String      @id @default(cuid())
+  productId            String
+  product              Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
   /// Costo unitario final que originó el precio.
-  costBasis     Decimal  @db.Decimal(18, 4)
-  marginBasis   MarginBasis
-  marginPct     Decimal  @db.Decimal(9, 6)
-  suggestedPricePerKg Decimal @db.Decimal(18, 4)
-  approvedPricePerKg  Decimal @db.Decimal(18, 4)
-  pricePer100g  Decimal  @db.Decimal(18, 4)
-  pricePerQuarter Decimal @db.Decimal(18, 4)
-  pricePerPieceDigital Decimal? @db.Decimal(18, 4)
-  pricePerPieceCash    Decimal? @db.Decimal(18, 4)
-  pieceWeightKg Decimal? @db.Decimal(14, 4)
-  cashDiscountPct Decimal @db.Decimal(9, 6)
-  validFrom     DateTime
-  approvedById  String?
-  approvedBy    User?    @relation(fields: [approvedById], references: [id])
-  approvedAt    DateTime @default(now())
+  costBasis            Decimal     @db.Decimal(18, 4)
+  marginBasis          MarginBasis
+  marginPct            Decimal     @db.Decimal(9, 6)
+  suggestedPricePerKg  Decimal     @db.Decimal(18, 4)
+  approvedPricePerKg   Decimal     @db.Decimal(18, 4)
+  pricePer100g         Decimal     @db.Decimal(18, 4)
+  pricePerQuarter      Decimal     @db.Decimal(18, 4)
+  pricePerPieceDigital Decimal?    @db.Decimal(18, 4)
+  pricePerPieceCash    Decimal?    @db.Decimal(18, 4)
+  pieceWeightKg        Decimal?    @db.Decimal(14, 4)
+  cashDiscountPct      Decimal     @db.Decimal(9, 6)
+  validFrom            DateTime
+  approvedById         String?
+  approvedBy           User?       @relation(fields: [approvedById], references: [id])
+  approvedAt           DateTime    @default(now())
 
   @@index([productId, validFrom])
   @@map("sale_price_history")
@@ -782,19 +840,19 @@ model SalePriceHistory {
 // ---------------------------------------------------------------------------
 
 model SalesMovement {
-  id         String   @id @default(cuid())
+  id         String       @id @default(cuid())
   productId  String
-  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product    Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
   branchId   String
-  branch     Branch   @relation(fields: [branchId], references: [id])
+  branch     Branch       @relation(fields: [branchId], references: [id])
   date       DateTime
-  quantity   Decimal  @db.Decimal(14, 4)
+  quantity   Decimal      @db.Decimal(14, 4)
   unit       PurchaseUnit
-  netAmount  Decimal  @db.Decimal(18, 4)
+  netAmount  Decimal      @db.Decimal(18, 4)
   /// Origen del dato: MAXIREST | MANUAL | OTRO
-  source     String   @default("MANUAL")
+  source     String       @default("MANUAL")
   externalId String?
-  createdAt  DateTime @default(now())
+  createdAt  DateTime     @default(now())
 
   @@unique([source, externalId])
   @@index([productId, date])

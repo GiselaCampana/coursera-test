@@ -1,6 +1,6 @@
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
-import { splitColumns } from '@/lib/ocr/text-parser';
+import { esNotaDeCredito, splitColumns } from '@/lib/ocr/text-parser';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
 import {
   CLASE_DIGITOS_OCR,
@@ -92,7 +92,11 @@ export const analizadorLosCalvos: AnalizadorComprobante = {
 
 function analizarEncabezado(texto: string): OcrHeader {
   const header: OcrHeader = {
-    docType: /\bremito\b/i.test(texto) && !/\bfactura\b/i.test(texto) ? 'REMITO' : 'FACTURA',
+    docType: esNotaDeCredito(texto)
+      ? 'NOTA_CREDITO'
+      : /\bremito\b/i.test(texto) && !/\bfactura\b/i.test(texto)
+        ? 'REMITO'
+        : 'FACTURA',
     letter: null,
     pointOfSale: null,
     number: null,
