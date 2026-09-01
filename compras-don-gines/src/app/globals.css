@@ -1171,6 +1171,15 @@ tbody tr:last-child td {
 .mb-chico {
   margin-bottom: 7px;
 }
+/* Lista sin viñetas ni sangría, para enumerar indicios dentro de una ficha. */
+.lista-simple {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.lista-simple li {
+  margin-bottom: 3px;
+}
 .separador {
   height: 1px;
   background: var(--borde);

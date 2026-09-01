@@ -57,6 +57,14 @@ export default async function PaginaConfiguracion() {
       visible: hasPermission(user, PERMISSIONS.PROVEEDORES_GESTIONAR),
     },
     {
+      href: '/configuracion/proveedores/auditoria',
+      titulo: 'Auditoría de atribución',
+      texto:
+        'Revisa si los comprobantes cargados a nombre de un proveedor son de verdad suyos. ' +
+        'Sólo diagnostica: no corrige nada.',
+      visible: hasPermission(user, PERMISSIONS.PROVEEDORES_GESTIONAR),
+    },
+    {
       href: '/configuracion/catalogo',
       titulo: 'Catálogo Don Ginés',
       texto:
