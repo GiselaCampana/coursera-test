@@ -96,7 +96,15 @@ jobs:
       - name: Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Playwright de catálogo y asociaciones
+      # Las end to end que corren sobre comprobantes dibujados, que tardan
+      # segundos. Las que leen las fotos reales quedan fuera de CI porque cada
+      # una lleva minutos de OCR; se corren a mano antes de desplegar.
+      - name: Playwright de catálogo, asociaciones y alta de comprobantes
         run: |
           node scripts/preparar-e2e.mjs
-          npx playwright test tests/e2e/asociaciones.spec.ts tests/e2e/catalogo.spec.ts tests/e2e/precios.spec.ts
+          npx playwright test \
+            tests/e2e/asociaciones.spec.ts \
+            tests/e2e/catalogo.spec.ts \
+            tests/e2e/precios.spec.ts \
+            tests/e2e/proveedor-nuevo.spec.ts \
+            tests/e2e/nota-credito.spec.ts

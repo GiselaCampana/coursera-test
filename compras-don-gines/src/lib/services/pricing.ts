@@ -77,6 +77,15 @@ export interface ProductCostSnapshot {
   date: Date | null;
   supplierName: string | null;
   branchName: string | null;
+  /**
+   * De dónde sale el costo vigente: de una compra o del ajuste que le hizo una
+   * nota de crédito.
+   *
+   * Sin esto, un costo bajado por una bonificación se ve igual que una baja de
+   * precio del proveedor, y son dos cosas distintas: la primera no se va a
+   * repetir el mes que viene.
+   */
+  origin: 'COMPRA' | 'AJUSTE_NC' | null;
 }
 
 export async function getLatestCost(productId: string): Promise<ProductCostSnapshot> {
@@ -91,6 +100,7 @@ export async function getLatestCost(productId: string): Promise<ProductCostSnaps
       previousUnitCost: null,
       deltaAmount: null,
       deltaPct: null,
+      origin: null,
       date: null,
       supplierName: null,
       branchName: null,
@@ -101,6 +111,7 @@ export async function getLatestCost(productId: string): Promise<ProductCostSnaps
     previousUnitCost: latest.previousUnitCost ? toDecimal(latest.previousUnitCost.toString()) : null,
     deltaAmount: latest.deltaAmount ? toDecimal(latest.deltaAmount.toString()) : null,
     deltaPct: latest.deltaPct ? toDecimal(latest.deltaPct.toString()) : null,
+    origin: latest.kind as 'COMPRA' | 'AJUSTE_NC',
     date: latest.date,
     supplierName: latest.supplier?.tradeName ?? null,
     branchName: latest.branch?.name ?? null,
@@ -349,6 +360,8 @@ export interface PriceBoardRow {
   previousUnitCost: string | null;
   deltaAmount: string | null;
   deltaPct: string | null;
+  /** 'AJUSTE_NC' cuando el costo vigente lo dejó una nota de crédito. */
+  costOrigin: 'COMPRA' | 'AJUSTE_NC' | null;
   lastCostDate: Date | null;
   supplierName: string | null;
   branchName: string | null;
@@ -421,6 +434,7 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
           ? suggestion.costPerKg.minus(suggestion.previousCostPerKg).toFixed(2)
           : null,
       deltaPct: cost.deltaPct?.toString() ?? null,
+      costOrigin: cost.origin,
       lastCostDate: cost.date,
       supplierName: cost.supplierName,
       branchName: cost.branchName,

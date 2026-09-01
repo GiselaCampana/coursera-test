@@ -460,6 +460,20 @@ describe('la trazabilidad del costo', () => {
     expect(Number(ajustes[0].deltaAmount)).toBeLessThan(0);
   });
 
+  it('la pantalla de precios puede decir que el costo lo dejó una nota de crédito', async () => {
+    /*
+     * Un costo bajado por una bonificación se ve igual que una baja de precio
+     * del proveedor. No son lo mismo: el descuento fue por esta compra. Sin
+     * poder distinguirlos, el margen del mes que viene se calcula sobre un
+     * costo que ya no existe.
+     */
+    const facturaId = await facturaDe121000();
+    expect((await getLatestCost(escenario.productos['1001'])).origin).toBe('COMPRA');
+
+    await notaDeCredito({ motivo: 'DIFERENCIA_PRECIO', relacionadaA: facturaId });
+    expect((await getLatestCost(escenario.productos['1001'])).origin).toBe('AJUSTE_NC');
+  });
+
   it('el costo efectivo del artículo pasa a ser el ajustado', async () => {
     /*
      * La factura deja el kilo en $12.100 (con el IVA repartido). La nota de

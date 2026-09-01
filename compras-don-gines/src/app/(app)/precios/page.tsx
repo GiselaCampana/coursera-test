@@ -170,8 +170,27 @@ export default async function PaginaPrecios({
 
                 {fila.previousUnitCost ? (
                   <div className="dato">
-                    <dt>Costo anterior por kilo</dt>
+                    <dt>
+                      {fila.costOrigin === 'AJUSTE_NC'
+                        ? 'Costo que dejó la factura'
+                        : 'Costo anterior por kilo'}
+                    </dt>
                     <dd>{formatARS(fila.previousUnitCost)}</dd>
+                  </div>
+                ) : null}
+                {/*
+                  De dónde salió el costo que está rigiendo.
+
+                  Un costo bajado por una bonificación se ve exactamente igual
+                  que una baja de precio del proveedor, y no son lo mismo: el
+                  descuento fue por esta compra y no va a repetirse solo. Sin
+                  decirlo, el margen del mes que viene se calcula sobre un costo
+                  que ya no existe.
+                */}
+                {fila.costOrigin === 'AJUSTE_NC' ? (
+                  <div className="dato">
+                    <dt>Origen del costo</dt>
+                    <dd>Ajustado por una nota de crédito</dd>
                   </div>
                 ) : null}
                 {fila.deltaAmount && fila.deltaPct ? (
