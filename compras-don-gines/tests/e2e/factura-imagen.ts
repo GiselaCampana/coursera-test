@@ -146,6 +146,14 @@ export function svgFactura(
    */
   numero = '00212356',
   emisor: Emisor = LOS_CALVOS,
+  /**
+   * Qué comprobante se dibuja.
+   *
+   * Una nota de crédito se imprime igual que una factura salvo por el título, y
+   * eso es justamente lo que hace falta probar: que la aplicación la reconozca
+   * por esa palabra y no la trate como una factura más.
+   */
+  tipoComprobante: 'FACTURA' | 'NOTA_CREDITO' = 'FACTURA',
 ): string {
   const partes: string[] = [];
   const chico = deterioro === 'borroso';
@@ -158,7 +166,16 @@ export function svgFactura(
   partes.push(texto(`CUIT: ${emisor.cuit}`, { x: 90, y: 200, tamano: 30 }));
   partes.push(texto('Ingresos Brutos: 901-234567-8', { x: 90, y: 240, tamano: 28 }));
 
-  partes.push(texto('FACTURA', { x: DERECHA, y: 110, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
+  partes.push(
+    texto(tipoComprobante === 'NOTA_CREDITO' ? 'NOTA DE CREDITO' : 'FACTURA', {
+      x: DERECHA,
+      y: 110,
+      tamano: tipoComprobante === 'NOTA_CREDITO' ? 40 : 46,
+      familia: SANS,
+      peso: 'bold',
+      anclaje: 'end',
+    }),
+  );
   partes.push(texto('A', { x: DERECHA, y: 165, tamano: 46, familia: SANS, peso: 'bold', anclaje: 'end' }));
   partes.push(texto('Punto de Venta: 0010', { x: DERECHA, y: 215, tamano: 30, anclaje: 'end' }));
   partes.push(texto(`Comp. Nro: ${numero}`, { x: DERECHA, y: 255, tamano: 30, anclaje: 'end' }));
@@ -249,6 +266,8 @@ export async function facturaLosCalvosJpeg(
     numero?: string;
     /** Quién la emite. Por omisión, Los Calvos. */
     emisor?: Emisor;
+    /** Factura o nota de crédito. Por omisión, factura. */
+    tipoComprobante?: 'FACTURA' | 'NOTA_CREDITO';
   } = {},
 ): Promise<Buffer> {
   let imagen = sharp(
@@ -258,6 +277,7 @@ export async function facturaLosCalvosJpeg(
         opciones.totalAlterado ?? false,
         opciones.numero ?? '00212356',
         opciones.emisor ?? LOS_CALVOS,
+        opciones.tipoComprobante ?? 'FACTURA',
       ),
     ),
     { density: 96 },

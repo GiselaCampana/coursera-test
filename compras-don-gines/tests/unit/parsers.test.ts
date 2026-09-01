@@ -73,6 +73,43 @@ describe('elección del analizador', () => {
     expect(analisis.items).toHaveLength(2);
     expect(analisis.summary?.total).toBe('215561.5');
   });
+
+  it('no se queda con el comprobante de otro proveedor por compartir las columnas', () => {
+    /*
+     * El defecto que esto impide: "Bonif" e "Importe" son cabeceras que
+     * imprime cualquier sistema de facturación, y con ellas solas el
+     * analizador de Los Calvos se quedaba con facturas ajenas. Como después
+     * escribe el nombre del proveedor a mano —lo sabe, porque es su formato—,
+     * el comprobante quedaba atribuido a Los Calvos: con su plazo de pago, con
+     * sus tasas, y sin que la pantalla llegara nunca a decir que el proveedor
+     * era nuevo.
+     */
+    const ajena = {
+      completo: [
+        'FIAMBRES DEL OESTE S R L',
+        'CUIT: 30-59876543-2',
+        'FACTURA A   Punto de Venta: 0010   Comp. Nro: 00990011',
+        'Fecha de Emision: 14/08/2026',
+        '',
+        'Cod   Descripcion            Kg      Precio    Bonif %     Importe',
+        '1001  LONGANIZA CORTA     16,10  16.037,00      14,00  258.195,70',
+        '',
+        'Cantidad de renglones: 1     Peso neto: 16,10 kg',
+        'Neto Gravado:  222.048,30',
+        'IVA 21%:        46.630,14',
+        'TOTAL:         268.678,44',
+      ].join('\n'),
+    };
+
+    expect(analizadorLosCalvos.reconoce(ajena)).toBe(0);
+    const { analizador } = elegirAnalizador(ajena);
+    expect(analizador.codigo).toBe('generico');
+
+    // Y lo que de verdad importa: el proveedor que se lee es el que firma.
+    const header = analizador.analizar(ajena).header;
+    expect(header?.legalName ?? '').toMatch(/FIAMBRES DEL OESTE/i);
+    expect(header?.cuit?.replace(/\D/g, '')).toBe('30598765432');
+  });
 });
 
 describe('analizador de Los Calvos sobre texto limpio', () => {

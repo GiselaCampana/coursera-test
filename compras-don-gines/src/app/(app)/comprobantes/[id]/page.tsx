@@ -5,9 +5,14 @@ import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getDocumentForReview } from '@/lib/services/documents';
 import { diagnosticarDerivados } from '@/lib/services/reparar-derivados';
+import {
+  notasDeCreditoDe,
+  MOTIVO_DE_CREDITO_LABEL,
+  type MotivoDeCredito,
+} from '@/lib/services/notas-credito';
 import { getStorage } from '@/lib/storage';
 import { NotFoundError } from '@/lib/errors';
-import { formatARS, formatQty, formatRate } from '@/lib/money';
+import { formatARS, formatQty, formatRate, toDecimal } from '@/lib/money';
 import { formatDateAr, formatDateTimeAr } from '@/lib/datetime';
 import { describeTerm, PAYMENT_METHOD_LABEL, type TermType } from '@/lib/domain/payments';
 import type { ValidationReport } from '@/lib/domain/validation';
@@ -103,11 +108,27 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
    */
   const faltantes = puedeValidar ? await diagnosticarDerivados(documento.id) : [];
 
+  /*
+   * Las notas de crédito que corrigen esta factura, y qué queda por pagar.
+   *
+   * Van en la pantalla de la factura porque es donde alguien mira antes de
+   * transferir. Una nota de crédito guardada en otra pantalla es plata que
+   * existe y que no se ve: el importe grande de la factura queda solo, y es el
+   * que se termina pagando.
+   */
+  const notas =
+    documento.docType === 'NOTA_CREDITO' ? [] : await notasDeCreditoDe(documento.id);
+  const creditoTotal = notas
+    .filter((n) => n.status === 'VALIDADO')
+    .reduce((acc, n) => acc.plus(toDecimal(n.total?.toString() ?? '0')), toDecimal('0'));
+
   return (
     <>
       {guardado ? (
         <p className="mensaje mensaje-ok" role="status">
-          El comprobante se guardó y el pago quedó agendado.
+          {documento.docType === 'NOTA_CREDITO'
+            ? 'La nota de crédito se guardó y ya está descontando del saldo con el proveedor.'
+            : 'El comprobante se guardó y el pago quedó agendado.'}
         </p>
       ) : null}
 
@@ -176,6 +197,57 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
           ) : null}
         </dl>
       </div>
+
+      {notas.length > 0 ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Notas de crédito</h2>
+            <span className="chico medio">−{formatARS(creditoTotal)}</span>
+          </div>
+          <ul className="lista">
+            {notas.map((nota) => (
+              <li key={nota.id}>
+                <div className="fila-dato">
+                  <div className="fila-dato-cabecera">
+                    <span className="fila-dato-titulo">
+                      <Link href={`/comprobantes/${nota.id}`}>{nota.fullNumber || 'sin número'}</Link>
+                    </span>
+                    <span className="fila-dato-importe">−{formatARS(nota.total?.toString() ?? '0')}</span>
+                  </div>
+                  <div className="fila-dato-meta">
+                    <span>{formatDateAr(nota.issueDate)}</span>
+                    <span>{MOTIVO_DE_CREDITO_LABEL[nota.creditReason as MotivoDeCredito] ?? 'Sin motivo'}</span>
+                    {/*
+                      Si movió mercadería o no, dicho acá. Es la pregunta que
+                      aparece cuando el stock no cierra, y la respuesta no se
+                      puede deducir de que exista la nota.
+                    */}
+                    <span>
+                      {nota.items.some((i) => i.stockReturn)
+                        ? `${nota.items.filter((i) => i.stockReturn).length} renglón/es devueltos`
+                        : 'Sin devolución de mercadería'}
+                    </span>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+          {documento.paymentSchedule ? (
+            <p className="mensaje mensaje-info mb0">
+              De esta factura hay que pagar{' '}
+              <strong>
+                {formatARS(
+                  toDecimal(documento.paymentSchedule.plannedAmount.toString())
+                    .minus(creditoTotal)
+                    .minus(toDecimal(documento.paymentSchedule.paidAmount.toString()))
+                    .toFixed(2),
+                )}
+              </strong>
+              .
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="card">
         <h2>Totales</h2>

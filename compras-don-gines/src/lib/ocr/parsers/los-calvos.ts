@@ -58,11 +58,29 @@ export const analizadorLosCalvos: AnalizadorComprobante = {
       .replace(/[̀-ͯ]/g, '')
       .toUpperCase();
 
+    /*
+     * Primero el proveedor, y sin él no hay analizador.
+     *
+     * "Bonif" e "Importe" son cabeceras de columna que imprime cualquier
+     * sistema de facturación, y sólo con ellas este analizador se quedaba con
+     * comprobantes de proveedores que no son Los Calvos. Como después escribe
+     * el nombre a mano en el encabezado —lo sabe, porque es su formato— la
+     * factura terminaba atribuida al proveedor equivocado: con el plazo de pago
+     * de Los Calvos, con sus tasas, y sin que la pantalla llegara nunca a decir
+     * que el proveedor era nuevo.
+     *
+     * Un formato ajeno interpretado con las reglas de otro proveedor es peor
+     * que uno interpretado con reglas generales.
+     */
+    const porNombre = /L[O0]S\s+C[A4]LV[O0]S/.test(normalizado);
+    const porCuit = /30-?61234567-?9/.test(normalizado.replace(/\s/g, ''));
+    if (!porNombre && !porCuit) return 0;
+
     let puntaje = 0;
     // El nombre, tolerando que el OCR se coma o cambie alguna letra.
-    if (/L[O0]S\s+C[A4]LV[O0]S/.test(normalizado)) puntaje += 0.6;
-    if (/30-?61234567-?9/.test(normalizado.replace(/\s/g, ''))) puntaje += 0.3;
-    // La cabecera de columnas de este formato.
+    if (porNombre) puntaje += 0.6;
+    if (porCuit) puntaje += 0.3;
+    // Y después la cabecera de columnas de este formato, que confirma.
     if (/BONIF/.test(normalizado) && /IMPORTE/.test(normalizado)) puntaje += 0.2;
     if (/PESO\s+NETO/.test(normalizado) && /RENGL/.test(normalizado)) puntaje += 0.1;
 

@@ -1712,14 +1712,22 @@ export function PasoRevision({
           <button type="button" className="boton boton-secundario" onClick={onVolver}>
             Volver a las imágenes
           </button>
+          {/*
+            Una nota de crédito no tiene fecha prevista de pago, así que no se
+            la puede pedir para seguir: no se paga, se descuenta.
+          */}
           <button
             type="button"
             className="boton"
             onClick={() => onPaso(3)}
-            disabled={vencimiento === ''}
-            title={vencimiento === '' ? 'Falta la fecha prevista de pago.' : undefined}
+            disabled={!esNotaDeCredito && vencimiento === ''}
+            title={
+              !esNotaDeCredito && vencimiento === ''
+                ? 'Falta la fecha prevista de pago.'
+                : undefined
+            }
           >
-            Continuar al pago
+            {esNotaDeCredito ? 'Continuar' : 'Continuar al pago'}
           </button>
         </div>
       </div>
