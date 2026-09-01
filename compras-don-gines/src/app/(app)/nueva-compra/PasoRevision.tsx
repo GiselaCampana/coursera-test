@@ -8,6 +8,12 @@ import { formatARS, formatQty } from '@/lib/money';
 import { AppError, toUserMessage } from '@/lib/errors';
 import { consultar, pedir } from '@/lib/cliente/red';
 import { filtrarCatalogo } from '@/lib/catalogo-busqueda';
+import {
+  admiteDevolucion,
+  MOTIVOS_DE_CREDITO,
+  MOTIVO_DE_CREDITO_LABEL,
+  type MotivoDeCredito,
+} from '@/lib/domain/notas-credito';
 import { ListaControles, Semaforo } from '@/components/Estado';
 import { Pasos } from './NuevaCompra';
 import type { ComprobanteRevision, Opcion, OpcionProducto } from './tipos';
@@ -60,16 +66,7 @@ interface ArticuloEditable {
   devolucion: boolean;
 }
 
-/** Los motivos por los que un proveedor emite una nota de crédito. */
-const MOTIVOS_DE_CREDITO = [
-  { valor: 'BONIFICACION', texto: 'Bonificación', mueveStock: false },
-  { valor: 'DIFERENCIA_PRECIO', texto: 'Diferencia de precio', mueveStock: false },
-  { valor: 'DESCUENTO_COMERCIAL', texto: 'Descuento comercial', mueveStock: false },
-  { valor: 'CORRECCION_FISCAL', texto: 'Corrección fiscal', mueveStock: false },
-  { valor: 'DEVOLUCION_PERCEPCION', texto: 'Devolución de percepción', mueveStock: false },
-  { valor: 'DEVOLUCION_MERCADERIA', texto: 'Devolución de mercadería', mueveStock: true },
-  { valor: 'OTRO', texto: 'Otro', mueveStock: true },
-] as const;
+
 
 const vacio = (v: string | null | undefined) => (v === null || v === undefined ? '' : v);
 
@@ -224,8 +221,7 @@ export function PasoRevision({
   const [facturasDelProveedor, setFacturasDelProveedor] = useState<
     { id: string; numero: string; fecha: string | null; total: string; creditoAplicado: string }[]
   >([]);
-  const motivoMueveStock =
-    MOTIVOS_DE_CREDITO.find((m) => m.valor === motivoCredito)?.mueveStock ?? false;
+  const motivoMueveStock = admiteDevolucion(motivoCredito);
 
   const [productosDisponibles, setProductosDisponibles] = useState(productos);
   /** Lo que se está escribiendo en el buscador de catálogo de cada renglón. */
@@ -649,7 +645,7 @@ export function PasoRevision({
               <div className="dato">
                 <dt>Motivo</dt>
                 <dd>
-                  {MOTIVOS_DE_CREDITO.find((m) => m.valor === motivoCredito)?.texto ?? motivoCredito}
+                  {MOTIVO_DE_CREDITO_LABEL[motivoCredito as MotivoDeCredito] ?? motivoCredito}
                 </dd>
               </div>
               <div className="dato">
@@ -1090,8 +1086,8 @@ export function PasoRevision({
               onChange={(e) => setMotivoCredito(e.target.value)}
             >
               {MOTIVOS_DE_CREDITO.map((m) => (
-                <option key={m.valor} value={m.valor}>
-                  {m.texto}
+                <option key={m} value={m}>
+                  {MOTIVO_DE_CREDITO_LABEL[m]}
                 </option>
               ))}
             </select>

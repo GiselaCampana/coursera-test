@@ -13,6 +13,7 @@ import {
 import { confirmPayment, listPayments } from '@/lib/services/payments';
 import { getLatestCost } from '@/lib/services/pricing';
 import { getPurchaseReport } from '@/lib/services/reports';
+import { admiteDevolucion } from '@/lib/domain/notas-credito';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
 
 /**
@@ -331,6 +332,31 @@ describe('la nota de crédito mixta', () => {
     // Los dos restan plata.
     expect(Number(devuelto.netAmount)).toBe(-20000);
     expect(Number(corregido.netAmount)).toBe(-5000);
+  });
+});
+
+describe('la regla de qué motivo puede llevar mercadería, una sola vez', () => {
+  /*
+   * La pantalla y el servidor tienen que estar de acuerdo. Si la pantalla
+   * creyera que una bonificación admite devolución, ofrecería una casilla que
+   * el servidor rechaza, y el operador vería un error sobre algo que la
+   * aplicación misma le ofreció marcar.
+   */
+  it('los motivos financieros no admiten devolución', () => {
+    for (const motivo of [
+      'BONIFICACION',
+      'DIFERENCIA_PRECIO',
+      'DESCUENTO_COMERCIAL',
+      'CORRECCION_FISCAL',
+      'DEVOLUCION_PERCEPCION',
+    ]) {
+      expect(admiteDevolucion(motivo), motivo).toBe(false);
+    }
+  });
+
+  it('la devolución de mercadería, y el motivo abierto, sí', () => {
+    expect(admiteDevolucion('DEVOLUCION_MERCADERIA')).toBe(true);
+    expect(admiteDevolucion('OTRO')).toBe(true);
   });
 });
 

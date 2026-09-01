@@ -5,11 +5,8 @@ import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getDocumentForReview } from '@/lib/services/documents';
 import { diagnosticarDerivados } from '@/lib/services/reparar-derivados';
-import {
-  notasDeCreditoDe,
-  MOTIVO_DE_CREDITO_LABEL,
-  type MotivoDeCredito,
-} from '@/lib/services/notas-credito';
+import { notasDeCreditoDe } from '@/lib/services/notas-credito';
+import { MOTIVO_DE_CREDITO_LABEL, type MotivoDeCredito } from '@/lib/domain/notas-credito';
 import { getStorage } from '@/lib/storage';
 import { NotFoundError } from '@/lib/errors';
 import { formatARS, formatQty, formatRate, toDecimal } from '@/lib/money';

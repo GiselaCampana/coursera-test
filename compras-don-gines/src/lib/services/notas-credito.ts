@@ -5,10 +5,16 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { Decimal, toDecimal } from '@/lib/money';
 import { parseArDate } from '@/lib/datetime';
-import { costItems, consistentPerceptionLines, type CostedItem } from '@/lib/domain/costing';
+import { costItems, consistentPerceptionLines } from '@/lib/domain/costing';
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { getSupplierConditions } from '@/lib/services/suppliers';
+import {
+  admiteDevolucion as motivoAdmiteDevolucion,
+  esMotivoDeCredito,
+  MOTIVO_DE_CREDITO_LABEL,
+  type MotivoDeCredito,
+} from '@/lib/domain/notas-credito';
 import {
   createTaxLines,
   itemToColumns,
@@ -41,31 +47,6 @@ import {
  * positivo, porque así están impresos en el papel. El signo lo pone esta capa
  * al escribir los movimientos: es una decisión del negocio, no del comprobante.
  */
-
-/** Los motivos que admiten que además haya vuelto mercadería. */
-const MOTIVOS_CON_DEVOLUCION = ['DEVOLUCION_MERCADERIA', 'OTRO'] as const;
-
-export const MOTIVOS_DE_CREDITO = [
-  'BONIFICACION',
-  'DIFERENCIA_PRECIO',
-  'DESCUENTO_COMERCIAL',
-  'CORRECCION_FISCAL',
-  'DEVOLUCION_PERCEPCION',
-  'DEVOLUCION_MERCADERIA',
-  'OTRO',
-] as const;
-
-export type MotivoDeCredito = (typeof MOTIVOS_DE_CREDITO)[number];
-
-export const MOTIVO_DE_CREDITO_LABEL: Record<MotivoDeCredito, string> = {
-  BONIFICACION: 'Bonificación',
-  DIFERENCIA_PRECIO: 'Diferencia de precio',
-  DESCUENTO_COMERCIAL: 'Descuento comercial',
-  CORRECCION_FISCAL: 'Corrección fiscal',
-  DEVOLUCION_PERCEPCION: 'Devolución de percepción',
-  DEVOLUCION_MERCADERIA: 'Devolución de mercadería',
-  OTRO: 'Otro',
-};
 
 export interface CreditNoteItemInput extends ConfirmItemInput {
   /**
@@ -125,7 +106,7 @@ export async function confirmarNotaDeCredito(
   if (input.items.length === 0) {
     throw new ValidationError('La nota de crédito no tiene ningún renglón cargado.');
   }
-  if (!MOTIVOS_DE_CREDITO.includes(input.motivo)) {
+  if (!esMotivoDeCredito(input.motivo)) {
     throw new ValidationError('Elegí por qué el proveedor emitió esta nota de crédito.');
   }
 
@@ -140,7 +121,7 @@ export async function confirmarNotaDeCredito(
 
   // --- Efecto financiero y efecto sobre la mercadería, por separado ---------
   const conDevolucion = input.items.filter((i) => i.stockReturn === true);
-  const admiteDevolucion = (MOTIVOS_CON_DEVOLUCION as readonly string[]).includes(input.motivo);
+  const admiteDevolucion = motivoAdmiteDevolucion(input.motivo);
   if (input.motivo === 'DEVOLUCION_MERCADERIA' && conDevolucion.length === 0) {
     throw new ValidationError(
       'Si la nota de crédito es por devolución de mercadería, marcá en qué renglones volvió. ' +
@@ -638,5 +619,8 @@ export async function notasDeCreditoDe(documentId: string) {
   });
 }
 
-/** Los renglones costeados de una nota de crédito, para revisarlos. */
-export type RenglonDeNota = CostedItem;
+export {
+  MOTIVOS_DE_CREDITO,
+  MOTIVO_DE_CREDITO_LABEL,
+  type MotivoDeCredito,
+} from '@/lib/domain/notas-credito';
