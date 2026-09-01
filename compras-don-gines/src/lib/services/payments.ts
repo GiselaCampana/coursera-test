@@ -613,7 +613,58 @@ export async function getProximosPagos(
    * escribir otra consulta— es lo que garantiza que las dos vistas cuenten lo
    * mismo.
    */
+  /*
+   * Y también los meses donde puede haber quedado deuda vencida.
+   *
+   * Sin esto, el primer día de cada mes la lista perdía todo lo vencido del
+   * mes anterior: "ayer" cae en otro mes, ese mes no se pedía, y la deuda
+   * desaparecía de la pantalla sin dejar rastro. Justo el día 1, que es cuando
+   * uno se sienta a ver qué quedó sin pagar del mes que cerró.
+   *
+   * El límite no lo pone una ventana inventada sino la deuda que de verdad
+   * existe: se busca el vencimiento impago más viejo y se traen los meses desde
+   * ahí. Si no hay nada vencido, no se pide ningún mes de más.
+   */
+  const masViejoImpago = await prisma.paymentSchedule.findFirst({
+    where: {
+      /*
+       * Por la fecha y no por el estado.
+       *
+       * El estado lo pone al día `refreshPaymentStatuses`, que corre recién
+       * dentro del calendario, o sea después de esta consulta: un pago que
+       * venció ayer todavía puede figurar como AGENDADO. La fecha, en cambio,
+       * ya es la que es.
+       */
+      dueDate: { lt: hoy },
+      status: { notIn: ['PAGADO', 'CANCELADO'] },
+      document: {
+        ...branchScopeFilter(user),
+        status: 'VALIDADO',
+        ...(filtros.supplierId ? { supplierId: filtros.supplierId } : {}),
+        ...(filtros.branchId ? { branchId: filtros.branchId } : {}),
+      },
+    },
+    orderBy: { dueDate: 'asc' },
+    select: { dueDate: true },
+  });
+
   const meses = new Set([mesDe(hoy), mesDe(hasta)]);
+  if (masViejoImpago) {
+    /*
+     * Un tope de doce meses hacia atrás. Una deuda más vieja que un año sigue
+     * existiendo y sigue estando en la agenda del mes que le toca; lo que no
+     * tiene sentido es hacer trece consultas cada vez que alguien abre la
+     * pantalla de inicio para ver qué paga esta semana.
+     */
+    const desde = new Date(masViejoImpago.dueDate);
+    for (let i = 0; i < 12; i++) {
+      const mes = mesDe(desde);
+      if (mes >= mesDe(hoy)) break;
+      meses.add(mes);
+      desde.setUTCMonth(desde.getUTCMonth() + 1);
+    }
+  }
+
   const dias_: DiaDelCalendario[] = [];
   for (const mes of meses) {
     const calendario = await getPaymentCalendar(user, mes, filtros);

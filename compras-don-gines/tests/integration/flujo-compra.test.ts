@@ -2248,6 +2248,29 @@ describe('la agenda de pagos vista como calendario', () => {
     // Lo de dentro de veinte días es del mes que viene: no es "de esta semana".
     expect(fechas).not.toContain(enVeinteDias);
   });
+
+  it('lo vencido del mes pasado no desaparece', async () => {
+    /*
+     * El defecto que esto impide, y que sólo se veía un día al mes: la lista
+     * pedía el mes de hoy y el del final de la semana, y nada más. El día 1,
+     * "lo vencido" cae en el mes anterior, ese mes no se pedía, y toda la deuda
+     * del mes que acababa de cerrar desaparecía de la pantalla. Justo el día en
+     * que uno se sienta a ver qué quedó sin pagar.
+     *
+     * Se prueba con una deuda de hace cuarenta días, que cae en el mes anterior
+     * cualquiera sea el día en que corran las pruebas: si dependiera de que hoy
+     * sea 1, la prueba sólo diría la verdad una vez al mes.
+     */
+    const hoy = arToday();
+    const haceCuarentaDias = toISODate(new Date(hoy.getTime() - 40 * 86_400_000));
+    await comprobanteQueVence('00300017', haceCuarentaDias, '44000.00');
+
+    const proximos = await getProximosPagos(escenario.admin, 7);
+    expect(proximos.map((d) => d.fecha)).toContain(haceCuarentaDias);
+
+    const deuda = proximos.find((d) => d.fecha === haceCuarentaDias)!;
+    expect(deuda.aPagar).toBe('44000.00');
+  });
 });
 
 describe('el código del proveedor y el PLU interno son dos cosas distintas', () => {
