@@ -11,6 +11,7 @@ import {
 } from '@/lib/services/catalogo';
 import { formatDateAr } from '@/lib/datetime';
 import { Importar } from './Importar';
+import { SincronizarConStock } from './SincronizarConStock';
 import { MarcajesDeFamilia } from './MarcajesDeFamilia';
 import { ReglaGeneral } from './ReglaGeneral';
 
@@ -257,7 +258,14 @@ export default async function PaginaCatalogo({
         )}
       </div>
 
-      <h2>Importar o actualizar desde Control de Stock</h2>
+      {/*
+        La sincronización va antes que el importador de archivos: es el camino
+        normal, y el archivo es la alternativa para cuando la integración no
+        está disponible.
+      */}
+      <SincronizarConStock />
+
+      <h2>Importar un archivo de catálogo</h2>
       <Importar />
 
       <div className="acciones">

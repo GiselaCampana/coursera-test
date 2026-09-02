@@ -89,24 +89,12 @@ export function Importar() {
   return (
     <>
       <form action={accionPrevia} className="card">
-        <h2>1. Traer el catálogo</h2>
+        <h2>Importar un archivo de catálogo</h2>
         <p className="chico medio">
-          La fuente oficial es Control de Stock. Podés traerla directamente con el botón de abajo
-          o, como alternativa, cargar un CSV/JSON. El PLU se copia tal cual: acá no se renumera nada.
+          Para traer el catálogo de Control de Stock usá la sincronización de arriba. Esto es la
+          alternativa: un CSV o JSON exportado a mano, para cuando la integración no está
+          disponible. El PLU se copia tal cual: acá tampoco se renumera nada.
         </p>
-
-        <div className="mensaje mensaje-ok">
-          <strong>Integración disponible.</strong> Control de Stock ya publica PLU, nombre,
-          proveedor, Tipo de Artículo, Subtipo de Artículo, estado y unidad de cada producto.
-        </div>
-
-        <div className="acciones">
-          <button type="submit" className="boton" name="origen" value="stock">
-            Traer ahora desde Control de Stock
-          </button>
-        </div>
-
-        <hr />
 
         <div className="campo">
           <label htmlFor="archivo">Archivo</label>

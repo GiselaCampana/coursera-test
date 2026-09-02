@@ -288,6 +288,10 @@ model Product {
   family                       ProductFamily? @relation(fields: [familyId], references: [id], onDelete: SetNull)
   /// Cuándo se actualizó por última vez desde el catálogo de Control de Stock.
   catalogSyncedAt              DateTime?
+  /// Foto del artículo, tal como la publica Control de Stock, que es su fuente.
+  /// Se guarda la dirección y no la imagen: la foto vive allá, y copiarla sería
+  /// tener dos que se separan en cuanto alguien cambia una.
+  imageUrl                     String?
   purchaseUnit                 PurchaseUnit   @default(KG)
   saleMode                     SaleMode       @default(FETEABLE)
   /// Peso habitual de la pieza u horma, en kg.

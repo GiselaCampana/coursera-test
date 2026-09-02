@@ -3,8 +3,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { requireUser } from '@/lib/auth/session';
-import { AppError, toUserMessage } from '@/lib/errors';
-import https from 'node:https';
+import { toUserMessage } from '@/lib/errors';
 import {
   guardarMarcajesDeFamilia,
   guardarReglaGeneralDeMarcajes,
@@ -12,6 +11,12 @@ import {
   type InformeDeCatalogo,
   type OrigenDeFamilia,
 } from '@/lib/services/catalogo';
+import {
+  RespuestaDeStockInvalida,
+  aplicarSincronizacionDeStock,
+  vistaPreviaDeStock,
+  type VistaPreviaDeSincronizacion,
+} from '@/lib/services/stock-sync';
 
 export interface ResultadoImportacion {
   informe?: InformeDeCatalogo;
@@ -23,126 +28,6 @@ export interface ResultadoImportacion {
 }
 
 const ORIGENES: OrigenDeFamilia[] = ['auto', 'tipo', 'subtipo', 'ninguna'];
-
-const STOCK_CATALOG_HOST =
-  'control-stock-don-gines.gisela-campana.chatgpt.site';
-const STOCK_CATALOG_PATH = '/api/integrations/catalog';
-const STOCK_CATALOG_URL = `https://${STOCK_CATALOG_HOST}${STOCK_CATALOG_PATH}`;
-
-type DnsGoogleResponse = {
-  Answer?: Array<{ type?: number; data?: string }>;
-};
-
-async function resolverStockPorDoh(): Promise<string[]> {
-  const respuesta = await fetch(
-    `https://dns.google/resolve?name=${encodeURIComponent(STOCK_CATALOG_HOST)}&type=A`,
-    {
-      cache: 'no-store',
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(8_000),
-    },
-  );
-  if (!respuesta.ok) {
-    throw new Error(`DNS-over-HTTPS respondió ${respuesta.status}`);
-  }
-
-  const datos = (await respuesta.json()) as DnsGoogleResponse;
-  return (datos.Answer ?? [])
-    .filter((a) => a.type === 1 && typeof a.data === 'string')
-    .map((a) => a.data as string);
-}
-
-async function descargarStockPorIp(ip: string): Promise<string> {
-  return new Promise<string>((resolve, reject) => {
-    const pedido = https.request(
-      {
-        hostname: ip,
-        port: 443,
-        path: STOCK_CATALOG_PATH,
-        method: 'GET',
-        servername: STOCK_CATALOG_HOST,
-        headers: {
-          host: STOCK_CATALOG_HOST,
-          accept: 'application/json',
-          'user-agent': 'Compras-Don-Gines/1.0',
-        },
-        timeout: 12_000,
-        rejectUnauthorized: true,
-      },
-      (respuesta) => {
-        const estado = respuesta.statusCode ?? 0;
-        if (estado < 200 || estado >= 300) {
-          respuesta.resume();
-          reject(new Error(`Control de Stock respondió ${estado}`));
-          return;
-        }
-
-        let total = 0;
-        const partes: Buffer[] = [];
-        respuesta.on('data', (chunk: Buffer) => {
-          total += chunk.length;
-          if (total > 5_000_000) {
-            pedido.destroy(new Error('El catálogo de Control de Stock supera 5 MB.'));
-            return;
-          }
-          partes.push(chunk);
-        });
-        respuesta.on('end', () => resolve(Buffer.concat(partes).toString('utf8')));
-      },
-    );
-
-    pedido.on('timeout', () => pedido.destroy(new Error('Timeout leyendo Control de Stock')));
-    pedido.on('error', reject);
-    pedido.end();
-  });
-}
-
-async function leerCatalogoDeStock(): Promise<string> {
-  let ultimoError: unknown;
-
-  // Camino normal. Es el más rápido cuando el DNS del host funciona en Render.
-  try {
-    const respuesta = await fetch(STOCK_CATALOG_URL, {
-      cache: 'no-store',
-      headers: { accept: 'application/json' },
-      signal: AbortSignal.timeout(12_000),
-    });
-    if (!respuesta.ok) {
-      throw new Error(`Control de Stock respondió ${respuesta.status}`);
-    }
-    const texto = await respuesta.text();
-    if (!texto.trim()) throw new Error('catálogo vacío');
-    return texto;
-  } catch (error) {
-    ultimoError = error;
-  }
-
-  /*
-   * chatgpt.site puede resolver en Safari y, sin embargo, fallar en el DNS del
-   * servidor de Render. En ese caso resolvemos el A mediante DNS-over-HTTPS y
-   * abrimos TLS contra la IP usando el hostname original como SNI/Host.
-   * Seguimos validando el certificado: no se desactiva TLS.
-   */
-  try {
-    const ips = await resolverStockPorDoh();
-    for (const ip of ips) {
-      try {
-        const texto = await descargarStockPorIp(ip);
-        if (texto.trim()) return texto;
-      } catch (error) {
-        ultimoError = error;
-      }
-    }
-  } catch (error) {
-    ultimoError = error;
-  }
-
-  console.error('No se pudo leer catálogo de Control de Stock', ultimoError);
-  throw new AppError(
-    'No pude conectarme con Control de Stock automáticamente. No se modificó ningún dato. Probá nuevamente en unos segundos.',
-    { status: 502, code: 'STOCK_NO_DISPONIBLE' },
-  );
-}
 
 function leerOrigen(valor: FormDataEntryValue | null): OrigenDeFamilia {
   const v = String(valor ?? 'auto') as OrigenDeFamilia;
@@ -160,15 +45,20 @@ export async function analizarCatalogo(
   _prev: ResultadoImportacion,
   formData: FormData,
 ): Promise<ResultadoImportacion> {
-  let texto = String(formData.get('texto') ?? '');
+  const texto = String(formData.get('texto') ?? '');
   const familiaDesde = leerOrigen(formData.get('familiaDesde'));
-  const origen = String(formData.get('origen') ?? 'archivo');
 
   try {
-    if (origen === 'stock') {
-      texto = await leerCatalogoDeStock();
-    } else if (texto.trim() === '') {
-      return { error: 'Elegí el archivo del catálogo, pegá su contenido o traelo desde Control de Stock.' };
+    /*
+     * Sólo archivos.
+     *
+     * Traer el catálogo desde Control de Stock ya no pasa por acá: tiene su
+     * propia sincronización, que valida la respuesta antes de mirarla y aplica
+     * en una transacción. Dejar los dos caminos entrando al mismo importador
+     * era tener dos ideas distintas de qué significa "el catálogo cambió".
+     */
+    if (texto.trim() === '') {
+      return { error: 'Elegí el archivo del catálogo o pegá su contenido.' };
     }
 
     const user = await requireUser();
@@ -215,6 +105,64 @@ export async function aplicarCatalogo(
     fam: String(informe.familiasNuevas.length),
   });
   redirect(`/configuracion/catalogo?${params.toString()}`);
+}
+
+export interface ResultadoDeSincronizacion {
+  vista?: VistaPreviaDeSincronizacion;
+  /** Motivos por los que la respuesta de Control de Stock no se pudo usar. */
+  motivos?: string[];
+  error?: string;
+  /** True cuando lo que se muestra ya se aplicó. */
+  aplicada?: boolean;
+}
+
+/** Traduce lo que salió mal a algo que se pueda leer en la pantalla. */
+function comoResultado(error: unknown): ResultadoDeSincronizacion {
+  if (error instanceof RespuestaDeStockInvalida) return { motivos: error.motivos };
+  return { error: toUserMessage(error) };
+}
+
+/**
+ * Paso 1: mirar sin escribir.
+ *
+ * La descarga y la validación ocurren del lado del servidor. En el navegador
+ * eso no funcionaba: Safari bloquea el pedido entre dominios y en el iPhone la
+ * sincronización no arrancaba nunca.
+ */
+export async function verSincronizacionDeStock(
+  _prev: ResultadoDeSincronizacion,
+  _formData: FormData,
+): Promise<ResultadoDeSincronizacion> {
+  try {
+    const user = await requireUser();
+    return { vista: await vistaPreviaDeStock(user) };
+  } catch (error) {
+    return comoResultado(error);
+  }
+}
+
+/**
+ * Paso 2: aplicar, con la confirmación ya dada.
+ *
+ * Se vuelve a descargar y a validar. Confirmar con lo que quedó guardado de la
+ * vista previa sería aplicar una foto vieja del catálogo maestro; el resultado
+ * que se devuelve es lo que de verdad se escribió.
+ */
+export async function aplicarSincronizacionDeStockAccion(
+  _prev: ResultadoDeSincronizacion,
+  _formData: FormData,
+): Promise<ResultadoDeSincronizacion> {
+  try {
+    const user = await requireUser();
+    const vista = await aplicarSincronizacionDeStock(user);
+    revalidatePath('/configuracion/catalogo');
+    revalidatePath('/configuracion/productos');
+    revalidatePath('/compras');
+    revalidatePath('/precios');
+    return { vista, aplicada: true };
+  } catch (error) {
+    return comoResultado(error);
+  }
 }
 
 export interface ResultadoMarcajesDeFamilia {

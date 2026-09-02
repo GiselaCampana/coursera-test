@@ -85,6 +85,7 @@ jobs:
           STORAGE_LOCAL_DIR="./.storage-e2e"
           STORAGE_SIGNING_SECRET="ci-only-secret-do-not-use-in-production"
           APP_URL="http://127.0.0.1:3100"
+          STOCK_CATALOG_URL="http://127.0.0.1:3111/api/integrations/catalog"
           EOF
 
       - name: TypeScript
@@ -110,4 +111,5 @@ jobs:
             tests/e2e/nota-credito.spec.ts \
             tests/e2e/auditoria-atribucion.spec.ts \
             tests/e2e/marcajes-familia.spec.ts \
-            tests/e2e/marcajes-modalidad.spec.ts
+            tests/e2e/marcajes-modalidad.spec.ts \
+            tests/e2e/stock-sync.spec.ts

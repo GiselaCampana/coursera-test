@@ -213,9 +213,15 @@ function leerJson(contenido: string): LecturaDeCatalogo {
   }
 
   /*
-   * Se acepta tanto un arreglo suelto como un objeto que lo envuelva: una
-   * exportación de una API suele venir como {"productos": [...]} o {"data":
-   * [...]}, y rechazarla por eso obligaría a editar el archivo a mano.
+   * Se acepta un arreglo suelto o un objeto que lo envuelva con una clave que
+   * diga qué contiene: una exportación de una API suele venir como
+   * {"productos": [...]} o {"data": [...]}.
+   *
+   * Lo que ya **no** se hace es tomar "el primer arreglo que aparezca" cuando
+   * ninguna de esas claves está. La respuesta de Control de Stock trae también
+   * `branches`, `suppliers`, `productTypes` y `productSubtypes`: adivinar
+   * habría importado las sucursales como si fueran artículos, y en silencio.
+   * Si no se sabe cuál es la lista de productos, no se importa nada.
    */
   const objeto = (datos ?? {}) as Record<string, unknown>;
   const lista = Array.isArray(datos)
@@ -228,12 +234,16 @@ function leerJson(contenido: string): LecturaDeCatalogo {
           ? objeto.items
           : Array.isArray(objeto.data)
             ? objeto.data
-            : Object.values(objeto).find((v) => Array.isArray(v));
+            : undefined;
 
   if (!Array.isArray(lista)) {
     return {
       filas: [],
-      problemas: ['El JSON no contiene una lista de productos.'],
+      problemas: [
+        'El JSON no trae una lista de productos. Tiene que ser un arreglo, o un objeto con la ' +
+          'lista en «products», «productos», «items» o «data». No se adivina cuál de las listas ' +
+          'del archivo son los artículos.',
+      ],
       columnas: [],
     };
   }

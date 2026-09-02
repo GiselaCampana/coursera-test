@@ -77,14 +77,33 @@ export default defineConfig({
     // },
   ],
 
-  webServer: {
-    command: 'npm run e2e:server',
-    url: 'http://127.0.0.1:3100/ingresar',
-    // Nunca se reutiliza un servidor ya levantado: serviría el build anterior
-    // y las pruebas pasarían o fallarían sobre código que ya no existe.
-    reuseExistingServer: false,
-    timeout: 180_000,
-    stdout: 'pipe',
-    stderr: 'pipe',
-  },
+  webServer: [
+    {
+      command: 'npm run e2e:server',
+      url: 'http://127.0.0.1:3100/ingresar',
+      // Nunca se reutiliza un servidor ya levantado: serviría el build anterior
+      // y las pruebas pasarían o fallarían sobre código que ya no existe.
+      reuseExistingServer: false,
+      timeout: 180_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+    /*
+     * El Control de Stock de mentira.
+     *
+     * La sincronización descarga del lado del servidor, así que sin algo que
+     * conteste no hay forma de probarla en el navegador. Apuntarla al Control
+     * de Stock real la haría depender de que ese servicio esté levantado y de
+     * que su catálogo no cambie: dos maneras de fallar por algo que no es lo
+     * que se está probando.
+     */
+    {
+      command: 'node scripts/stock-falso.mjs',
+      url: 'http://127.0.0.1:3111/api/integrations/catalog',
+      reuseExistingServer: false,
+      timeout: 30_000,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    },
+  ],
 });

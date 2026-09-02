@@ -42,6 +42,7 @@ export const AUDIT_ACTIONS = {
   PRODUCT_ALIAS_LEARNED: 'producto.alias_aprendido',
   FAMILY_MARKUPS_UPDATED: 'familia.marcajes_modificados',
   GENERAL_MARKUPS_UPDATED: 'regla_general.marcajes_modificados',
+  STOCK_SYNCED: 'catalogo.sincronizado_con_stock',
   IMAGENES_ARCHIVADAS: 'imagenes.archivadas',
 } as const;
 
@@ -75,6 +76,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'producto.alias_aprendido': 'Alias de producto aprendido',
   'familia.marcajes_modificados': 'Marcajes de una familia modificados',
   'regla_general.marcajes_modificados': 'Marcajes de la regla general modificados',
+  'catalogo.sincronizado_con_stock': 'Catálogo sincronizado con Control de Stock',
 };
 
 export interface AuditInput {
