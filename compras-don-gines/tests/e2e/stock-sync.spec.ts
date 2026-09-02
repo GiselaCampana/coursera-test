@@ -80,7 +80,7 @@ test.describe('sincronización con Control de Stock', () => {
     });
     await expect(tarjeta).toBeVisible();
 
-    await tarjeta.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+    await tarjeta.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
 
     /*
      * Los cuatro montones que hay que mirar antes de decidir.
@@ -114,7 +114,7 @@ test.describe('sincronización con Control de Stock', () => {
       has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
     });
 
-    await tarjeta.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+    await tarjeta.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
     await expect(tarjeta.getByRole('button', { name: 'Confirmar y aplicar' })).toBeVisible();
     await tarjeta.getByRole('button', { name: 'Confirmar y aplicar' }).click();
     await expect(tarjeta.getByText(/Catálogo sincronizado/)).toBeVisible();
@@ -153,7 +153,7 @@ test.describe('sincronización con Control de Stock', () => {
     const segunda = page.locator('.card').filter({
       has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
     });
-    await segunda.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+    await segunda.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
     await expect(
       segunda.getByText('El catálogo de Compras ya coincide con el de Control de Stock'),
     ).toBeVisible();
@@ -177,7 +177,7 @@ test.describe('sincronización con Control de Stock', () => {
     const tarjeta = page.locator('.card').filter({
       has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
     });
-    await tarjeta.getByRole('button', { name: 'Ver qué cambiaría' }).click();
+    await tarjeta.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
 
     await tarjeta.locator('summary').filter({ hasText: 'Modificados' }).click();
 
@@ -212,7 +212,7 @@ test.describe('sincronización con Control de Stock', () => {
     const tarjeta = page.locator('.card').filter({
       has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
     });
-    await tarjeta.getByRole('button', { name: /Ver qué cambiaría|Volver a consultar/ }).click();
+    await tarjeta.getByRole('button', { name: /Consultar a Control de Stock|Volver a consultar/ }).click();
     await expect(tarjeta.locator('.resumen-mes .dato', { hasText: 'Sin cambios' })).toBeVisible();
     await sinScrollHorizontal(page);
   });

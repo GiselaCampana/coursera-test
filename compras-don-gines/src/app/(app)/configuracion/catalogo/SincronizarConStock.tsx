@@ -221,7 +221,13 @@ export function SincronizarConStock() {
 
       <form action={verAccion}>
         <div className="acciones">
-          <Boton>{vista ? 'Volver a consultar' : 'Ver qué cambiaría'}</Boton>
+          {/*
+            El nombre dice a quién se le pregunta, y no sólo qué se obtiene.
+            El importador de archivos tiene su propio «Ver qué cambiaría»; dos
+            botones con el mismo nombre en la misma pantalla son dos cosas
+            distintas que se leen igual.
+          */}
+          <Boton>{vista ? 'Volver a consultar' : 'Consultar a Control de Stock'}</Boton>
         </div>
       </form>
 
