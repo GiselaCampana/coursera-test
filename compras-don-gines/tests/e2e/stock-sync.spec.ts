@@ -57,16 +57,68 @@ async function loQueEsDeCompras() {
   });
 }
 
+/**
+ * Los artículos del sembrado, tal como estaban antes de sincronizar.
+ *
+ * Esta prueba mueve el catálogo a propósito: para eso está. Pero el sembrado es
+ * uno solo para toda la suite, y las specs que corren después esperan
+ * encontrarlo como lo dejó `sembrar.ts` —el 1211 en la familia Quesos, el 1001
+ * comprado a Los Calvos—. Sin devolverlo, esta prueba pasaría y rompería otras
+ * dos, que es la peor manera de fallar: lejos de la causa.
+ */
+type FotoDeArticulo = {
+  internalCode: string;
+  normalizedName: string;
+  category: string | null;
+  subtype: string | null;
+  familyId: string | null;
+  defaultSupplierId: string | null;
+  purchaseUnit: 'KG' | 'UNIT';
+  imageUrl: string | null;
+  active: boolean;
+};
+
+let comoEstaban: FotoDeArticulo[] = [];
+
+const SELECCION = {
+  internalCode: true,
+  normalizedName: true,
+  category: true,
+  subtype: true,
+  familyId: true,
+  defaultSupplierId: true,
+  purchaseUnit: true,
+  imageUrl: true,
+  active: true,
+} as const;
+
 test.describe('sincronización con Control de Stock', () => {
   test.beforeAll(async () => {
     await servirVariante(1);
-    // El artículo que la prueba da de alta, por si quedó de una corrida previa.
-    await conPrisma((prisma) => prisma.product.deleteMany({ where: { internalCode: '4001' } }));
+    await conPrisma(async (prisma) => {
+      // El artículo que la prueba da de alta, por si quedó de una corrida previa.
+      await prisma.product.deleteMany({ where: { internalCode: '4001' } });
+      comoEstaban = (await prisma.product.findMany({
+        select: SELECCION,
+      })) as FotoDeArticulo[];
+    });
   });
 
   test.afterAll(async () => {
     await servirVariante(1);
-    await conPrisma((prisma) => prisma.product.deleteMany({ where: { internalCode: '4001' } }));
+    await conPrisma(async (prisma) => {
+      await prisma.product.deleteMany({ where: { internalCode: '4001' } });
+      for (const foto of comoEstaban) {
+        const { internalCode, ...datos } = foto;
+        await prisma.product.updateMany({ where: { internalCode }, data: datos });
+      }
+      /*
+       * Y las familias que la sincronización creó, si no quedó nadie en ellas.
+       * Una familia suelta no rompe nada, pero ensucia el desplegable de la
+       * pantalla de catálogo para las pruebas que vienen después.
+       */
+      await prisma.productFamily.deleteMany({ where: { products: { none: {} } } });
+    });
   });
 
   test('la vista previa separa los cuatro grupos y no escribe nada', async ({ page }) => {
