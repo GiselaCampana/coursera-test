@@ -293,6 +293,107 @@ describe('lo que la auditoría se niega a afirmar', () => {
   });
 });
 
+describe('lo que pesa y lo que no', () => {
+  /**
+   * Un comprobante leído que quedó en revisión: sin confirmar, sin movimientos,
+   * sin costo y sin agenda. Es lo que hay hoy en producción.
+   */
+  async function soloLeido(numero: string, textoOcr: string) {
+    const doc = await createDocument(escenario.admin, escenario.sucursales.devoto);
+    await prisma.ocrAttempt.create({
+      data: {
+        documentId: doc.id,
+        attemptNumber: 1,
+        stage: 'FULL',
+        provider: 'tesseract-local',
+        success: true,
+        startedAt: new Date(),
+        finishedAt: new Date(),
+        recognizedText: textoOcr,
+      },
+    });
+    await prisma.document.update({
+      where: { id: doc.id },
+      data: {
+        supplierId: escenario.proveedorId,
+        pointOfSale: '0010',
+        number: numero,
+        fullNumber: `0010-${numero}`,
+        issueDate: new Date(),
+        status: 'REQUIERE_REVISION',
+      },
+    });
+    return doc.id;
+  }
+
+  it('una lectura en revisión no pesa en la deuda ni en los costos', async () => {
+    /*
+     * El caso que apareció en producción: un solo comprobante, sin número, en
+     * cero, en revisión, sin nada derivado. Contarlo igual que a una factura
+     * validada hace que el informe alarme —o tranquilice— sobre algo que no
+     * está en ningún número.
+     */
+    await soloLeido('00500001', PAPEL_DE_UN_DESCONOCIDO);
+
+    const informe = await auditarAtribucion(escenario.admin, escenario.proveedorId);
+    expect(informe.total).toBe(1);
+    expect(informe.conImpacto).toBe(0);
+
+    const auditado = informe.porVeredicto.SOSPECHOSO[0];
+    expect(auditado.conImpacto).toBe(false);
+    expect(auditado.derivados.movimientos).toBe(0);
+    expect(auditado.derivados.entradasDeCosto).toBe(0);
+    expect(auditado.derivados.tieneAgenda).toBe(false);
+  });
+
+  it('una factura validada sí pesa', async () => {
+    await comprobante({
+      supplierId: escenario.proveedorId,
+      numero: '00500002',
+      textoOcr: PAPEL_DE_LOS_CALVOS,
+    });
+
+    const informe = await auditarAtribucion(escenario.admin, escenario.proveedorId);
+    expect(informe.conImpacto).toBe(1);
+    expect(informe.porVeredicto.CORRECTO[0].conImpacto).toBe(true);
+  });
+
+  it('cuenta por separado, dentro de cada grupo, los que pesan', async () => {
+    // Dos sospechosos: uno validado y uno que quedó en revisión.
+    await comprobante({
+      supplierId: escenario.proveedorId,
+      numero: '00500003',
+      textoOcr: PAPEL_DE_UN_DESCONOCIDO,
+      codigo: '77',
+      productId: null,
+    });
+    await soloLeido('00500004', PAPEL_DE_UN_DESCONOCIDO);
+
+    const informe = await auditarAtribucion(escenario.admin, escenario.proveedorId);
+    expect(informe.porVeredicto.SOSPECHOSO).toHaveLength(2);
+    // De los dos, uno solo pesa: es el número que hay que mirar.
+    expect(informe.conImpactoPorVeredicto.SOSPECHOSO).toBe(1);
+  });
+
+  it('dentro del grupo, primero el que hay que resolver', async () => {
+    await soloLeido('00500005', PAPEL_DE_UN_DESCONOCIDO);
+    await comprobante({
+      supplierId: escenario.proveedorId,
+      numero: '00500006',
+      textoOcr: PAPEL_DE_UN_DESCONOCIDO,
+      codigo: '77',
+      productId: null,
+    });
+
+    const informe = await auditarAtribucion(escenario.admin, escenario.proveedorId);
+    const sospechosos = informe.porVeredicto.SOSPECHOSO;
+    expect(sospechosos).toHaveLength(2);
+    // El validado va primero, aunque se haya cargado después.
+    expect(sospechosos[0].conImpacto).toBe(true);
+    expect(sospechosos[0].numero).toBe('0010-00500006');
+  });
+});
+
 describe('la auditoría es de sólo lectura', () => {
   it('correrla dos veces no cambia una sola fila', async () => {
     await comprobante({

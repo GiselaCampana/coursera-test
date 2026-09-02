@@ -98,6 +98,20 @@ export interface ComprobanteAuditado {
   total: string;
   sucursal: string;
   veredicto: VeredictoDeAtribucion;
+  /**
+   * ¿Este comprobante pesa en la deuda, en los costos o en el stock?
+   *
+   * Sólo pesa el que está validado: es la confirmación la que escribe los
+   * movimientos de compra, el historial de costos y la agenda de pago, y es el
+   * estado por el que filtran la cuenta corriente, los reportes y los pagos.
+   * Un comprobante en revisión o anulado no está en ninguno de esos números.
+   *
+   * La distinción va acá y no en un comentario porque cambia por completo cómo
+   * se lee el informe: "un comprobante mal atribuido" suena a un problema, y si
+   * ese comprobante es una lectura en revisión de cero pesos, no lo es. Sin
+   * decirlo, el informe alarma sobre algo que no pasó.
+   */
+  conImpacto: boolean;
   /** Si el papel nombra a otro proveedor cargado, cuál. */
   proveedorProbable: { id: string; nombre: string; porQue: string } | null;
   indicios: Indicio[];
@@ -114,7 +128,11 @@ export interface ComprobanteAuditado {
 export interface AuditoriaDeAtribucion {
   proveedor: { id: string; nombre: string; cuit: string | null };
   total: number;
+  /** De esos, cuántos están validados y por lo tanto pesan en los números. */
+  conImpacto: number;
   porVeredicto: Record<VeredictoDeAtribucion, ComprobanteAuditado[]>;
+  /** Cuántos de cada veredicto pesan de verdad. Es lo que hay que mirar. */
+  conImpactoPorVeredicto: Record<VeredictoDeAtribucion, number>;
   /** Comprobantes que no se pudieron leer porque no guardaron texto de OCR. */
   sinTextoDeOcr: number;
   generadaEl: Date;
@@ -238,6 +256,7 @@ export async function auditarAtribucion(
       total: documento.total?.toString() ?? '0',
       sucursal: documento.branch.name,
       veredicto,
+      conImpacto: documento.status === 'VALIDADO',
       proveedorProbable: delPapel.otro,
       indicios,
       derivados: {
@@ -250,10 +269,30 @@ export async function auditarAtribucion(
     });
   }
 
+  /*
+   * Dentro de cada grupo, primero los que pesan.
+   *
+   * Es el orden en que uno los quiere mirar: un comprobante validado y mal
+   * atribuido hay que resolverlo, y una lectura en revisión de cero pesos
+   * puede esperar o directamente descartarse.
+   */
+  for (const grupo of Object.values(porVeredicto)) {
+    grupo.sort((a, b) => Number(b.conImpacto) - Number(a.conImpacto));
+  }
+
+  const conImpactoPorVeredicto: Record<VeredictoDeAtribucion, number> = {
+    CORRECTO: porVeredicto.CORRECTO.filter((c) => c.conImpacto).length,
+    SOSPECHOSO: porVeredicto.SOSPECHOSO.filter((c) => c.conImpacto).length,
+    OTRO_PROVEEDOR: porVeredicto.OTRO_PROVEEDOR.filter((c) => c.conImpacto).length,
+    SIN_EVIDENCIA: porVeredicto.SIN_EVIDENCIA.filter((c) => c.conImpacto).length,
+  };
+
   return {
     proveedor: { id: proveedor.id, nombre: proveedor.tradeName, cuit: proveedor.cuit },
     total: documentos.length,
+    conImpacto: documentos.filter((d) => d.status === 'VALIDADO').length,
     porVeredicto,
+    conImpactoPorVeredicto,
     sinTextoDeOcr,
     generadaEl: new Date(),
   };

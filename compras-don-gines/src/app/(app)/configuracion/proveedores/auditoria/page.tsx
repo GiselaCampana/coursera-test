@@ -68,6 +68,17 @@ function Ficha({ c }: { c: ComprobanteAuditado }) {
         <span>{formatDateAr(c.fecha)}</span>
         <span>{c.sucursal}</span>
         <span>{c.estado}</span>
+        {/*
+          Si el comprobante pesa o no, dicho en la fila y no en letra chica.
+
+          Un comprobante mal atribuido suena a problema; si resulta ser una
+          lectura en revisión de cero pesos, no lo es. Sin distinguirlo, el
+          informe alarma sobre algo que no pasó, y la próxima vez que alarme en
+          serio nadie le va a creer.
+        */}
+        <span className={`etiqueta-estado ${c.conImpacto ? 'estado-aviso' : 'estado-neutro'}`}>
+          {c.conImpacto ? 'Pesa en deuda y costos' : 'Sin impacto'}
+        </span>
       </div>
 
       {c.proveedorProbable ? (
@@ -199,14 +210,43 @@ export default async function PaginaAuditoriaDeAtribucion({
                 {informe.total} comprobante{informe.total === 1 ? '' : 's'}
               </span>
             </div>
+            {/*
+              Los dos números juntos: cuántos hay y cuántos pesan.
+
+              El segundo es el que importa. Un grupo de tres sospechosos donde
+              ninguno está validado no tiene ningún efecto sobre la deuda, los
+              costos ni el stock, y leer sólo el primer número lleva a la
+              conclusión contraria.
+            */}
             <dl style={{ margin: 0 }}>
               {ORDEN.map((v) => (
                 <div className="dato" key={v}>
                   <dt>{VEREDICTO_LABEL[v]}</dt>
-                  <dd>{informe.porVeredicto[v].length}</dd>
+                  <dd>
+                    {informe.porVeredicto[v].length}
+                    {informe.porVeredicto[v].length > 0 ? (
+                      <span className="chico medio">
+                        {' · '}
+                        {informe.conImpactoPorVeredicto[v] === 0
+                          ? 'ninguno pesa'
+                          : `${informe.conImpactoPorVeredicto[v]} pesa${
+                              informe.conImpactoPorVeredicto[v] === 1 ? '' : 'n'
+                            } en deuda y costos`}
+                      </span>
+                    ) : null}
+                  </dd>
                 </div>
               ))}
             </dl>
+
+            <p className="chico medio mt mb0">
+              {informe.conImpacto === 0
+                ? `Ninguno de los ${informe.total} comprobantes está validado: no pesan en la deuda, ` +
+                  'en los costos ni en el stock.'
+                : `${informe.conImpacto} de ${informe.total} están validados y pesan en la deuda, ` +
+                  'los costos y el stock. Los demás son lecturas en revisión o comprobantes ' +
+                  'anulados, que no están en ninguno de esos números.'}
+            </p>
             {informe.sinTextoDeOcr > 0 ? (
               <p className="chico medio mt mb0">
                 {informe.sinTextoDeOcr} de esos comprobantes no guardaron el texto de la lectura:
@@ -217,6 +257,24 @@ export default async function PaginaAuditoriaDeAtribucion({
               Generado el {formatDateTimeAr(informe.generadaEl)}.
             </p>
           </div>
+
+          {/*
+            Cuando nada de lo señalado pesa, decirlo antes que los grupos.
+
+            Es la conclusión operativa —"no hay nada que arreglar hoy"— y tiene
+            que llegar antes que la lista, no después de leerla entera.
+          */}
+          {informe.total > 0 &&
+          informe.conImpactoPorVeredicto.OTRO_PROVEEDOR +
+            informe.conImpactoPorVeredicto.SOSPECHOSO ===
+            0 ? (
+            <div className="card">
+              <p className="mensaje mensaje-ok mb0" role="status">
+                No hay comprobantes validados con la atribución en duda: nada de lo que aparece
+                acá abajo afecta la deuda con el proveedor, los costos ni el stock.
+              </p>
+            </div>
+          ) : null}
 
           {informe.total === 0 ? (
             <div className="card">
