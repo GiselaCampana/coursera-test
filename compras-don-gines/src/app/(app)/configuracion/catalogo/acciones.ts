@@ -6,6 +6,7 @@ import { requireUser } from '@/lib/auth/session';
 import { AppError, toUserMessage } from '@/lib/errors';
 import https from 'node:https';
 import {
+  guardarMarcajesDeFamilia,
   importarCatalogo,
   type InformeDeCatalogo,
   type OrigenDeFamilia,
@@ -213,4 +214,45 @@ export async function aplicarCatalogo(
     fam: String(informe.familiasNuevas.length),
   });
   redirect(`/configuracion/catalogo?${params.toString()}`);
+}
+
+export interface ResultadoMarcajesDeFamilia {
+  ok?: boolean;
+  error?: string;
+  familyId?: string;
+}
+
+/**
+ * Guarda los marcajes de una familia.
+ *
+ * Cada campo vacío se guarda vacío: quiere decir "esta familia no dice nada" y
+ * deja que cada artículo resuelva por su cuenta. No es lo mismo que un cero.
+ */
+export async function guardarMarcajesFamilia(
+  _prev: ResultadoMarcajesDeFamilia,
+  formData: FormData,
+): Promise<ResultadoMarcajesDeFamilia> {
+  const familyId = String(formData.get('familyId') ?? '');
+  try {
+    const user = await requireUser();
+    const campo = (n: string) => String(formData.get(n) ?? '').trim() || null;
+    await guardarMarcajesDeFamilia(user, familyId, {
+      targetMarginPct: campo('targetMarginPct'),
+      marginBasis: (campo('marginBasis') as 'SOBRE_COSTO' | 'SOBRE_VENTA' | null) ?? null,
+      alCorteHormaDigitalMarginPct: campo('alCorteHormaDigitalMarginPct'),
+      alCorteHormaCashMarginPct: campo('alCorteHormaCashMarginPct'),
+      alCorteCajaCashMarginPct: campo('alCorteCajaCashMarginPct'),
+      feteado100gMarginPct: campo('feteado100gMarginPct'),
+      feteadoQuarterMarginPct: campo('feteadoQuarterMarginPct'),
+      feteadoPieceDigitalMarginPct: campo('feteadoPieceDigitalMarginPct'),
+      feteadoPieceCashMarginPct: campo('feteadoPieceCashMarginPct'),
+      wholeUnitMarginPct: campo('wholeUnitMarginPct'),
+    });
+    revalidatePath('/configuracion/catalogo');
+    revalidatePath('/configuracion/productos');
+    revalidatePath('/precios');
+    return { ok: true, familyId };
+  } catch (error) {
+    return { error: toUserMessage(error), familyId };
+  }
 }

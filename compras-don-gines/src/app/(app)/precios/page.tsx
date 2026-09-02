@@ -4,6 +4,7 @@ import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { getPriceBoard, PRICE_ALERT_THRESHOLD } from '@/lib/services/pricing';
 import { formatARS, formatRate } from '@/lib/money';
+import { ORIGEN_LABEL } from '@/lib/domain/marcajes';
 import { formatDateAr } from '@/lib/datetime';
 import { SALE_MODE_LABEL } from '@/lib/domain/pricing';
 import { FichaPrecio } from './FichaPrecio';
@@ -268,6 +269,41 @@ export default async function PaginaPrecios({
                   productId={fila.productId}
                   nombre={fila.name}
                   targetMarginPct={fila.targetMarginPct}
+                  /*
+                    Los tres juntos: lo que el artículo tiene guardado, lo que
+                    de verdad se aplica y de dónde sale. Con los tres, el
+                    formulario puede editar lo propio dejando ver lo heredado,
+                    que es lo único que evita que guardar rompa la herencia.
+                  */
+                  propios={{
+                    targetMarginPct: fila.marcajesPropios.targetMarginPct,
+                    alCorteHormaDigitalMarginPct: fila.marcajesPropios.alCorteHormaDigitalMarginPct,
+                    alCorteHormaCashMarginPct: fila.marcajesPropios.alCorteHormaCashMarginPct,
+                    alCorteCajaCashMarginPct: fila.marcajesPropios.alCorteCajaCashMarginPct,
+                    feteado100gMarginPct: fila.marcajesPropios.feteado100gMarginPct,
+                    feteadoQuarterMarginPct: fila.marcajesPropios.feteadoQuarterMarginPct,
+                    feteadoPieceDigitalMarginPct: fila.marcajesPropios.feteadoPieceDigitalMarginPct,
+                    feteadoPieceCashMarginPct: fila.marcajesPropios.feteadoPieceCashMarginPct,
+                    wholeUnitMarginPct: fila.marcajesPropios.wholeUnitMarginPct,
+                  }}
+                  origenes={{
+                    targetMarginPct: ORIGEN_LABEL[fila.marcajes.base.origen],
+                    alCorteHormaDigitalMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.alCorteHormaDigital.origen],
+                    alCorteHormaCashMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.alCorteHormaCash.origen],
+                    alCorteCajaCashMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.alCorteCajaCash.origen],
+                    feteado100gMarginPct: ORIGEN_LABEL[fila.marcajes.especificos.feteado100g.origen],
+                    feteadoQuarterMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.feteadoQuarter.origen],
+                    feteadoPieceDigitalMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.feteadoPieceDigital.origen],
+                    feteadoPieceCashMarginPct:
+                      ORIGEN_LABEL[fila.marcajes.especificos.feteadoPieceCash.origen],
+                    wholeUnitMarginPct: ORIGEN_LABEL[fila.marcajes.especificos.wholeUnit.origen],
+                  }}
+                  familia={fila.familia}
                   marginBasis={fila.marginBasis}
                   saleMode={fila.saleMode}
                   purchaseUnit={fila.purchaseUnit}

@@ -1,12 +1,15 @@
 import 'server-only';
 import { prisma } from '@/lib/db';
-import { ForbiddenError } from '@/lib/errors';
+import { ForbiddenError, NotFoundError, ValidationError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { hasPermission, type AuthUser } from '@/lib/auth/session';
 import { normalizarCodigo, normalizeText } from '@/lib/domain/matching';
 import { leerCatalogo, type FilaDeCatalogo } from '@/lib/domain/catalogo';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { learnProductAlias } from '@/lib/services/documents';
+import { toDecimal } from '@/lib/money';
+import type { MarginBasis } from '@/lib/domain/pricing';
+import type { FuenteDeMarcajes } from '@/lib/domain/marcajes';
 
 /**
  * Importar el catálogo interno de Don Ginés desde Control de Stock.
@@ -518,9 +521,14 @@ export async function importarCatalogo(
             /*
              * Los parámetros de precio son de Compras, no de Stock.
              *
-             * Se dejan en su valor por omisión al crear y no se tocan al
-             * actualizar: el margen y el redondeo los ajusta quien pone
-             * precios, y una importación del catálogo no puede volverlos atrás.
+             * No se cargan al crear y no se tocan al actualizar: el margen y el
+             * redondeo los ajusta quien pone precios, y una importación del
+             * catálogo no puede volverlos atrás.
+             *
+             * Sin marcaje propio, el artículo importado hereda el de su
+             * familia. Es lo que se quiere: configurar el rubro una vez y que
+             * los ciento veinticinco PLU lo tomen, en vez de arrancar todos con
+             * un 45 % grabado que después hay que corregir uno por uno.
              */
           },
         });
@@ -672,4 +680,126 @@ export async function buscarEnCatalogo(
         codigo: a.supplierCode!,
       })),
   }));
+}
+
+// ---------------------------------------------------------------------------
+// Marcajes por familia
+// ---------------------------------------------------------------------------
+
+export interface FamiliaConMarcajes {
+  id: string;
+  nombre: string;
+  articulos: number;
+  /** Cuántos de esos artículos no definen su propio marcaje base y heredan. */
+  heredanElBase: number;
+  marcajes: FuenteDeMarcajes;
+}
+
+/**
+ * Las familias con sus marcajes y cuántos artículos dependen de ellos.
+ *
+ * El segundo número es el que hace falta antes de tocar nada: cambiar el
+ * marcaje de una familia mueve el precio de todos los artículos que lo heredan
+ * y de ninguno de los que tienen el suyo. Sin verlo, el cambio se hace a
+ * ciegas.
+ */
+export async function familiasConMarcajes(user: AuthUser): Promise<FamiliaConMarcajes[]> {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede configurar el catálogo.');
+  }
+
+  const familias = await prisma.productFamily.findMany({ orderBy: { name: 'asc' } });
+  const conteos = await prisma.product.groupBy({
+    by: ['familyId'],
+    where: { active: true },
+    _count: { _all: true },
+  });
+  const heredan = await prisma.product.groupBy({
+    by: ['familyId'],
+    where: { active: true, targetMarginPct: null },
+    _count: { _all: true },
+  });
+
+  const total = new Map(conteos.map((c) => [c.familyId, c._count._all]));
+  const sinBase = new Map(heredan.map((c) => [c.familyId, c._count._all]));
+
+  return familias.map((f) => ({
+    id: f.id,
+    nombre: f.name,
+    articulos: total.get(f.id) ?? 0,
+    heredanElBase: sinBase.get(f.id) ?? 0,
+    marcajes: {
+      targetMarginPct: f.targetMarginPct?.toString() ?? null,
+      marginBasis: (f.marginBasis as MarginBasis | null) ?? null,
+      alCorteHormaDigitalMarginPct: f.alCorteHormaDigitalMarginPct?.toString() ?? null,
+      alCorteHormaCashMarginPct: f.alCorteHormaCashMarginPct?.toString() ?? null,
+      alCorteCajaCashMarginPct: f.alCorteCajaCashMarginPct?.toString() ?? null,
+      feteado100gMarginPct: f.feteado100gMarginPct?.toString() ?? null,
+      feteadoQuarterMarginPct: f.feteadoQuarterMarginPct?.toString() ?? null,
+      feteadoPieceDigitalMarginPct: f.feteadoPieceDigitalMarginPct?.toString() ?? null,
+      feteadoPieceCashMarginPct: f.feteadoPieceCashMarginPct?.toString() ?? null,
+      wholeUnitMarginPct: f.wholeUnitMarginPct?.toString() ?? null,
+    },
+  }));
+}
+
+/**
+ * Guarda los marcajes de una familia.
+ *
+ * No toca ningún artículo. Los que heredan van a empezar a usar el número
+ * nuevo la próxima vez que se calcule su precio, y los que tienen el suyo no se
+ * enteran. Escribirlo en cada artículo sería exactamente lo contrario de lo que
+ * la familia viene a resolver, y además haría irreversible el cambio.
+ */
+export async function guardarMarcajesDeFamilia(
+  user: AuthUser,
+  familyId: string,
+  valores: FuenteDeMarcajes,
+) {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede configurar el catálogo.');
+  }
+  const familia = await prisma.productFamily.findUnique({ where: { id: familyId } });
+  if (!familia) throw new NotFoundError('No encontramos esa familia.');
+
+  /** Vacío es "esta familia no dice nada", y se guarda como tal. */
+  const tasa = (valor: string | null | undefined, etiqueta: string): string | null => {
+    const raw = (valor ?? '').trim();
+    if (raw === '') return null;
+    const d = toDecimal(raw);
+    const fraccion = d.gt(1) ? d.div(100) : d;
+    if (fraccion.isNegative() || fraccion.gte(1)) {
+      throw new ValidationError(`El marcaje de ${etiqueta} tiene que estar entre 0 y menos de 100.`);
+    }
+    return fraccion.toString();
+  };
+
+  const data = {
+    targetMarginPct: tasa(valores.targetMarginPct, 'base'),
+    marginBasis: valores.marginBasis ?? null,
+    alCorteHormaDigitalMarginPct: tasa(valores.alCorteHormaDigitalMarginPct, 'horma digital'),
+    alCorteHormaCashMarginPct: tasa(valores.alCorteHormaCashMarginPct, 'horma efectivo'),
+    alCorteCajaCashMarginPct: tasa(valores.alCorteCajaCashMarginPct, 'caja efectivo'),
+    feteado100gMarginPct: tasa(valores.feteado100gMarginPct, '100 g'),
+    feteadoQuarterMarginPct: tasa(valores.feteadoQuarterMarginPct, '1/4 kg'),
+    feteadoPieceDigitalMarginPct: tasa(valores.feteadoPieceDigitalMarginPct, 'pieza digital'),
+    feteadoPieceCashMarginPct: tasa(valores.feteadoPieceCashMarginPct, 'pieza efectivo'),
+    wholeUnitMarginPct: tasa(valores.wholeUnitMarginPct, 'unidad entera'),
+  };
+
+  const guardada = await prisma.productFamily.update({ where: { id: familyId }, data });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.FAMILY_MARKUPS_UPDATED,
+    entity: 'ProductFamily',
+    entityId: familyId,
+    before: {
+      base: familia.targetMarginPct?.toString() ?? null,
+      marginBasis: familia.marginBasis,
+    },
+    after: { base: data.targetMarginPct, marginBasis: data.marginBasis },
+  });
+
+  return guardada;
 }

@@ -4,9 +4,10 @@ import { redirect } from 'next/navigation';
 import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
-import { buscarEnCatalogo } from '@/lib/services/catalogo';
+import { buscarEnCatalogo, familiasConMarcajes } from '@/lib/services/catalogo';
 import { formatDateAr } from '@/lib/datetime';
 import { Importar } from './Importar';
+import { MarcajesDeFamilia } from './MarcajesDeFamilia';
 
 export const metadata: Metadata = { title: 'Catálogo Don Ginés' };
 export const dynamic = 'force-dynamic';
@@ -49,6 +50,7 @@ export default async function PaginaCatalogo({
   ]);
 
   const sinFamilia = await prisma.product.count({ where: { familyId: null } });
+  const marcajesPorFamilia = await familiasConMarcajes(user);
 
   return (
     <>
@@ -90,6 +92,46 @@ export default async function PaginaCatalogo({
             <dd>{sinFamilia}</dd>
           </div>
         </dl>
+      </div>
+
+      {/*
+        Los marcajes de cada familia, arriba del buscador de artículos.
+
+        Van acá porque es donde vive la familia, y porque configurarlos una vez
+        por familia es lo que evita cargarlos treinta veces, una por PLU, con
+        una oportunidad de equivocarse en cada una.
+      */}
+      <div className="card">
+        <div className="card-titulo">
+          <h2>Marcajes por familia</h2>
+          <span className="chico medio">{marcajesPorFamilia.length}</span>
+        </div>
+        <p className="chico medio">
+          Cada artículo puede tener el suyo; el que no lo tiene usa el de su familia, y si la
+          familia tampoco lo define, el general de la casa. Configurarlo acá no toca ningún
+          artículo: los que heredan pasan a usar el número nuevo y los que tienen el suyo siguen
+          igual.
+        </p>
+        {marcajesPorFamilia.length === 0 ? (
+          <div className="vacio">
+            <div className="vacio-titulo">Todavía no hay familias</div>
+            <p className="mb0">Se crean al importar el catálogo de Control de Stock.</p>
+          </div>
+        ) : (
+          <ul className="lista">
+            {marcajesPorFamilia.map((f) => (
+              <li key={f.id}>
+                <MarcajesDeFamilia
+                  familyId={f.id}
+                  nombre={f.nombre}
+                  articulos={f.articulos}
+                  heredanElBase={f.heredanElBase}
+                  marcajes={f.marcajes}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
 
       <form className="card card-compacta" method="get">

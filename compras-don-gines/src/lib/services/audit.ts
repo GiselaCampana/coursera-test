@@ -40,6 +40,7 @@ export const AUDIT_ACTIONS = {
   SUPPLIER_CREATED_FROM_READING: 'proveedor.creado_desde_lectura',
   PRODUCT_UPDATED: 'producto.modificado',
   PRODUCT_ALIAS_LEARNED: 'producto.alias_aprendido',
+  FAMILY_MARKUPS_UPDATED: 'familia.marcajes_modificados',
   IMAGENES_ARCHIVADAS: 'imagenes.archivadas',
 } as const;
 
@@ -71,6 +72,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'producto.modificado': 'Producto modificado',
   'imagenes.archivadas': 'Imágenes de comprobantes archivadas',
   'producto.alias_aprendido': 'Alias de producto aprendido',
+  'familia.marcajes_modificados': 'Marcajes de una familia modificados',
 };
 
 export interface AuditInput {

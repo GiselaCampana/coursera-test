@@ -38,7 +38,7 @@ async function sembrarCon(prisma: PrismaClient) {
       audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
       sale_price_history, pricing_rules, sales_movements,
       document_items, document_tax_lines, ocr_attempts, document_files, documents,
-      product_aliases, products,
+      product_aliases, products, product_families,
       supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
       sessions, users, roles, branches
     RESTART IDENTITY CASCADE;
@@ -144,8 +144,18 @@ async function sembrarCon(prisma: PrismaClient) {
    * mano en la revisión. Las dos formas de asociar tienen que terminar en lo
    * mismo del otro lado.
    */
+  /*
+   * Una familia con dos artículos: uno que hereda su marcaje y otro que tiene
+   * el suyo. Es el escenario mínimo donde la herencia se puede ver funcionar y
+   * fallar: si la familia pisara al que tiene marcaje propio, se notaría.
+   */
+  const quesos = await prisma.productFamily.create({
+    data: { name: 'Quesos', normalized: 'quesos' },
+  });
+
   await prisma.product.create({
     data: {
+      familyId: quesos.id,
       internalCode: '2001',
       normalizedName: 'Queso Sardo bloque Melincué',
       category: 'Quesos',
@@ -197,6 +207,7 @@ async function sembrarCon(prisma: PrismaClient) {
    */
   await prisma.product.create({
     data: {
+      familyId: quesos.id,
       internalCode: '1211',
       normalizedName: 'Cremoso Punta del Agua',
       category: 'Quesos',

@@ -11,6 +11,8 @@ import {
   SALE_MODE_LABEL,
   type RoundingRule,
 } from '@/lib/domain/pricing';
+import { marcajesEfectivos, ORIGEN_LABEL } from '@/lib/domain/marcajes';
+import { comoFuente } from '@/lib/services/pricing';
 import { FormularioConfig, Casilla } from '@/components/FormularioConfig';
 import { guardarCodigoDeProveedor, guardarProducto, quitarCodigoDeProveedor } from '../acciones';
 
@@ -66,6 +68,9 @@ export default async function PaginaProductos({
       include: {
         aliases: { include: { supplier: { select: { tradeName: true } } } },
         defaultSupplier: true,
+        // La familia viene con el artículo porque el marcaje que se muestra es
+        // el efectivo, y el que el artículo deja vacío lo pone ella.
+        family: true,
       },
     }),
     prisma.supplier.findMany({ where: { active: true }, orderBy: { tradeName: 'asc' } }),
@@ -407,10 +412,29 @@ export default async function PaginaProductos({
             <div className="fila-dato-meta">
               {producto.category ? <span>{producto.category}</span> : null}
               <span>{SALE_MODE_LABEL[producto.saleMode]}</span>
-              <span>
-                {MARGIN_BASIS_LABEL[producto.marginBasis]}:{' '}
-                {formatRate(producto.targetMarginPct.toString())}
-              </span>
+              {(() => {
+                /*
+                  El marcaje que de verdad se aplica, y de dónde sale.
+
+                  Mostrar sólo el número del artículo escondía el caso nuevo:
+                  un artículo sin marcaje propio se ve igual que uno con 45 %
+                  cargado a mano, y al cambiar el de la familia uno se mueve y
+                  el otro no.
+                */
+                const efectivos = marcajesEfectivos(
+                  comoFuente(producto),
+                  producto.family ? comoFuente(producto.family) : null,
+                );
+                return (
+                  <span>
+                    {MARGIN_BASIS_LABEL[efectivos.marginBasis.valor]}:{' '}
+                    {formatRate(efectivos.base.valor)}
+                    {efectivos.base.origen !== 'PRODUCTO' ? (
+                      <span className="suave"> ({ORIGEN_LABEL[efectivos.base.origen]})</span>
+                    ) : null}
+                  </span>
+                );
+              })()}
               <span>{ROUNDING_RULE_LABEL[producto.roundingRule as RoundingRule]}</span>
               {producto.purchaseUnit === 'UNIT' && producto.purchaseUnitWeightKg ? (
                 <span>Compra: {formatQty(producto.purchaseUnitWeightKg.toString(), 3)} kg/unidad</span>

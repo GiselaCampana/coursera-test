@@ -14,6 +14,40 @@ import {
   type SalePrices,
 } from '@/lib/domain/pricing';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
+import {
+  marcajesEfectivos,
+  type FuenteDeMarcajes,
+  type MarcajesEfectivos,
+} from '@/lib/domain/marcajes';
+
+/** Pasa un artículo o una familia al formato que entiende el resolvedor. */
+function comoFuente(fila: {
+  targetMarginPct?: { toString(): string } | null;
+  marginBasis?: string | null;
+  alCorteHormaDigitalMarginPct?: { toString(): string } | null;
+  alCorteHormaCashMarginPct?: { toString(): string } | null;
+  alCorteCajaCashMarginPct?: { toString(): string } | null;
+  feteado100gMarginPct?: { toString(): string } | null;
+  feteadoQuarterMarginPct?: { toString(): string } | null;
+  feteadoPieceDigitalMarginPct?: { toString(): string } | null;
+  feteadoPieceCashMarginPct?: { toString(): string } | null;
+  wholeUnitMarginPct?: { toString(): string } | null;
+}): FuenteDeMarcajes {
+  return {
+    targetMarginPct: fila.targetMarginPct?.toString() ?? null,
+    marginBasis: (fila.marginBasis as MarginBasis | null) ?? null,
+    alCorteHormaDigitalMarginPct: fila.alCorteHormaDigitalMarginPct?.toString() ?? null,
+    alCorteHormaCashMarginPct: fila.alCorteHormaCashMarginPct?.toString() ?? null,
+    alCorteCajaCashMarginPct: fila.alCorteCajaCashMarginPct?.toString() ?? null,
+    feteado100gMarginPct: fila.feteado100gMarginPct?.toString() ?? null,
+    feteadoQuarterMarginPct: fila.feteadoQuarterMarginPct?.toString() ?? null,
+    feteadoPieceDigitalMarginPct: fila.feteadoPieceDigitalMarginPct?.toString() ?? null,
+    feteadoPieceCashMarginPct: fila.feteadoPieceCashMarginPct?.toString() ?? null,
+    wholeUnitMarginPct: fila.wholeUnitMarginPct?.toString() ?? null,
+  };
+}
+
+export { comoFuente };
 
 /**
  * Regla de precios aplicable a un producto: la propia del producto si existe y
@@ -21,8 +55,20 @@ import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
  * ficha del producto.
  */
 export async function resolvePricingRule(productId: string, at: Date = arToday()) {
-  const product = await prisma.product.findUnique({ where: { id: productId } });
+  /*
+   * El artículo viene con su familia: sin ella no se puede saber qué marcaje
+   * rige, porque el que el artículo deja vacío lo pone la familia.
+   */
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+    include: { family: true },
+  });
   if (!product) throw new NotFoundError('No encontramos ese producto.');
+
+  const marcajes = marcajesEfectivos(
+    comoFuente(product),
+    product.family ? comoFuente(product.family) : null,
+  );
 
   const rule = await prisma.pricingRule.findFirst({
     where: {
@@ -48,26 +94,39 @@ export async function resolvePricingRule(productId: string, at: Date = arToday()
 
   const effective = rule ?? globalRule;
 
+  /*
+   * Los marcajes salen ya resueltos contra la familia.
+   *
+   * Los ocho específicos vienen con un número siempre: donde antes había un
+   * null que cada consumidor interpretaba por su cuenta, ahora está el valor
+   * que de verdad se va a aplicar. `marcajes` lleva además de dónde salió cada
+   * uno, para que la pantalla lo pueda decir.
+   */
+  const especificos = marcajes.especificos;
   return {
     product,
+    familia: product.family ? { id: product.family.id, nombre: product.family.name } : null,
     ruleId: effective?.id ?? null,
     ruleName: effective?.name ?? 'Configuración del producto',
-    marginBasis: product.marginBasis as MarginBasis,
-    targetMarginPct: product.targetMarginPct.toString(),
+    marginBasis: marcajes.marginBasis.valor,
+    targetMarginPct: marcajes.base.valor,
     cashDiscountPct: product.cashDiscountPct.toString(),
     roundingRule: product.roundingRule as RoundingRule,
     saleMode: product.saleMode as SaleMode,
     pieceWeightKg: product.avgPieceWeightKg?.toString() ?? null,
-    alCorteHormaDigitalMarginPct: product.alCorteHormaDigitalMarginPct?.toString() ?? null,
-    alCorteHormaCashMarginPct: product.alCorteHormaCashMarginPct?.toString() ?? null,
-    alCorteCajaCashMarginPct: product.alCorteCajaCashMarginPct?.toString() ?? null,
-    feteado100gMarginPct: product.feteado100gMarginPct?.toString() ?? null,
-    feteadoQuarterMarginPct: product.feteadoQuarterMarginPct?.toString() ?? null,
-    feteadoPieceDigitalMarginPct: product.feteadoPieceDigitalMarginPct?.toString() ?? null,
-    feteadoPieceCashMarginPct: product.feteadoPieceCashMarginPct?.toString() ?? null,
-    wholeUnitMarginPct: product.wholeUnitMarginPct?.toString() ?? null,
+    marcajes,
+    alCorteHormaDigitalMarginPct: especificos.alCorteHormaDigital.valor,
+    alCorteHormaCashMarginPct: especificos.alCorteHormaCash.valor,
+    alCorteCajaCashMarginPct: especificos.alCorteCajaCash.valor,
+    feteado100gMarginPct: especificos.feteado100g.valor,
+    feteadoQuarterMarginPct: especificos.feteadoQuarter.valor,
+    feteadoPieceDigitalMarginPct: especificos.feteadoPieceDigital.valor,
+    feteadoPieceCashMarginPct: especificos.feteadoPieceCash.valor,
+    wholeUnitMarginPct: especificos.wholeUnit.valor,
   };
 }
+
+export type { MarcajesEfectivos };
 
 export interface ProductCostSnapshot {
   unitCost: Decimal | null;
@@ -346,6 +405,20 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
 }
 
 export interface PriceBoardRow {
+  /**
+   * Los marcajes **del artículo**, tal como están guardados: null donde no
+   * define nada y hereda.
+   *
+   * Van aparte de los efectivos porque el formulario tiene que editar éstos.
+   * Si editara los efectivos, dejar el campo como venía guardaría el valor
+   * heredado dentro del artículo y la herencia se perdería sin que nadie lo
+   * haya pedido: el artículo dejaría de seguir a su familia por el solo hecho
+   * de que alguien abrió la pantalla y apretó guardar.
+   */
+  marcajesPropios: FuenteDeMarcajes;
+  /** De dónde sale cada marcaje efectivo, para poder decirlo en pantalla. */
+  marcajes: MarcajesEfectivos;
+  familia: { id: string; nombre: string } | null;
   productId: string;
   internalCode: string;
   name: string;
@@ -449,6 +522,9 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
       feteadoPieceCashKg: suggestion.tiers.feteadoPieceCashKg?.toFixed(2) ?? null,
       wholeUnitTotal: suggestion.tiers.wholeUnitTotal?.toFixed(2) ?? null,
       approvedPricePerKg: suggestion.approved?.pricePerKg ?? null,
+      marcajesPropios: comoFuente(product),
+      marcajes: suggestion.rule.marcajes,
+      familia: suggestion.rule.familia,
       targetMarginPct: suggestion.rule.targetMarginPct,
       marginBasis: suggestion.rule.marginBasis,
       cashDiscountPct: '0',
@@ -501,13 +577,24 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
   const product = await prisma.product.findUnique({ where: { id: input.productId } });
   if (!product) throw new NotFoundError('No encontramos ese producto.');
 
-  const margin = toDecimal(input.targetMarginPct);
-  const marginFraction = margin.gt(1) ? margin.div(100) : margin;
-  if (marginFraction.isNegative() || marginFraction.gte(1)) {
-    throw new ValidationError('El marcaje tiene que ser un porcentaje entre 0 y 100.');
+  /*
+   * El marcaje base también puede quedar vacío, y vacío quiere decir heredar.
+   *
+   * Antes era obligatorio, y por eso el formulario venía con el valor ya
+   * escrito: dejarlo como estaba grababa ese número en el artículo. Ahora
+   * vacío se guarda como vacío, y el artículo sigue lo que diga su familia.
+   */
+  const baseCargado = (input.targetMarginPct ?? '').trim();
+  let marginFraction: Decimal | null = null;
+  if (baseCargado !== '') {
+    const margin = toDecimal(baseCargado);
+    marginFraction = margin.gt(1) ? margin.div(100) : margin;
+    if (marginFraction.isNegative() || marginFraction.gte(1)) {
+      throw new ValidationError('El marcaje tiene que ser un porcentaje entre 0 y 100.');
+    }
   }
 
-  if (!['SOBRE_COSTO', 'SOBRE_VENTA'].includes(input.marginBasis)) {
+  if (input.marginBasis && !['SOBRE_COSTO', 'SOBRE_VENTA'].includes(input.marginBasis)) {
     throw new ValidationError('Elegí una base de marcaje válida.');
   }
   if (!['FETEABLE', 'AL_CORTE'].includes(input.saleMode)) {
@@ -546,7 +633,7 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
   const saved = await prisma.product.update({
     where: { id: input.productId },
     data: {
-      targetMarginPct: marginFraction.toString(),
+      targetMarginPct: marginFraction ? marginFraction.toString() : null,
       marginBasis: input.marginBasis,
       cashDiscountPct: '0',
       alCorteHormaDigitalMarginPct: normalizarMarcaje(input.alCorteHormaDigitalMarginPct),
@@ -570,15 +657,17 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
     entity: 'Product',
     entityId: product.id,
     before: {
-      marcaje: product.targetMarginPct.toString(),
-      base: product.marginBasis,
+      // Null quiere decir "hereda de la familia", y en la auditoría se dice
+      // así: un guion no distinguiría entre heredado y sin cargar.
+      marcaje: product.targetMarginPct?.toString() ?? 'heredado de la familia',
+      base: product.marginBasis ?? 'heredado de la familia',
       modoVenta: product.saleMode,
       unidadCompra: product.purchaseUnit,
       kgUnidadCompra: product.purchaseUnitWeightKg?.toString() ?? null,
     },
     after: {
-      marcaje: saved.targetMarginPct.toString(),
-      base: saved.marginBasis,
+      marcaje: saved.targetMarginPct?.toString() ?? 'heredado de la familia',
+      base: saved.marginBasis ?? 'heredado de la familia',
       modoVenta: saved.saleMode,
       unidadCompra: saved.purchaseUnit,
       kgUnidadCompra: saved.purchaseUnitWeightKg?.toString() ?? null,

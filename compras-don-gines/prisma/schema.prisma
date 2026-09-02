@@ -249,6 +249,27 @@ model ProductFamily {
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
+  /// Marcajes de la familia. Todos opcionales: los que quedan en null no dicen
+  /// nada y el producto resuelve por su cuenta.
+  ///
+  /// Existen porque el marcaje casi nunca es una decisión por artículo: los
+  /// quesos duros se marcan igual entre ellos, los fiambres cocidos también.
+  /// Cargarlo treinta veces, una por PLU, es treinta oportunidades de que uno
+  /// quede distinto sin que nadie se entere hasta que el precio sale mal.
+  ///
+  /// El producto siempre puede sobrescribirlos: la familia es el valor por
+  /// omisión, no una imposición.
+  targetMarginPct              Decimal?     @db.Decimal(9, 6)
+  marginBasis                  MarginBasis?
+  alCorteHormaDigitalMarginPct Decimal?     @db.Decimal(9, 6)
+  alCorteHormaCashMarginPct    Decimal?     @db.Decimal(9, 6)
+  alCorteCajaCashMarginPct     Decimal?     @db.Decimal(9, 6)
+  feteado100gMarginPct         Decimal?     @db.Decimal(9, 6)
+  feteadoQuarterMarginPct      Decimal?     @db.Decimal(9, 6)
+  feteadoPieceDigitalMarginPct Decimal?     @db.Decimal(9, 6)
+  feteadoPieceCashMarginPct    Decimal?     @db.Decimal(9, 6)
+  wholeUnitMarginPct           Decimal?     @db.Decimal(9, 6)
+
   products Product[]
 
   @@index([normalized])
@@ -278,8 +299,13 @@ model Product {
   defaultSupplierId            String?
   defaultSupplier              Supplier?      @relation(fields: [defaultSupplierId], references: [id])
   /// Margen base por kilo, expresado como fracción (0.45 = 45 %).
-  targetMarginPct              Decimal        @default(0.45) @db.Decimal(9, 6)
-  marginBasis                  MarginBasis    @default(SOBRE_COSTO)
+  ///
+  /// Opcional desde que existen los marcajes por familia: en null, el artículo
+  /// toma el de su familia, y si la familia tampoco lo define, el 45 % general.
+  /// Los artículos que ya estaban cargados conservan el suyo, así que dejarlo
+  /// vacío es una decisión explícita de heredar y no un descuido.
+  targetMarginPct              Decimal?       @db.Decimal(9, 6)
+  marginBasis                  MarginBasis?
   /// Marcajes específicos por forma de venta. Si están en null usan el marcaje base.
   alCorteHormaDigitalMarginPct Decimal?       @db.Decimal(9, 6)
   alCorteHormaCashMarginPct    Decimal?       @db.Decimal(9, 6)

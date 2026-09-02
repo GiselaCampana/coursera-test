@@ -3693,7 +3693,7 @@ describe('importar el catálogo interno de Don Ginés', () => {
     const cremoso = await prisma.product.findUniqueOrThrow({
       where: { id: escenario.productos['1211'] },
     });
-    expect(cremoso.targetMarginPct.toString()).toBe('0.62');
+    expect(cremoso.targetMarginPct?.toString()).toBe('0.62');
     expect(cremoso.roundingRule).toBe('NEAREST_50');
   });
 
@@ -3879,7 +3879,7 @@ describe('precios por kilo configurables', () => {
     });
 
     const producto = await prisma.product.findUniqueOrThrow({ where: { id: productId } });
-    expect(producto.targetMarginPct.toString()).toBe('0.27');
+    expect(producto.targetMarginPct?.toString()).toBe('0.27');
     expect(producto.alCorteHormaDigitalMarginPct?.toString()).toBe('0.5');
     expect(producto.alCorteHormaCashMarginPct?.toString()).toBe('0.4');
     expect(producto.alCorteCajaCashMarginPct?.toString()).toBe('0.3');

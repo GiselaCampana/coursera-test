@@ -108,4 +108,5 @@ jobs:
             tests/e2e/precios.spec.ts \
             tests/e2e/proveedor-nuevo.spec.ts \
             tests/e2e/nota-credito.spec.ts \
-            tests/e2e/auditoria-atribucion.spec.ts
+            tests/e2e/auditoria-atribucion.spec.ts \
+            tests/e2e/marcajes-familia.spec.ts

@@ -13,29 +13,53 @@ function Guardar() {
   );
 }
 
-function pct(value: string | null | undefined, fallback: string): string {
-  const raw = value ?? fallback;
-  return (Number(raw) * 100).toString();
+/** Una fracción guardada (0,45) como porcentaje para el campo (45). */
+function pct(value: string | null | undefined): string {
+  if (value === null || value === undefined || value === '') return '';
+  return (Number(value) * 100).toString();
 }
 
+/**
+ * Qué se ve en un campo de marcaje que el artículo no define.
+ *
+ * Vacío, con el heredado de fondo como sugerencia. Antes se escribía el valor
+ * heredado dentro del campo, y eso tenía una consecuencia que no se veía: al
+ * guardar, ese número quedaba grabado **en el artículo**, que dejaba de seguir
+ * a su familia por el solo hecho de que alguien abrió la pantalla y apretó
+ * guardar. Vacío significa heredar, y guardar vacío lo mantiene heredando.
+ */
 function CampoMarcaje({
   id,
   name,
   label,
-  value,
+  propio,
+  efectivo,
+  origen,
   ayuda,
 }: {
   id: string;
   name: string;
   label: string;
-  value: string;
+  propio: string | null | undefined;
+  efectivo: string;
+  origen: string;
   ayuda?: string;
 }) {
   return (
     <div className="campo">
       <label htmlFor={id}>{label}</label>
-      <input id={id} name={name} type="text" inputMode="decimal" defaultValue={value} required />
-      {ayuda ? <p className="ayuda">{ayuda}</p> : null}
+      <input
+        id={id}
+        name={name}
+        type="text"
+        inputMode="decimal"
+        defaultValue={pct(propio)}
+        placeholder={pct(efectivo)}
+      />
+      <p className="ayuda">
+        {propio ? null : `Vacío: usa ${pct(efectivo)} %, ${origen}. `}
+        {ayuda ?? ''}
+      </p>
     </div>
   );
 }
@@ -56,6 +80,9 @@ export function ConfigurarPrecio({
   feteadoPieceDigitalMarginPct,
   feteadoPieceCashMarginPct,
   wholeUnitMarginPct,
+  propios,
+  origenes,
+  familia,
 }: {
   productId: string;
   nombre: string;
@@ -72,6 +99,11 @@ export function ConfigurarPrecio({
   feteadoPieceDigitalMarginPct: string | null;
   feteadoPieceCashMarginPct: string | null;
   wholeUnitMarginPct: string | null;
+  /** Lo que el artículo tiene guardado. Null donde hereda. */
+  propios: Record<string, string | null | undefined>;
+  /** De dónde sale cada marcaje efectivo, en castellano. */
+  origenes: Record<string, string>;
+  familia: { id: string; nombre: string } | null;
 }) {
   const [abierto, setAbierto] = useState(false);
   const [unidad, setUnidad] = useState<'KG' | 'UNIT'>(purchaseUnit);
@@ -105,8 +137,6 @@ export function ConfigurarPrecio({
     );
   }
 
-  const base = pct(targetMarginPct, targetMarginPct);
-
   return (
     <form action={accion} className="mt">
       <input type="hidden" name="productId" value={productId} />
@@ -121,8 +151,10 @@ export function ConfigurarPrecio({
           id={`marcaje-base-${productId}`}
           name="targetMarginPct"
           label="Marcaje base por kilo (%)"
-          value={base}
-          ayuda="Este es el marcaje general del producto y también el valor por defecto de las modalidades que todavía no hayas personalizado."
+          propio={propios.targetMarginPct}
+          efectivo={targetMarginPct}
+          origen={origenes.targetMarginPct}
+          ayuda="Es el marcaje general del artículo y el que usan las modalidades que no tengan uno propio."
         />
         <div className="campo">
           <label htmlFor={`base-${productId}`}>Cómo calcular los marcajes</label>
@@ -168,25 +200,31 @@ export function ConfigurarPrecio({
               id={`horma-dig-${productId}`}
               name="alCorteHormaDigitalMarginPct"
               label="Por kilo · horma digital (%)"
-              value={pct(alCorteHormaDigitalMarginPct, targetMarginPct)}
+              propio={propios.alCorteHormaDigitalMarginPct}
+              efectivo={alCorteHormaDigitalMarginPct ?? "0"}
+              origen={origenes.alCorteHormaDigitalMarginPct}
             />
             <CampoMarcaje
               id={`horma-ef-${productId}`}
               name="alCorteHormaCashMarginPct"
               label="Por kilo · horma efectivo (%)"
-              value={pct(alCorteHormaCashMarginPct, targetMarginPct)}
+              propio={propios.alCorteHormaCashMarginPct}
+              efectivo={alCorteHormaCashMarginPct ?? "0"}
+              origen={origenes.alCorteHormaCashMarginPct}
             />
           </div>
           <CampoMarcaje
             id={`caja-ef-${productId}`}
             name="alCorteCajaCashMarginPct"
             label="Por kilo · horma por caja efectivo (%)"
-            value={pct(alCorteCajaCashMarginPct, targetMarginPct)}
+            propio={propios.alCorteCajaCashMarginPct}
+              efectivo={alCorteCajaCashMarginPct ?? "0"}
+              origen={origenes.alCorteCajaCashMarginPct}
           />
-          <input type="hidden" name="feteado100gMarginPct" value={pct(feteado100gMarginPct, targetMarginPct)} />
-          <input type="hidden" name="feteadoQuarterMarginPct" value={pct(feteadoQuarterMarginPct, targetMarginPct)} />
-          <input type="hidden" name="feteadoPieceDigitalMarginPct" value={pct(feteadoPieceDigitalMarginPct, targetMarginPct)} />
-          <input type="hidden" name="feteadoPieceCashMarginPct" value={pct(feteadoPieceCashMarginPct, targetMarginPct)} />
+          <input type="hidden" name="feteado100gMarginPct" value={pct(propios.feteado100gMarginPct)} />
+          <input type="hidden" name="feteadoQuarterMarginPct" value={pct(propios.feteadoQuarterMarginPct)} />
+          <input type="hidden" name="feteadoPieceDigitalMarginPct" value={pct(propios.feteadoPieceDigitalMarginPct)} />
+          <input type="hidden" name="feteadoPieceCashMarginPct" value={pct(propios.feteadoPieceCashMarginPct)} />
         </>
       ) : (
         <>
@@ -196,13 +234,17 @@ export function ConfigurarPrecio({
               id={`100g-${productId}`}
               name="feteado100gMarginPct"
               label="Venta por 100 g · precio/kg (%)"
-              value={pct(feteado100gMarginPct, targetMarginPct)}
+              propio={propios.feteado100gMarginPct}
+              efectivo={feteado100gMarginPct ?? "0"}
+              origen={origenes.feteado100gMarginPct}
             />
             <CampoMarcaje
               id={`cuarto-${productId}`}
               name="feteadoQuarterMarginPct"
               label="Venta por 1/4 kg · precio/kg (%)"
-              value={pct(feteadoQuarterMarginPct, targetMarginPct)}
+              propio={propios.feteadoQuarterMarginPct}
+              efectivo={feteadoQuarterMarginPct ?? "0"}
+              origen={origenes.feteadoQuarterMarginPct}
             />
           </div>
           <div className="fila fila-2">
@@ -210,18 +252,22 @@ export function ConfigurarPrecio({
               id={`pieza-dig-${productId}`}
               name="feteadoPieceDigitalMarginPct"
               label="Pieza entera digital · precio/kg (%)"
-              value={pct(feteadoPieceDigitalMarginPct, targetMarginPct)}
+              propio={propios.feteadoPieceDigitalMarginPct}
+              efectivo={feteadoPieceDigitalMarginPct ?? "0"}
+              origen={origenes.feteadoPieceDigitalMarginPct}
             />
             <CampoMarcaje
               id={`pieza-ef-${productId}`}
               name="feteadoPieceCashMarginPct"
               label="Pieza entera efectivo · precio/kg (%)"
-              value={pct(feteadoPieceCashMarginPct, targetMarginPct)}
+              propio={propios.feteadoPieceCashMarginPct}
+              efectivo={feteadoPieceCashMarginPct ?? "0"}
+              origen={origenes.feteadoPieceCashMarginPct}
             />
           </div>
-          <input type="hidden" name="alCorteHormaDigitalMarginPct" value={pct(alCorteHormaDigitalMarginPct, targetMarginPct)} />
-          <input type="hidden" name="alCorteHormaCashMarginPct" value={pct(alCorteHormaCashMarginPct, targetMarginPct)} />
-          <input type="hidden" name="alCorteCajaCashMarginPct" value={pct(alCorteCajaCashMarginPct, targetMarginPct)} />
+          <input type="hidden" name="alCorteHormaDigitalMarginPct" value={pct(propios.alCorteHormaDigitalMarginPct)} />
+          <input type="hidden" name="alCorteHormaCashMarginPct" value={pct(propios.alCorteHormaCashMarginPct)} />
+          <input type="hidden" name="alCorteCajaCashMarginPct" value={pct(propios.alCorteCajaCashMarginPct)} />
         </>
       )}
 
@@ -245,13 +291,15 @@ export function ConfigurarPrecio({
             id={`unidad-entera-${productId}`}
             name="wholeUnitMarginPct"
             label="Marcaje de lata/cajón/unidad entera (%)"
-            value={pct(wholeUnitMarginPct, targetMarginPct)}
+            propio={propios.wholeUnitMarginPct}
+              efectivo={wholeUnitMarginPct ?? "0"}
+              origen={origenes.wholeUnitMarginPct}
           />
         </>
       ) : (
         <>
           <input type="hidden" name="purchaseUnitWeightKg" value="" />
-          <input type="hidden" name="wholeUnitMarginPct" value={pct(wholeUnitMarginPct, targetMarginPct)} />
+          <input type="hidden" name="wholeUnitMarginPct" value={pct(propios.wholeUnitMarginPct)} />
         </>
       )}
 
