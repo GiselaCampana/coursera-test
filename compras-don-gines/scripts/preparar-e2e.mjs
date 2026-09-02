@@ -47,6 +47,18 @@ rmSync(path.join(raiz, process.env.STORAGE_LOCAL_DIR ?? './.storage-e2e'), {
 });
 
 correr('npx prisma migrate deploy');
+/*
+ * Los archivos del lector, antes de compilar.
+ *
+ * `public/ocr/` se deriva de node_modules y no se versiona, así que en un
+ * checkout limpio —CI— no existe. Este script llamaba a `next build` directo y
+ * se salteaba el paso que los copia, que sólo estaba colgado del script `build`
+ * de npm. En una máquina de trabajo no se notaba, porque la carpeta ya estaba
+ * de haber corrido `npm run dev` alguna vez; en CI el navegador se quedaba
+ * esperando un worker que nunca llegaba y las pruebas que leen un comprobante
+ * agotaban su tiempo sin decir por qué.
+ */
+correr('node scripts/preparar-ocr.mjs');
 correr('npx next build');
 correr('npx tsx tests/e2e/sembrar.ts');
 

@@ -408,6 +408,151 @@ describe('cada forma de venta se guarda y se aplica sola', () => {
   });
 });
 
+describe('la venta por unidad es exacta y no se redondea nunca', () => {
+  /**
+   * Un artículo que se compra por unidad, con el costo que se le quiera poner.
+   *
+   * Los dos caminos que forman un precio de unidad entera se prueban por
+   * separado: el de código de barras que además **se vende** por unidad, y el
+   * que se compra por lata o cajón y se vende al peso.
+   */
+  async function porUnidad(opciones: {
+    plu: string;
+    costoPorUnidad: string;
+    kilosPorUnidad?: string;
+    usaPlu?: boolean;
+    marcaje: string;
+  }) {
+    const producto = await prisma.product.create({
+      data: {
+        internalCode: opciones.plu,
+        normalizedName: `Artículo ${opciones.plu}`,
+        purchaseUnit: 'UNIT',
+        purchaseUnitWeightKg: opciones.kilosPorUnidad ?? null,
+        saleMode: 'AL_CORTE',
+        targetMarginPct: opciones.marcaje,
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0',
+        // A propósito la más agresiva: si el redondeo se colara desde acá, el
+        // importe saltaría al $100 y la prueba lo vería.
+        roundingRule: 'NEAREST_100',
+        usesPlu: opciones.usaPlu ?? true,
+        active: true,
+        familyId: null,
+      },
+    });
+    await prisma.costHistory.create({
+      data: {
+        productId: producto.id,
+        supplierId: escenario.proveedorId,
+        branchId: escenario.sucursales.devoto,
+        date: new Date(),
+        unitNetPrice: opciones.costoPorUnidad,
+        unitCost: opciones.costoPorUnidad,
+      },
+    });
+    return producto.id;
+  }
+
+  it('el precio de la lata entera sale con los centavos que da el marcaje', async () => {
+    /*
+     * 1837 el cajón con 23 % sobre el costo son 2259,51. Si se redondeara al
+     * $100 —la regla que el artículo tiene guardada— darían 2300: casi
+     * cuarenta y un pesos de más por cajón que nadie decidió.
+     */
+    const id = await porUnidad({
+      plu: '9050',
+      costoPorUnidad: '1837',
+      kilosPorUnidad: '5',
+      marcaje: '0.23',
+    });
+
+    const precio = await suggestPricesFor(id);
+    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('2259.51');
+  });
+
+  it('lo mismo para el artículo de código de barras que se vende por unidad', async () => {
+    // 733,45 la botella con 17 % son 858,14. Con redondeo daría 900.
+    const id = await porUnidad({
+      plu: '9051',
+      costoPorUnidad: '733.45',
+      usaPlu: false,
+      marcaje: '0.17',
+    });
+
+    const precio = await suggestPricesFor(id);
+    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('858.14');
+  });
+
+  it('el marcaje propio de unidad entera tampoco arrastra redondeo', async () => {
+    /*
+     * Y con su marcaje específico, que es el que la usuaria configura en el
+     * grupo "venta por unidad": 1837 con 31 % son 2406,47.
+     */
+    const id = await porUnidad({
+      plu: '9052',
+      costoPorUnidad: '1837',
+      kilosPorUnidad: '5',
+      marcaje: '0.23',
+    });
+    await prisma.product.update({
+      where: { id },
+      data: { wholeUnitMarginPct: '0.31' },
+    });
+
+    const precio = await suggestPricesFor(id);
+    expect(precio.tiers.wholeUnitTotal?.toFixed(2)).toBe('2406.47');
+  });
+
+  it('el marcaje de unidad entera no toca los precios por kilo del mismo artículo', async () => {
+    /*
+     * La unidad va aparte de la modalidad: cambiar su marcaje no puede mover
+     * el precio por kilo, que sí se redondea al $100.
+     *
+     * Costo 1837 el cajón de 5 kg son 367,40 el kilo; con 23 % dan 451,90, que
+     * al corte se redondean a 500.
+     */
+    const id = await porUnidad({
+      plu: '9053',
+      costoPorUnidad: '1837',
+      kilosPorUnidad: '5',
+      marcaje: '0.23',
+    });
+    const antes = await suggestPricesFor(id);
+    expect(antes.tiers.baseKg?.toFixed(2)).toBe('500.00');
+
+    await prisma.product.update({
+      where: { id },
+      data: { wholeUnitMarginPct: '0.31' },
+    });
+
+    const despues = await suggestPricesFor(id);
+    expect(despues.tiers.wholeUnitTotal?.toFixed(2)).toBe('2406.47');
+    expect(despues.tiers.baseKg?.toFixed(2)).toBe('500.00');
+  });
+
+  it('la unidad entera no redondea ni siquiera cuando el resto sí', async () => {
+    /*
+     * La comprobación general: el mismo artículo, en la misma consulta, con el
+     * kilo redondeado al $100 y la unidad con sus centavos. Si alguien alguna
+     * vez le pasara NEAREST_100 al importe de unidad, este número terminaría
+     * en dos ceros.
+     */
+    const id = await porUnidad({
+      plu: '9054',
+      costoPorUnidad: '1837',
+      kilosPorUnidad: '5',
+      marcaje: '0.23',
+    });
+    const precio = await suggestPricesFor(id);
+    const unidad = precio.tiers.wholeUnitTotal!;
+    expect(unidad.toFixed(2)).toBe('2259.51');
+    expect(unidad.mod(100).isZero()).toBe(false);
+    // Y el por kilo del mismo artículo sí es múltiplo de 100.
+    expect(precio.tiers.baseKg!.mod(100).isZero()).toBe(true);
+  });
+});
+
 describe('la regla general es el tercer nivel de verdad', () => {
   it('rige donde el artículo y la familia no dicen nada', async () => {
     const id = await articulo({ plu: '9030' });
