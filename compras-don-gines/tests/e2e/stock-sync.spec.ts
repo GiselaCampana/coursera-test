@@ -82,14 +82,21 @@ test.describe('sincronización con Control de Stock', () => {
 
     await tarjeta.getByRole('button', { name: 'Ver qué cambiaría' }).click();
 
-    // Los cuatro montones que hay que mirar antes de decidir.
-    await expect(tarjeta.getByText('Entrarían nuevos')).toBeVisible();
-    await expect(tarjeta.getByText('Cambiarían')).toBeVisible();
-    await expect(tarjeta.getByText('Sin cambios')).toBeVisible();
-    await expect(tarjeta.getByText('Quedarían inactivos')).toBeVisible();
+    /*
+     * Los cuatro montones que hay que mirar antes de decidir.
+     *
+     * Se busca en el resumen de arriba y no en la página entera: los mismos
+     * nombres se repiten como título de cada grupo plegado, y afirmar sobre
+     * "el texto en algún lado" no distingue el resumen de la lista.
+     */
+    const resumen = tarjeta.locator('.resumen-mes');
+    for (const grupo of ['Entrarían nuevos', 'Cambiarían', 'Sin cambios', 'Quedarían inactivos']) {
+      await expect(resumen.locator('.dato', { hasText: grupo })).toHaveCount(1);
+    }
+    await expect(resumen.locator('.dato', { hasText: 'Entrarían nuevos' })).toContainText('1');
 
-    // El artículo nuevo aparece, y todavía no está en la base.
-    await tarjeta.getByRole('group').filter({ hasText: 'Nuevos' }).first().click();
+    // El artículo nuevo aparece al desplegar el grupo, y todavía no está en la base.
+    await tarjeta.locator('summary').filter({ hasText: 'Nuevos' }).click();
     await expect(tarjeta.getByText('Provolone de prueba')).toBeVisible();
 
     expect(await loQueEsDeCompras()).toEqual(antes);
@@ -172,10 +179,20 @@ test.describe('sincronización con Control de Stock', () => {
     });
     await tarjeta.getByRole('button', { name: 'Ver qué cambiaría' }).click();
 
-    await tarjeta.getByRole('group').filter({ hasText: 'Modificados' }).first().click();
-    // De qué a qué, que es lo que hace falta para poder decidir.
-    await expect(tarjeta.getByText('Provolone de prueba renombrado')).toBeVisible();
-    await expect(tarjeta.getByText(/Nombre:/)).toBeVisible();
+    await tarjeta.locator('summary').filter({ hasText: 'Modificados' }).click();
+
+    /*
+     * De qué a qué, campo por campo.
+     *
+     * Que diga "cambia" no alcanza para decidir: obligaría a abrir el artículo
+     * para saber qué se está por pisar, que es justo lo que la vista previa
+     * viene a evitar.
+     */
+    const cambios = tarjeta.locator('.lista-simple li');
+    await expect(cambios.filter({ hasText: 'Nombre:' })).toContainText(
+      'Provolone de prueba → Provolone de prueba renombrado',
+    );
+    await expect(cambios.filter({ hasText: 'Unidad de compra:' })).toContainText('KG → UNIT');
 
     await servirVariante(1);
   });
@@ -196,7 +213,7 @@ test.describe('sincronización con Control de Stock', () => {
       has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
     });
     await tarjeta.getByRole('button', { name: /Ver qué cambiaría|Volver a consultar/ }).click();
-    await expect(tarjeta.getByText('Sin cambios')).toBeVisible();
+    await expect(tarjeta.locator('.resumen-mes .dato', { hasText: 'Sin cambios' })).toBeVisible();
     await sinScrollHorizontal(page);
   });
 });
