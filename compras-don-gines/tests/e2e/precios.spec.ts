@@ -13,7 +13,7 @@ test.describe('precios por kilo', () => {
     await expect(page.getByText(/precio expresado por kilo/i).first()).toBeVisible();
 
     await page.getByRole('button', { name: 'Configurar marcajes y venta' }).first().click();
-    await expect(page.getByLabel('Marcaje base por kilo (%)').first()).toBeVisible();
+    await expect(page.getByLabel('Por kilo · marcaje base (%)').first()).toBeVisible();
     await expect(page.getByLabel('Modo de venta').first()).toBeVisible();
     await expect(page.getByLabel('Cómo lo compra Don Ginés').first()).toBeVisible();
 

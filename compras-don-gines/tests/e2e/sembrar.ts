@@ -65,6 +65,26 @@ async function sembrarCon(prisma: PrismaClient) {
     }),
   ]);
 
+  /*
+   * La regla general de marcajes: el tercer nivel de la cadena.
+   *
+   * Se siembra con el mismo valor que crea la migración en producción, así que
+   * el navegador ve el estado real: una regla general cargada, que rige sólo
+   * donde el artículo y su familia no dicen nada.
+   */
+  await prisma.pricingRule.create({
+    data: {
+      name: 'Regla general',
+      productId: null,
+      marginBasis: 'SOBRE_COSTO',
+      targetMarginPct: '0.45',
+      cashDiscountPct: '0',
+      roundingRule: 'NEAREST_100',
+      validFrom: new Date('2020-01-01T00:00:00Z'),
+      active: true,
+    },
+  });
+
   const [devoto] = await Promise.all([
     prisma.branch.create({ data: { code: 'DEVOTO', name: 'Devoto' } }),
     prisma.branch.create({ data: { code: 'PUEYRREDON', name: 'Pueyrredón' } }),
@@ -205,7 +225,7 @@ async function sembrarCon(prisma: PrismaClient) {
    * específicos. Sin él, la pantalla de Productos no tiene nada que editar y la
    * prueba falla por falta de dato, no por un defecto de la aplicación.
    */
-  await prisma.product.create({
+  const cremoso = await prisma.product.create({
     data: {
       familyId: quesos.id,
       internalCode: '1211',
@@ -228,6 +248,28 @@ async function sembrarCon(prisma: PrismaClient) {
           origin: 'MANUAL',
         },
       },
+    },
+  });
+
+  /*
+   * Un costo para el cremoso.
+   *
+   * La pantalla de Precios sólo deja configurar marcajes de los artículos que
+   * tienen una compra: sin esto, el único artículo configurable sería un
+   * feteable y no habría forma de probar en el navegador que un producto al
+   * corte muestra sus cuatro campos —kilo, horma digital, horma efectivo y caja
+   * efectivo— y ninguno de los feteables.
+   *
+   * 1000 el kilo, que con el 45 % propio del artículo da números redondos.
+   */
+  await prisma.costHistory.create({
+    data: {
+      productId: cremoso.id,
+      supplierId: errecalde.id,
+      branchId: devoto.id,
+      date: new Date('2026-08-20T12:00:00Z'),
+      unitNetPrice: '1000',
+      unitCost: '1000',
     },
   });
 

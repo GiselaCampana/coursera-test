@@ -50,9 +50,40 @@ function comoFuente(fila: {
 export { comoFuente };
 
 /**
- * Regla de precios aplicable a un producto: la propia del producto si existe y
- * está vigente, si no la global, y en última instancia lo configurado en la
- * ficha del producto.
+ * La regla general vigente: el tercer y último nivel de la cadena.
+ *
+ * Es una sola y es global. Esta consulta es **la** definición de cuál es la
+ * regla general: la pantalla que la edita usa la misma, así que lo que se
+ * configura es siempre exactamente lo que se aplica. Tener dos formas de
+ * encontrarla sería tener dos reglas generales.
+ *
+ * Antes también se buscaba una regla por artículo, pero nunca hubo forma de
+ * crear ninguna —ni pantalla, ni servicio— y su lugar en la cadena era ambiguo:
+ * una regla de un artículo tendría que ganarle al artículo o perderle, y no
+ * había respuesta. Se saca la rama que no se puede alcanzar en vez de dejarla
+ * prometiendo algo.
+ */
+export function reglaGeneralVigente(at: Date = arToday()) {
+  return prisma.pricingRule.findFirst({
+    where: {
+      active: true,
+      productId: null,
+      validFrom: { lte: at },
+      OR: [{ validTo: null }, { validTo: { gte: at } }],
+    },
+    orderBy: { validFrom: 'desc' },
+  });
+}
+
+/**
+ * Los marcajes que rigen para un artículo, ya resueltos.
+ *
+ * Tres niveles en orden: lo que dice el artículo, lo que dice su familia, y la
+ * regla general. El primero que conteste gana, y cada valor viaja con el origen
+ * del que salió para que la pantalla lo pueda decir.
+ *
+ * El redondeo no está en la cadena: lo fija la forma de venta y no se
+ * configura. Kilo, 100 g y 1/4 al $100; horma, caja, pieza y unidad exactos.
  */
 export async function resolvePricingRule(productId: string, at: Date = arToday()) {
   /*
@@ -65,34 +96,14 @@ export async function resolvePricingRule(productId: string, at: Date = arToday()
   });
   if (!product) throw new NotFoundError('No encontramos ese producto.');
 
+  const reglaGeneral = await reglaGeneralVigente(at);
+
+  // Los tres niveles, en orden: el artículo, su familia y la regla general.
   const marcajes = marcajesEfectivos(
     comoFuente(product),
     product.family ? comoFuente(product.family) : null,
+    reglaGeneral ? comoFuente(reglaGeneral) : null,
   );
-
-  const rule = await prisma.pricingRule.findFirst({
-    where: {
-      active: true,
-      productId,
-      validFrom: { lte: at },
-      OR: [{ validTo: null }, { validTo: { gte: at } }],
-    },
-    orderBy: { validFrom: 'desc' },
-  });
-
-  const globalRule = rule
-    ? null
-    : await prisma.pricingRule.findFirst({
-        where: {
-          active: true,
-          productId: null,
-          validFrom: { lte: at },
-          OR: [{ validTo: null }, { validTo: { gte: at } }],
-        },
-        orderBy: { validFrom: 'desc' },
-      });
-
-  const effective = rule ?? globalRule;
 
   /*
    * Los marcajes salen ya resueltos contra la familia.
@@ -106,8 +117,8 @@ export async function resolvePricingRule(productId: string, at: Date = arToday()
   return {
     product,
     familia: product.family ? { id: product.family.id, nombre: product.family.name } : null,
-    ruleId: effective?.id ?? null,
-    ruleName: effective?.name ?? 'Configuración del producto',
+    ruleId: reglaGeneral?.id ?? null,
+    ruleName: reglaGeneral?.name ?? 'Sin regla general cargada',
     marginBasis: marcajes.marginBasis.valor,
     targetMarginPct: marcajes.base.valor,
     cashDiscountPct: product.cashDiscountPct.toString(),
@@ -452,14 +463,22 @@ export interface PriceBoardRow {
   targetMarginPct: string;
   marginBasis: MarginBasis;
   cashDiscountPct: string;
-  alCorteHormaDigitalMarginPct: string | null;
-  alCorteHormaCashMarginPct: string | null;
-  alCorteCajaCashMarginPct: string | null;
-  feteado100gMarginPct: string | null;
-  feteadoQuarterMarginPct: string | null;
-  feteadoPieceDigitalMarginPct: string | null;
-  feteadoPieceCashMarginPct: string | null;
-  wholeUnitMarginPct: string | null;
+  /*
+   * Los ocho marcajes, ya resueltos contra la familia y la regla general.
+   *
+   * Nunca vienen vacíos: el que no está configurado en ninguna parte llega con
+   * el marcaje por kilo. Antes eran nulables y cada consumidor —la pantalla y
+   * la exportación— decidía por su cuenta qué hacer con el null, que es como
+   * terminaron existiendo dos copias de la misma regla de herencia.
+   */
+  alCorteHormaDigitalMarginPct: string;
+  alCorteHormaCashMarginPct: string;
+  alCorteCajaCashMarginPct: string;
+  feteado100gMarginPct: string;
+  feteadoQuarterMarginPct: string;
+  feteadoPieceDigitalMarginPct: string;
+  feteadoPieceCashMarginPct: string;
+  wholeUnitMarginPct: string;
   usesPlu: boolean;
   barcode: string | null;
   roundingRule: RoundingRule;
@@ -549,7 +568,14 @@ export async function getPriceBoard(user: AuthUser): Promise<PriceBoardRow[]> {
 export interface UpdatePriceConfigInput {
   productId: string;
   targetMarginPct: string;
-  marginBasis: MarginBasis;
+  /**
+   * Vacío es heredar, igual que en los marcajes.
+   *
+   * Si acá siempre llegara un valor, abrir la pantalla de un artículo que
+   * hereda la base de su familia y apretar guardar se la grabaría encima, y el
+   * artículo dejaría de seguir a su rubro sin que nadie lo haya pedido.
+   */
+  marginBasis: MarginBasis | '' | null;
   cashDiscountPct?: string;
   alCorteHormaDigitalMarginPct?: string | null;
   alCorteHormaCashMarginPct?: string | null;
@@ -634,7 +660,7 @@ export async function updateProductPriceConfig(user: AuthUser, input: UpdatePric
     where: { id: input.productId },
     data: {
       targetMarginPct: marginFraction ? marginFraction.toString() : null,
-      marginBasis: input.marginBasis,
+      marginBasis: input.marginBasis || null,
       cashDiscountPct: '0',
       alCorteHormaDigitalMarginPct: normalizarMarcaje(input.alCorteHormaDigitalMarginPct),
       alCorteHormaCashMarginPct: normalizarMarcaje(input.alCorteHormaCashMarginPct),

@@ -815,7 +815,15 @@ model CostHistory {
 // Precios de venta
 // ---------------------------------------------------------------------------
 
-/// Regla de formación de precios. Si productId es null es la regla global.
+/// Regla de formación de precios. Si productId es null es la regla general.
+///
+/// La regla general es el **tercer y último nivel** de la cadena de marcajes:
+/// artículo → familia → regla general. Antes se consultaba y se descartaba —la
+/// pantalla mostraba su nombre y ninguno de sus valores se aplicaba—, que es lo
+/// peor de los dos mundos: prometía regir algo sin regirlo.
+///
+/// Es la única configuración global de marcajes. No hay ninguna otra en el
+/// código: el valor por omisión del sistema vive en esta fila y se puede mirar.
 model PricingRule {
   id              String      @id @default(cuid())
   productId       String?
@@ -823,13 +831,28 @@ model PricingRule {
   name            String
   marginBasis     MarginBasis @default(SOBRE_COSTO)
   targetMarginPct Decimal     @db.Decimal(9, 6)
-  cashDiscountPct Decimal     @default(0) @db.Decimal(9, 6)
-  roundingRule    String      @default("NEAREST_100")
+
+  /// Marcajes por forma de venta. En null, la forma de venta usa el base.
+  alCorteHormaDigitalMarginPct Decimal? @db.Decimal(9, 6)
+  alCorteHormaCashMarginPct    Decimal? @db.Decimal(9, 6)
+  alCorteCajaCashMarginPct     Decimal? @db.Decimal(9, 6)
+  feteado100gMarginPct         Decimal? @db.Decimal(9, 6)
+  feteadoQuarterMarginPct      Decimal? @db.Decimal(9, 6)
+  feteadoPieceDigitalMarginPct Decimal? @db.Decimal(9, 6)
+  feteadoPieceCashMarginPct    Decimal? @db.Decimal(9, 6)
+  wholeUnitMarginPct           Decimal? @db.Decimal(9, 6)
+
+  /// Queda por compatibilidad; los precios en efectivo ya no se calculan como
+  /// descuento sino con su propio marcaje.
+  cashDiscountPct Decimal   @default(0) @db.Decimal(9, 6)
+  /// Queda por compatibilidad. El redondeo lo fija la forma de venta y no se
+  /// configura: kilo, 100 g y 1/4 al $100; horma, caja, pieza y unidad exactos.
+  roundingRule    String    @default("NEAREST_100")
   validFrom       DateTime
   validTo         DateTime?
-  active          Boolean     @default(true)
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   @@index([productId, validFrom])
   @@map("pricing_rules")

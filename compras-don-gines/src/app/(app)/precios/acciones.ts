@@ -47,7 +47,8 @@ export async function guardarConfigPrecio(
     await updateProductPriceConfig(user, {
       productId,
       targetMarginPct: String(formData.get('targetMarginPct') ?? ''),
-      marginBasis: String(formData.get('marginBasis') ?? 'SOBRE_COSTO') as 'SOBRE_COSTO' | 'SOBRE_VENTA',
+      // Vacío llega vacío: quiere decir heredar, igual que en los marcajes.
+      marginBasis: String(formData.get('marginBasis') ?? '') as 'SOBRE_COSTO' | 'SOBRE_VENTA' | '',
       alCorteHormaDigitalMarginPct: String(formData.get('alCorteHormaDigitalMarginPct') ?? '') || null,
       alCorteHormaCashMarginPct: String(formData.get('alCorteHormaCashMarginPct') ?? '') || null,
       alCorteCajaCashMarginPct: String(formData.get('alCorteCajaCashMarginPct') ?? '') || null,

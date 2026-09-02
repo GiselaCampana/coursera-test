@@ -117,17 +117,26 @@ test.describe('precios y compras', () => {
     await page.goto('/precios');
 
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Precios');
-    await expect(page.getByText('Longaniza corta')).toBeVisible();
-    await expect(page.getByText('Último costo')).toBeVisible();
+
+    /*
+     * Todo dentro de la ficha del artículo, y no sueltos en la página.
+     *
+     * La lista tiene un artículo por cada uno que se compró alguna vez, así que
+     * "hay un último costo en algún lado" no dice nada: lo que hace falta saber
+     * es que **este** artículo muestra el suyo con sus precios.
+     */
+    const longaniza = page.locator('li.fila-dato').filter({ hasText: 'Longaniza corta' }).first();
+    await expect(longaniza).toBeVisible();
+    await expect(longaniza.getByText('Último costo por kilo')).toBeVisible();
     /*
      * Las etiquetas son las de la pantalla, que cambiaron al separar los
      * marcajes por modalidad: ahora cada precio dice también sobre qué unidad
      * está expresado, porque «por 1/4 kg» a secas no aclaraba si el número era
      * el del cuarto o el del kilo.
      */
-    await expect(page.getByText('Venta por 100 g')).toBeVisible();
-    await expect(page.getByText('Venta por 1/4 kg')).toBeVisible();
-    await expect(page.getByText('Pieza entera efectivo')).toBeVisible();
+    await expect(longaniza.getByText('Venta por 100 g')).toBeVisible();
+    await expect(longaniza.getByText('Venta por 1/4 kg')).toBeVisible();
+    await expect(longaniza.getByText('Pieza entera efectivo')).toBeVisible();
 
     await sinScrollHorizontal(page);
   });

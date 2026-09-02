@@ -140,6 +140,27 @@ export async function sembrarEscenario(): Promise<Escenario> {
     }),
   ]);
 
+  /*
+   * La regla general: el tercer nivel de la cadena de marcajes.
+   *
+   * Se siembra porque en producción existe —la crea la migración— y porque sin
+   * ella las pruebas correrían contra un estado que no es el real: los
+   * artículos sin marcaje propio caerían en el último recurso del código en vez
+   * de en la fila que de verdad los rige.
+   */
+  await prisma.pricingRule.create({
+    data: {
+      name: 'Regla general',
+      productId: null,
+      marginBasis: 'SOBRE_COSTO',
+      targetMarginPct: '0.45',
+      cashDiscountPct: '0',
+      roundingRule: 'NEAREST_100',
+      validFrom: EPOCH,
+      active: true,
+    },
+  });
+
   const proveedor = await prisma.supplier.create({
     data: {
       tradeName: 'Los Calvos',

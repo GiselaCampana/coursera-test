@@ -7,6 +7,7 @@ import { AppError, toUserMessage } from '@/lib/errors';
 import https from 'node:https';
 import {
   guardarMarcajesDeFamilia,
+  guardarReglaGeneralDeMarcajes,
   importarCatalogo,
   type InformeDeCatalogo,
   type OrigenDeFamilia,
@@ -235,19 +236,7 @@ export async function guardarMarcajesFamilia(
   const familyId = String(formData.get('familyId') ?? '');
   try {
     const user = await requireUser();
-    const campo = (n: string) => String(formData.get(n) ?? '').trim() || null;
-    await guardarMarcajesDeFamilia(user, familyId, {
-      targetMarginPct: campo('targetMarginPct'),
-      marginBasis: (campo('marginBasis') as 'SOBRE_COSTO' | 'SOBRE_VENTA' | null) ?? null,
-      alCorteHormaDigitalMarginPct: campo('alCorteHormaDigitalMarginPct'),
-      alCorteHormaCashMarginPct: campo('alCorteHormaCashMarginPct'),
-      alCorteCajaCashMarginPct: campo('alCorteCajaCashMarginPct'),
-      feteado100gMarginPct: campo('feteado100gMarginPct'),
-      feteadoQuarterMarginPct: campo('feteadoQuarterMarginPct'),
-      feteadoPieceDigitalMarginPct: campo('feteadoPieceDigitalMarginPct'),
-      feteadoPieceCashMarginPct: campo('feteadoPieceCashMarginPct'),
-      wholeUnitMarginPct: campo('wholeUnitMarginPct'),
-    });
+    await guardarMarcajesDeFamilia(user, familyId, marcajesDelFormulario(formData));
     revalidatePath('/configuracion/catalogo');
     revalidatePath('/configuracion/productos');
     revalidatePath('/precios');
@@ -255,4 +244,49 @@ export async function guardarMarcajesFamilia(
   } catch (error) {
     return { error: toUserMessage(error), familyId };
   }
+}
+
+export interface ResultadoReglaGeneral {
+  ok?: boolean;
+  error?: string;
+}
+
+/**
+ * Guarda la regla general: el tercer nivel de la cadena.
+ *
+ * Vale lo mismo que para la familia: vacío se guarda vacío. Un campo en blanco
+ * acá quiere decir que ese marcaje no lo decide nadie, y el resolvedor lo dice
+ * así en pantalla en vez de inventar un número.
+ */
+export async function guardarReglaGeneral(
+  _prev: ResultadoReglaGeneral,
+  formData: FormData,
+): Promise<ResultadoReglaGeneral> {
+  try {
+    const user = await requireUser();
+    await guardarReglaGeneralDeMarcajes(user, marcajesDelFormulario(formData));
+    revalidatePath('/configuracion/catalogo');
+    revalidatePath('/configuracion/productos');
+    revalidatePath('/precios');
+    return { ok: true };
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
+}
+
+/** Los nueve campos del formulario de marcajes. Vacío queda vacío. */
+function marcajesDelFormulario(formData: FormData) {
+  const campo = (n: string) => String(formData.get(n) ?? '').trim() || null;
+  return {
+    targetMarginPct: campo('targetMarginPct'),
+    marginBasis: (campo('marginBasis') as 'SOBRE_COSTO' | 'SOBRE_VENTA' | null) ?? null,
+    alCorteHormaDigitalMarginPct: campo('alCorteHormaDigitalMarginPct'),
+    alCorteHormaCashMarginPct: campo('alCorteHormaCashMarginPct'),
+    alCorteCajaCashMarginPct: campo('alCorteCajaCashMarginPct'),
+    feteado100gMarginPct: campo('feteado100gMarginPct'),
+    feteadoQuarterMarginPct: campo('feteadoQuarterMarginPct'),
+    feteadoPieceDigitalMarginPct: campo('feteadoPieceDigitalMarginPct'),
+    feteadoPieceCashMarginPct: campo('feteadoPieceCashMarginPct'),
+    wholeUnitMarginPct: campo('wholeUnitMarginPct'),
+  };
 }

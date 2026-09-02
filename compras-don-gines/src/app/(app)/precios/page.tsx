@@ -277,6 +277,7 @@ export default async function PaginaPrecios({
                   */
                   propios={{
                     targetMarginPct: fila.marcajesPropios.targetMarginPct,
+                    marginBasis: fila.marcajesPropios.marginBasis,
                     alCorteHormaDigitalMarginPct: fila.marcajesPropios.alCorteHormaDigitalMarginPct,
                     alCorteHormaCashMarginPct: fila.marcajesPropios.alCorteHormaCashMarginPct,
                     alCorteCajaCashMarginPct: fila.marcajesPropios.alCorteCajaCashMarginPct,
@@ -288,6 +289,7 @@ export default async function PaginaPrecios({
                   }}
                   origenes={{
                     targetMarginPct: ORIGEN_LABEL[fila.marcajes.base.origen],
+                    marginBasis: ORIGEN_LABEL[fila.marcajes.marginBasis.origen],
                     alCorteHormaDigitalMarginPct:
                       ORIGEN_LABEL[fila.marcajes.especificos.alCorteHormaDigital.origen],
                     alCorteHormaCashMarginPct:

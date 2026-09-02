@@ -4,10 +4,15 @@ import { redirect } from 'next/navigation';
 import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
-import { buscarEnCatalogo, familiasConMarcajes } from '@/lib/services/catalogo';
+import {
+  buscarEnCatalogo,
+  familiasConMarcajes,
+  reglaGeneralDeMarcajes,
+} from '@/lib/services/catalogo';
 import { formatDateAr } from '@/lib/datetime';
 import { Importar } from './Importar';
 import { MarcajesDeFamilia } from './MarcajesDeFamilia';
+import { ReglaGeneral } from './ReglaGeneral';
 
 export const metadata: Metadata = { title: 'Catálogo Don Ginés' };
 export const dynamic = 'force-dynamic';
@@ -50,7 +55,10 @@ export default async function PaginaCatalogo({
   ]);
 
   const sinFamilia = await prisma.product.count({ where: { familyId: null } });
-  const marcajesPorFamilia = await familiasConMarcajes(user);
+  const [marcajesPorFamilia, general] = await Promise.all([
+    familiasConMarcajes(user),
+    reglaGeneralDeMarcajes(user),
+  ]);
 
   return (
     <>
@@ -95,6 +103,27 @@ export default async function PaginaCatalogo({
       </div>
 
       {/*
+        La cadena de marcajes, de abajo hacia arriba: primero la regla general
+        —el último recurso— y después las familias. El artículo se configura en
+        Precios, que es donde se lo mira contra su costo.
+      */}
+      <div className="card">
+        <div className="card-titulo">
+          <h2>Regla general de marcajes</h2>
+        </div>
+        <p className="chico medio">
+          El tercer y último nivel: <strong>artículo → familia → regla general</strong>. Se aplica
+          sólo donde el artículo y su familia no dicen nada. Es la única configuración global; no
+          hay otra en paralelo.
+        </p>
+        <ReglaGeneral
+          marcajes={general.marcajes}
+          dependenDeElla={general.dependenDeElla}
+          existe={general.id !== null}
+        />
+      </div>
+
+      {/*
         Los marcajes de cada familia, arriba del buscador de artículos.
 
         Van acá porque es donde vive la familia, y porque configurarlos una vez
@@ -108,7 +137,7 @@ export default async function PaginaCatalogo({
         </div>
         <p className="chico medio">
           Cada artículo puede tener el suyo; el que no lo tiene usa el de su familia, y si la
-          familia tampoco lo define, el general de la casa. Configurarlo acá no toca ningún
+          familia tampoco lo define, la regla general. Configurarlo acá no toca ningún
           artículo: los que heredan pasan a usar el número nuevo y los que tienen el suyo siguen
           igual.
         </p>
@@ -127,6 +156,7 @@ export default async function PaginaCatalogo({
                   articulos={f.articulos}
                   heredanElBase={f.heredanElBase}
                   marcajes={f.marcajes}
+                  general={general.marcajes}
                 />
               </li>
             ))}

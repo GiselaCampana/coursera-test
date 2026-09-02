@@ -4,6 +4,8 @@ import { ForbiddenError, ValidationError } from '@/lib/errors';
 import {
   familiasConMarcajes,
   guardarMarcajesDeFamilia,
+  guardarReglaGeneralDeMarcajes,
+  reglaGeneralDeMarcajes,
 } from '@/lib/services/catalogo';
 import {
   resolvePricingRule,
@@ -161,6 +163,45 @@ describe('guardar no rompe la herencia', () => {
     expect(precio.tiers.baseKg?.toFixed(2)).toBe('1700.00');
   });
 
+  it('la base del marcaje también se puede dejar heredando', async () => {
+    /*
+     * Sobre costo o sobre venta sigue la misma cadena que los porcentajes. Si
+     * el formulario mandara siempre un valor, abrir y guardar el artículo se lo
+     * grabaría encima y dejaría de seguir a su familia sin que nadie lo pidiera:
+     * el mismo defecto que ya había con el marcaje base, en el campo de al lado.
+     */
+    const id = await articulo({ plu: '9012' });
+    await guardarMarcajesDeFamilia(escenario.admin, familiaId, {
+      targetMarginPct: '50',
+      marginBasis: 'SOBRE_VENTA',
+    });
+
+    await updateProductPriceConfig(escenario.admin, {
+      productId: id,
+      targetMarginPct: '',
+      marginBasis: '',
+      alCorteHormaDigitalMarginPct: null,
+      alCorteHormaCashMarginPct: null,
+      alCorteCajaCashMarginPct: null,
+      feteado100gMarginPct: null,
+      feteadoQuarterMarginPct: null,
+      feteadoPieceDigitalMarginPct: null,
+      feteadoPieceCashMarginPct: null,
+      wholeUnitMarginPct: null,
+      roundingRule: 'NONE',
+      saleMode: 'AL_CORTE',
+      purchaseUnit: 'KG',
+      purchaseUnitWeightKg: null,
+    });
+
+    const guardado = await prisma.product.findUniqueOrThrow({ where: { id } });
+    expect(guardado.marginBasis).toBeNull();
+
+    const regla = await resolvePricingRule(id);
+    expect(regla.marginBasis).toBe('SOBRE_VENTA');
+    expect(regla.marcajes.marginBasis.origen).toBe('FAMILIA');
+  });
+
   it('escribir un marcaje en el artículo lo desengancha, y eso es lo que se pidió', async () => {
     const id = await articulo({ plu: '9006' });
     await guardarMarcajesDeFamilia(escenario.admin, familiaId, { targetMarginPct: '50' });
@@ -230,6 +271,319 @@ describe('configurar la familia no toca ningún artículo', () => {
     expect(quesos.articulos).toBe(3);
     // Dos heredan el base: son los que se van a mover.
     expect(quesos.heredanElBase).toBe(2);
+  });
+});
+
+describe('cada forma de venta se guarda y se aplica sola', () => {
+  /** La configuración completa de un artículo, para escribir sólo lo que cambia. */
+  function config(id: string, cambios: Record<string, string | null> = {}) {
+    return {
+      productId: id,
+      targetMarginPct: '',
+      marginBasis: 'SOBRE_COSTO' as const,
+      alCorteHormaDigitalMarginPct: null,
+      alCorteHormaCashMarginPct: null,
+      alCorteCajaCashMarginPct: null,
+      feteado100gMarginPct: null,
+      feteadoQuarterMarginPct: null,
+      feteadoPieceDigitalMarginPct: null,
+      feteadoPieceCashMarginPct: null,
+      wholeUnitMarginPct: null,
+      roundingRule: 'NONE' as const,
+      saleMode: 'AL_CORTE' as const,
+      purchaseUnit: 'KG' as const,
+      purchaseUnitWeightKg: null,
+      ...cambios,
+    };
+  }
+
+  it('cambiar el marcaje de horma no modifica el de kilo', async () => {
+    /*
+     * Ocho campos que se pisan entre sí no son ocho campos. Acá el recorrido es
+     * el real: se guarda por el servicio y se vuelve a calcular el precio.
+     *
+     * Costo 1000 y 40 % de base: el kilo vale 1400 antes y después. La horma
+     * pasa a 1250, que es su propio marcaje y no toca a nadie más.
+     */
+    const id = await articulo({ plu: '9020', marcajePropio: '0.40' });
+
+    const antes = await suggestPricesFor(id);
+    expect(antes.tiers.baseKg?.toFixed(2)).toBe('1400.00');
+    expect(antes.tiers.alCorteHormaDigitalKg?.toFixed(2)).toBe('1400.00');
+
+    await updateProductPriceConfig(
+      escenario.admin,
+      config(id, { targetMarginPct: '40', alCorteHormaDigitalMarginPct: '25' }),
+    );
+
+    const despues = await suggestPricesFor(id);
+    expect(despues.tiers.alCorteHormaDigitalKg?.toFixed(2)).toBe('1250.00');
+    // El kilo, intacto.
+    expect(despues.tiers.baseKg?.toFixed(2)).toBe('1400.00');
+    // Y la otra forma de venta al corte que nadie tocó, también.
+    expect(despues.tiers.alCorteCajaCashKg?.toFixed(2)).toBe('1400.00');
+
+    const guardado = await prisma.product.findUniqueOrThrow({ where: { id } });
+    expect(guardado.targetMarginPct?.toString()).toBe('0.4');
+    expect(guardado.alCorteHormaDigitalMarginPct?.toString()).toBe('0.25');
+    expect(guardado.alCorteCajaCashMarginPct).toBeNull();
+  });
+
+  it('cambiar el marcaje de pieza no modifica el de 100 g ni el de 1/4', async () => {
+    const id = await articulo({ plu: '9021', marcajePropio: '0.40' });
+    await updateProductPriceConfig(
+      escenario.admin,
+      config(id, {
+        targetMarginPct: '40',
+        saleMode: 'FETEABLE',
+        feteadoPieceDigitalMarginPct: '25',
+        feteadoPieceCashMarginPct: '22',
+      }),
+    );
+
+    const precio = await suggestPricesFor(id);
+    expect(precio.tiers.feteadoPieceDigitalKg?.toFixed(2)).toBe('1250.00');
+    expect(precio.tiers.feteadoPieceCashKg?.toFixed(2)).toBe('1220.00');
+    // Los dos que se ven en la etiqueta del mostrador siguen en el base.
+    expect(precio.tiers.feteado100gKg?.toFixed(2)).toBe('1400.00');
+    expect(precio.tiers.feteadoQuarterKg?.toFixed(2)).toBe('1400.00');
+
+    const guardado = await prisma.product.findUniqueOrThrow({ where: { id } });
+    expect(guardado.feteado100gMarginPct).toBeNull();
+    expect(guardado.feteadoQuarterMarginPct).toBeNull();
+  });
+
+  it('editar una modalidad no borra los marcajes de la otra', async () => {
+    /*
+     * El formulario muestra sólo la modalidad del artículo, y la otra viaja en
+     * campos ocultos. Si esos ocultos llegaran vacíos, cambiar un artículo de
+     * feteable a al corte le borraría en silencio los cuatro marcajes que ya
+     * tenía cargados para volver.
+     */
+    const id = await articulo({ plu: '9022', marcajePropio: '0.40' });
+    await updateProductPriceConfig(
+      escenario.admin,
+      config(id, {
+        targetMarginPct: '40',
+        saleMode: 'FETEABLE',
+        feteadoQuarterMarginPct: '55',
+        alCorteHormaCashMarginPct: '18',
+      }),
+    );
+
+    // Ahora se lo pasa a al corte, tocando sólo lo que se ve en esa pantalla.
+    await updateProductPriceConfig(
+      escenario.admin,
+      config(id, {
+        targetMarginPct: '40',
+        saleMode: 'AL_CORTE',
+        alCorteHormaCashMarginPct: '30',
+        // Lo feteado viaja tal como estaba, que es lo que hacen los ocultos.
+        feteadoQuarterMarginPct: '55',
+      }),
+    );
+
+    const guardado = await prisma.product.findUniqueOrThrow({ where: { id } });
+    expect(guardado.alCorteHormaCashMarginPct?.toString()).toBe('0.3');
+    expect(guardado.feteadoQuarterMarginPct?.toString()).toBe('0.55');
+  });
+
+  it('el redondeo depende de la forma de venta y no de lo que se configure', async () => {
+    /*
+     * Kilo y 1/4 al $100; pieza exacta. Con un costo que no da redondo se ve la
+     * diferencia: 1000 con 45 % son 1450, que el kilo lleva a 1500 y la pieza
+     * deja en 1450.
+     */
+    const id = await articulo({ plu: '9023', marcajePropio: '0.45' });
+    await updateProductPriceConfig(
+      escenario.admin,
+      config(id, { targetMarginPct: '45', saleMode: 'FETEABLE' }),
+    );
+
+    const precio = await suggestPricesFor(id);
+    expect(precio.tiers.feteado100gKg?.toFixed(2)).toBe('1500.00');
+    expect(precio.tiers.feteadoQuarterKg?.toFixed(2)).toBe('1500.00');
+    expect(precio.tiers.feteadoPieceDigitalKg?.toFixed(2)).toBe('1450.00');
+    expect(precio.tiers.feteadoPieceCashKg?.toFixed(2)).toBe('1450.00');
+  });
+});
+
+describe('la regla general es el tercer nivel de verdad', () => {
+  it('rige donde el artículo y la familia no dicen nada', async () => {
+    const id = await articulo({ plu: '9030' });
+    await guardarReglaGeneralDeMarcajes(escenario.admin, {
+      targetMarginPct: '45',
+      feteadoQuarterMarginPct: '80',
+    });
+
+    const regla = await resolvePricingRule(id);
+    expect(regla.marcajes.especificos.feteadoQuarter.valor).toBe('0.8');
+    expect(regla.marcajes.especificos.feteadoQuarter.origen).toBe('GENERAL');
+    // Y la forma de venta que la regla general tampoco define, con el base.
+    expect(regla.marcajes.especificos.feteado100g.origen).toBe('BASE');
+  });
+
+  it('la familia le gana a la regla general, y el artículo a las dos', async () => {
+    const heredaTodo = await articulo({ plu: '9031' });
+    const conFamilia = await articulo({ plu: '9032' });
+    const conPropio = await articulo({ plu: '9033' });
+
+    await guardarReglaGeneralDeMarcajes(escenario.admin, {
+      targetMarginPct: '45',
+      feteadoQuarterMarginPct: '80',
+    });
+    await guardarMarcajesDeFamilia(escenario.admin, familiaId, { feteadoQuarterMarginPct: '60' });
+    await prisma.product.update({
+      where: { id: conPropio },
+      data: { feteadoQuarterMarginPct: '0.10' },
+    });
+    // El primero se saca de la familia para que muestre el nivel general puro.
+    await prisma.product.update({ where: { id: heredaTodo }, data: { familyId: null } });
+
+    const general = await resolvePricingRule(heredaTodo);
+    expect(general.marcajes.especificos.feteadoQuarter.origen).toBe('GENERAL');
+    expect(general.marcajes.especificos.feteadoQuarter.valor).toBe('0.8');
+
+    const familia = await resolvePricingRule(conFamilia);
+    expect(familia.marcajes.especificos.feteadoQuarter.origen).toBe('FAMILIA');
+    expect(familia.marcajes.especificos.feteadoQuarter.valor).toBe('0.6');
+
+    const propio = await resolvePricingRule(conPropio);
+    expect(propio.marcajes.especificos.feteadoQuarter.origen).toBe('PRODUCTO');
+    expect(propio.marcajes.especificos.feteadoQuarter.valor).toBe('0.1');
+  });
+
+  it('guardarla no toca ningún artículo ni ninguna familia', async () => {
+    const conPropio = await articulo({ plu: '9034', marcajePropio: '0.20' });
+    const heredando = await articulo({ plu: '9035' });
+    await guardarMarcajesDeFamilia(escenario.admin, familiaId, { targetMarginPct: '50' });
+
+    const productosAntes = await prisma.product.findMany({
+      where: { id: { in: [conPropio, heredando] } },
+      orderBy: { internalCode: 'asc' },
+    });
+    const familiaAntes = await prisma.productFamily.findUniqueOrThrow({ where: { id: familiaId } });
+
+    await guardarReglaGeneralDeMarcajes(escenario.admin, {
+      targetMarginPct: '70',
+      alCorteCajaCashMarginPct: '15',
+    });
+
+    expect(
+      await prisma.product.findMany({
+        where: { id: { in: [conPropio, heredando] } },
+        orderBy: { internalCode: 'asc' },
+      }),
+    ).toEqual(productosAntes);
+    expect(await prisma.productFamily.findUniqueOrThrow({ where: { id: familiaId } })).toEqual(
+      familiaAntes,
+    );
+  });
+
+  it('no crea una segunda regla general: siempre actualiza la que hay', async () => {
+    /*
+     * "No debe existir otra configuración global paralela". Dos filas activas
+     * sin producto serían exactamente eso, y cuál de las dos rige dependería de
+     * un orden por fecha que nadie mira.
+     */
+    await guardarReglaGeneralDeMarcajes(escenario.admin, { targetMarginPct: '50' });
+    await guardarReglaGeneralDeMarcajes(escenario.admin, { targetMarginPct: '60' });
+
+    const activas = await prisma.pricingRule.findMany({
+      where: { productId: null, active: true },
+    });
+    expect(activas).toHaveLength(1);
+    expect(activas[0].targetMarginPct.toString()).toBe('0.6');
+  });
+
+  it('el marcaje base de la regla general es obligatorio', async () => {
+    // Es el piso de la cadena: vacío acá no significa heredar, significa que
+    // nadie decidió el precio.
+    await expect(
+      guardarReglaGeneralDeMarcajes(escenario.admin, { targetMarginPct: '' }),
+    ).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('sin permiso de gestionar productos no se configura la regla general', async () => {
+    await expect(
+      guardarReglaGeneralDeMarcajes(escenario.operadorDevoto, { targetMarginPct: '50' }),
+    ).rejects.toBeInstanceOf(ForbiddenError);
+  });
+
+  it('dice a cuántos artículos les llega de verdad', async () => {
+    /*
+     * Sólo a los que no tienen base propio y cuya familia tampoco lo define.
+     * Decir "afecta a todos" cuando afecta a dos haría que nadie se anime a
+     * tocarla.
+     */
+    await articulo({ plu: '9036', marcajePropio: '0.20' });
+    await articulo({ plu: '9037' });
+    await articulo({ plu: '9038', conFamilia: false });
+
+    const sinFamiliaQueDefina = await reglaGeneralDeMarcajes(escenario.admin);
+    expect(sinFamiliaQueDefina.dependenDeElla).toBe(2);
+
+    // Al definir el base de la familia, el suyo deja de depender de la general.
+    await guardarMarcajesDeFamilia(escenario.admin, familiaId, { targetMarginPct: '50' });
+    const conFamiliaQueDefine = await reglaGeneralDeMarcajes(escenario.admin);
+    expect(conFamiliaQueDefine.dependenDeElla).toBe(1);
+  });
+});
+
+describe('activar la regla general no cambia ningún precio', () => {
+  it('el precio es el mismo antes y después de que exista la fila', async () => {
+    /*
+     * La condición que puso la usuaria para la migración: no puede alterar los
+     * precios efectivos actuales. Se prueba en el único sentido que importa,
+     * que es el del número que sale.
+     */
+    const id = await articulo({ plu: '9040' });
+
+    // Sin ninguna regla general cargada: el último recurso del código.
+    await prisma.pricingRule.deleteMany({ where: { productId: null } });
+    const sinRegla = await resolvePricingRule(id);
+    const precioSinRegla = await suggestPricesFor(id);
+    expect(sinRegla.marcajes.base.origen).toBe('SIN_CONFIGURAR');
+
+    // Con la regla general que crea la migración, con el mismo valor.
+    await guardarReglaGeneralDeMarcajes(escenario.admin, { targetMarginPct: '45' });
+    const conRegla = await resolvePricingRule(id);
+    const precioConRegla = await suggestPricesFor(id);
+
+    expect(conRegla.marcajes.base.origen).toBe('GENERAL');
+    expect(conRegla.targetMarginPct).toBe(sinRegla.targetMarginPct);
+    expect(precioConRegla.tiers.baseKg?.toFixed(2)).toBe(
+      precioSinRegla.tiers.baseKg?.toFixed(2),
+    );
+    for (const forma of [
+      'alCorteHormaDigitalKg',
+      'alCorteHormaCashKg',
+      'alCorteCajaCashKg',
+      'feteado100gKg',
+      'feteadoQuarterKg',
+      'feteadoPieceDigitalKg',
+      'feteadoPieceCashKg',
+    ] as const) {
+      expect(precioConRegla.tiers[forma]?.toFixed(2), forma).toBe(
+        precioSinRegla.tiers[forma]?.toFixed(2),
+      );
+    }
+  });
+
+  it('no pisa lo que ya tenían el artículo ni la familia', async () => {
+    const conPropio = await articulo({ plu: '9041', marcajePropio: '0.20' });
+    await guardarMarcajesDeFamilia(escenario.admin, familiaId, { feteadoQuarterMarginPct: '60' });
+
+    await guardarReglaGeneralDeMarcajes(escenario.admin, {
+      targetMarginPct: '70',
+      feteadoQuarterMarginPct: '80',
+    });
+
+    const regla = await resolvePricingRule(conPropio);
+    expect(regla.marcajes.base.valor).toBe('0.2');
+    expect(regla.marcajes.base.origen).toBe('PRODUCTO');
+    expect(regla.marcajes.especificos.feteadoQuarter.valor).toBe('0.6');
+    expect(regla.marcajes.especificos.feteadoQuarter.origen).toBe('FAMILIA');
   });
 });
 

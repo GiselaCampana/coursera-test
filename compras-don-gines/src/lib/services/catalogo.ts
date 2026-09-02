@@ -7,6 +7,7 @@ import { normalizarCodigo, normalizeText } from '@/lib/domain/matching';
 import { leerCatalogo, type FilaDeCatalogo } from '@/lib/domain/catalogo';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { learnProductAlias } from '@/lib/services/documents';
+import { reglaGeneralVigente } from '@/lib/services/pricing';
 import { toDecimal } from '@/lib/money';
 import type { MarginBasis } from '@/lib/domain/pricing';
 import type { FuenteDeMarcajes } from '@/lib/domain/marcajes';
@@ -686,6 +687,67 @@ export async function buscarEnCatalogo(
 // Marcajes por familia
 // ---------------------------------------------------------------------------
 
+/**
+ * Un porcentaje escrito a mano, listo para guardar. Vacío se guarda vacío.
+ *
+ * Vacío es "este nivel no dice nada" y deja que resuelva el de abajo. Un cero
+ * es un cero: vender al costo. Confundirlos es lo único que puede romper la
+ * cadena, así que la distinción se hace una sola vez, acá.
+ */
+function tasa(valor: string | null | undefined, etiqueta: string): string | null {
+  const raw = (valor ?? '').trim();
+  if (raw === '') return null;
+  const d = toDecimal(raw);
+  const fraccion = d.gt(1) ? d.div(100) : d;
+  if (fraccion.isNegative() || fraccion.gte(1)) {
+    throw new ValidationError(`El marcaje de ${etiqueta} tiene que estar entre 0 y menos de 100.`);
+  }
+  return fraccion.toString();
+}
+
+/** Los ocho marcajes específicos más el base, validados y listos para escribir. */
+function marcajesParaGuardar(valores: FuenteDeMarcajes) {
+  return {
+    targetMarginPct: tasa(valores.targetMarginPct, 'base'),
+    marginBasis: valores.marginBasis ?? null,
+    alCorteHormaDigitalMarginPct: tasa(valores.alCorteHormaDigitalMarginPct, 'horma digital'),
+    alCorteHormaCashMarginPct: tasa(valores.alCorteHormaCashMarginPct, 'horma efectivo'),
+    alCorteCajaCashMarginPct: tasa(valores.alCorteCajaCashMarginPct, 'caja efectivo'),
+    feteado100gMarginPct: tasa(valores.feteado100gMarginPct, '100 g'),
+    feteadoQuarterMarginPct: tasa(valores.feteadoQuarterMarginPct, '1/4 kg'),
+    feteadoPieceDigitalMarginPct: tasa(valores.feteadoPieceDigitalMarginPct, 'pieza digital'),
+    feteadoPieceCashMarginPct: tasa(valores.feteadoPieceCashMarginPct, 'pieza efectivo'),
+    wholeUnitMarginPct: tasa(valores.wholeUnitMarginPct, 'unidad entera'),
+  };
+}
+
+/** Lo que una fila de la base (familia o regla general) le dice al resolvedor. */
+function comoFuenteDeMarcajes(fila: {
+  targetMarginPct: { toString(): string } | null;
+  marginBasis: string | null;
+  alCorteHormaDigitalMarginPct: { toString(): string } | null;
+  alCorteHormaCashMarginPct: { toString(): string } | null;
+  alCorteCajaCashMarginPct: { toString(): string } | null;
+  feteado100gMarginPct: { toString(): string } | null;
+  feteadoQuarterMarginPct: { toString(): string } | null;
+  feteadoPieceDigitalMarginPct: { toString(): string } | null;
+  feteadoPieceCashMarginPct: { toString(): string } | null;
+  wholeUnitMarginPct: { toString(): string } | null;
+}): FuenteDeMarcajes {
+  return {
+    targetMarginPct: fila.targetMarginPct?.toString() ?? null,
+    marginBasis: (fila.marginBasis as MarginBasis | null) ?? null,
+    alCorteHormaDigitalMarginPct: fila.alCorteHormaDigitalMarginPct?.toString() ?? null,
+    alCorteHormaCashMarginPct: fila.alCorteHormaCashMarginPct?.toString() ?? null,
+    alCorteCajaCashMarginPct: fila.alCorteCajaCashMarginPct?.toString() ?? null,
+    feteado100gMarginPct: fila.feteado100gMarginPct?.toString() ?? null,
+    feteadoQuarterMarginPct: fila.feteadoQuarterMarginPct?.toString() ?? null,
+    feteadoPieceDigitalMarginPct: fila.feteadoPieceDigitalMarginPct?.toString() ?? null,
+    feteadoPieceCashMarginPct: fila.feteadoPieceCashMarginPct?.toString() ?? null,
+    wholeUnitMarginPct: fila.wholeUnitMarginPct?.toString() ?? null,
+  };
+}
+
 export interface FamiliaConMarcajes {
   id: string;
   nombre: string;
@@ -728,18 +790,7 @@ export async function familiasConMarcajes(user: AuthUser): Promise<FamiliaConMar
     nombre: f.name,
     articulos: total.get(f.id) ?? 0,
     heredanElBase: sinBase.get(f.id) ?? 0,
-    marcajes: {
-      targetMarginPct: f.targetMarginPct?.toString() ?? null,
-      marginBasis: (f.marginBasis as MarginBasis | null) ?? null,
-      alCorteHormaDigitalMarginPct: f.alCorteHormaDigitalMarginPct?.toString() ?? null,
-      alCorteHormaCashMarginPct: f.alCorteHormaCashMarginPct?.toString() ?? null,
-      alCorteCajaCashMarginPct: f.alCorteCajaCashMarginPct?.toString() ?? null,
-      feteado100gMarginPct: f.feteado100gMarginPct?.toString() ?? null,
-      feteadoQuarterMarginPct: f.feteadoQuarterMarginPct?.toString() ?? null,
-      feteadoPieceDigitalMarginPct: f.feteadoPieceDigitalMarginPct?.toString() ?? null,
-      feteadoPieceCashMarginPct: f.feteadoPieceCashMarginPct?.toString() ?? null,
-      wholeUnitMarginPct: f.wholeUnitMarginPct?.toString() ?? null,
-    },
+    marcajes: comoFuenteDeMarcajes(f),
   }));
 }
 
@@ -762,30 +813,7 @@ export async function guardarMarcajesDeFamilia(
   const familia = await prisma.productFamily.findUnique({ where: { id: familyId } });
   if (!familia) throw new NotFoundError('No encontramos esa familia.');
 
-  /** Vacío es "esta familia no dice nada", y se guarda como tal. */
-  const tasa = (valor: string | null | undefined, etiqueta: string): string | null => {
-    const raw = (valor ?? '').trim();
-    if (raw === '') return null;
-    const d = toDecimal(raw);
-    const fraccion = d.gt(1) ? d.div(100) : d;
-    if (fraccion.isNegative() || fraccion.gte(1)) {
-      throw new ValidationError(`El marcaje de ${etiqueta} tiene que estar entre 0 y menos de 100.`);
-    }
-    return fraccion.toString();
-  };
-
-  const data = {
-    targetMarginPct: tasa(valores.targetMarginPct, 'base'),
-    marginBasis: valores.marginBasis ?? null,
-    alCorteHormaDigitalMarginPct: tasa(valores.alCorteHormaDigitalMarginPct, 'horma digital'),
-    alCorteHormaCashMarginPct: tasa(valores.alCorteHormaCashMarginPct, 'horma efectivo'),
-    alCorteCajaCashMarginPct: tasa(valores.alCorteCajaCashMarginPct, 'caja efectivo'),
-    feteado100gMarginPct: tasa(valores.feteado100gMarginPct, '100 g'),
-    feteadoQuarterMarginPct: tasa(valores.feteadoQuarterMarginPct, '1/4 kg'),
-    feteadoPieceDigitalMarginPct: tasa(valores.feteadoPieceDigitalMarginPct, 'pieza digital'),
-    feteadoPieceCashMarginPct: tasa(valores.feteadoPieceCashMarginPct, 'pieza efectivo'),
-    wholeUnitMarginPct: tasa(valores.wholeUnitMarginPct, 'unidad entera'),
-  };
+  const data = marcajesParaGuardar(valores);
 
   const guardada = await prisma.productFamily.update({ where: { id: familyId }, data });
 
@@ -798,6 +826,152 @@ export async function guardarMarcajesDeFamilia(
       base: familia.targetMarginPct?.toString() ?? null,
       marginBasis: familia.marginBasis,
     },
+    after: { base: data.targetMarginPct, marginBasis: data.marginBasis },
+  });
+
+  return guardada;
+}
+
+// ---------------------------------------------------------------------------
+// La regla general
+// ---------------------------------------------------------------------------
+
+export interface ReglaGeneralDeMarcajes {
+  /** Null mientras no exista ninguna: la primera vez que se guarda se crea. */
+  id: string | null;
+  nombre: string;
+  marcajes: FuenteDeMarcajes;
+  /** Cuántos artículos activos no definen su base ni lo hereda su familia. */
+  dependenDeElla: number;
+}
+
+/**
+ * La regla general, tal como la lee el cálculo de precios.
+ *
+ * Se busca con la misma consulta que usa `resolvePricingRule`, no con otra
+ * parecida: lo que se edita acá es la fila que de verdad se aplica. Es lo que
+ * convierte la regla general en el tercer nivel de la cadena en lugar de una
+ * pantalla que muestra números que nadie usa.
+ */
+export async function reglaGeneralDeMarcajes(
+  user: AuthUser,
+): Promise<ReglaGeneralDeMarcajes> {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede configurar el catálogo.');
+  }
+
+  const regla = await reglaGeneralVigente();
+
+  /*
+   * A cuántos artículos les llega de verdad.
+   *
+   * Sólo a los que no tienen base propio **y** cuya familia tampoco lo define
+   * (o que no tienen familia). Los demás nunca ven la regla general, y decir
+   * "afecta a 300 artículos" cuando afecta a 12 haría que nadie se anime a
+   * tocarla.
+   */
+  const familiasConBase = await prisma.productFamily.findMany({
+    where: { targetMarginPct: { not: null } },
+    select: { id: true },
+  });
+  const dependenDeElla = await prisma.product.count({
+    where: {
+      active: true,
+      targetMarginPct: null,
+      /*
+       * Los sin familia van explícitos: un `notIn` no los alcanza.
+       *
+       * En SQL, comparar NULL contra una lista da NULL y la fila queda afuera,
+       * así que un artículo sin familia —que es el que más depende de la regla
+       * general— desaparecía de la cuenta en cuanto alguna familia definía su
+       * base.
+       */
+      OR: [{ familyId: null }, { familyId: { notIn: familiasConBase.map((f) => f.id) } }],
+    },
+  });
+
+  return {
+    id: regla?.id ?? null,
+    nombre: regla?.name ?? 'Regla general',
+    marcajes: regla
+      ? comoFuenteDeMarcajes(regla)
+      : {
+          targetMarginPct: null,
+          marginBasis: null,
+          alCorteHormaDigitalMarginPct: null,
+          alCorteHormaCashMarginPct: null,
+          alCorteCajaCashMarginPct: null,
+          feteado100gMarginPct: null,
+          feteadoQuarterMarginPct: null,
+          feteadoPieceDigitalMarginPct: null,
+          feteadoPieceCashMarginPct: null,
+          wholeUnitMarginPct: null,
+        },
+    dependenDeElla,
+  };
+}
+
+/**
+ * Guarda la regla general. No toca ningún artículo ni ninguna familia.
+ *
+ * Actualiza la fila vigente; si todavía no hay ninguna, la crea. Nunca crea una
+ * segunda: dos reglas generales activas serían dos configuraciones globales
+ * paralelas, que es justamente lo que no puede haber.
+ */
+export async function guardarReglaGeneralDeMarcajes(
+  user: AuthUser,
+  valores: FuenteDeMarcajes,
+) {
+  if (!hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR)) {
+    throw new ForbiddenError('Tu usuario no puede configurar el catálogo.');
+  }
+
+  const { targetMarginPct, marginBasis, ...especificos } = marcajesParaGuardar(valores);
+
+  /*
+   * Acá el base sí es obligatorio, y es la única diferencia con los otros dos
+   * niveles.
+   *
+   * Vacío significa heredar, pero abajo de la regla general no hay nada de
+   * dónde heredar: es el piso. Un piso vacío dejaría a los artículos que
+   * dependen de él sin ningún marcaje, y el precio saldría de un número
+   * escondido en el código en vez de una decisión que alguien tomó.
+   */
+  if (targetMarginPct === null) {
+    throw new ValidationError(
+      'La regla general necesita un marcaje base: es el último nivel y no hereda de nadie.',
+    );
+  }
+
+  const data = {
+    ...especificos,
+    targetMarginPct,
+    marginBasis: marginBasis ?? 'SOBRE_COSTO',
+  };
+  const actual = await reglaGeneralVigente();
+
+  const guardada = actual
+    ? await prisma.pricingRule.update({ where: { id: actual.id }, data })
+    : await prisma.pricingRule.create({
+        data: {
+          ...data,
+          name: 'Regla general',
+          productId: null,
+          active: true,
+          // Desde siempre: la regla general no tiene fecha de estreno, es el
+          // piso de la cadena.
+          validFrom: new Date('2020-01-01T00:00:00Z'),
+        },
+      });
+
+  await recordAudit({
+    userId: user.id,
+    action: AUDIT_ACTIONS.GENERAL_MARKUPS_UPDATED,
+    entity: 'PricingRule',
+    entityId: guardada.id,
+    before: actual
+      ? { base: actual.targetMarginPct?.toString() ?? null, marginBasis: actual.marginBasis }
+      : null,
     after: { base: data.targetMarginPct, marginBasis: data.marginBasis },
   });
 
