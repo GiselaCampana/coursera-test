@@ -68,11 +68,77 @@ type RespuestaDoh = { Answer?: Array<{ type?: number; data?: string }> };
 
 export const ORIGEN_DEL_CATALOGO = URL_CATALOGO;
 
+/**
+ * La clave con la que Control de Stock nos reconoce.
+ *
+ * Vive sólo en el entorno del servidor. No es NEXT_PUBLIC_, no viaja al
+ * navegador, no entra en ninguna respuesta y no se escribe en ningún registro:
+ * el único lugar donde aparece es el encabezado del pedido saliente.
+ *
+ * El **nombre del encabezado** también es configuración y no una suposición.
+ * Control de Stock contesta 401 con «INTEGRATION_KEY_REQUIRED» pero no dice en
+ * qué encabezado lo espera, y mandarlo en el que a uno le parece es fallar de
+ * nuevo con otro disfraz. Hasta que el contrato lo diga, lo declara quien
+ * administra el servidor.
+ */
+const NOMBRE_CLAVE = 'STOCK_INTEGRATION_KEY';
+const NOMBRE_ENCABEZADO = 'STOCK_INTEGRATION_HEADER';
+
+interface Credenciales {
+  encabezado: string;
+  clave: string;
+}
+
+/** Falta configuración. Se dice sin nombrar ningún valor. */
+function noConfigurada(): AppError {
+  return new AppError('La integración con Control de Stock no está configurada', {
+    status: 503,
+    code: 'STOCK_SIN_CONFIGURAR',
+  });
+}
+
+/** Control de Stock nos rechazó. Tampoco acá se repite nada de lo enviado. */
+function claveRechazada(): AppError {
+  return new AppError('La clave de integración fue rechazada', {
+    status: 502,
+    code: 'STOCK_CLAVE_RECHAZADA',
+  });
+}
+
+/**
+ * Lee las credenciales del entorno, o falla antes de salir a la red.
+ *
+ * Antes de cualquier pedido: sin clave no hay nada que intentar, y fallar
+ * temprano evita mandar un pedido incompleto que del otro lado quede
+ * registrado como un intento fallido de autenticación.
+ */
+function credenciales(): Credenciales {
+  const clave = process.env[NOMBRE_CLAVE]?.trim();
+  const encabezado = process.env[NOMBRE_ENCABEZADO]?.trim();
+  if (!clave || !encabezado) throw noConfigurada();
+  return { encabezado, clave };
+}
+
+/**
+ * Saca la clave de un texto que va a mostrarse o registrarse.
+ *
+ * No debería hacer falta —la clave viaja en un encabezado y no en la URL ni en
+ * el cuerpo— y justamente por eso está: es barato, y el día que alguien sume un
+ * camino nuevo que la incluya sin darse cuenta, esto la tapa igual.
+ */
+export function sinLaClave(texto: string): string {
+  const clave = process.env[NOMBRE_CLAVE]?.trim();
+  if (!clave || clave.length < 4) return texto;
+  return texto.split(clave).join('«clave oculta»');
+}
+
 /** Un error de descarga, ya redactado para mostrar en pantalla. */
 function noSePudo(detalle: string): AppError {
   return new AppError(
-    `No pude traer el catálogo de Control de Stock: ${detalle} No se modificó ningún dato. ` +
-      'Probá de nuevo en unos segundos.',
+    sinLaClave(
+      `No pude traer el catálogo de Control de Stock: ${detalle} No se modificó ningún dato. ` +
+        'Probá de nuevo en unos segundos.',
+    ),
     { status: 502, code: 'STOCK_NO_DISPONIBLE' },
   );
 }
@@ -132,7 +198,7 @@ async function resolverPorDoh(): Promise<string[]> {
   return crudas.filter((ip) => pareceIpv4(ip) && !esDireccionPrivada(ip));
 }
 
-function descargarPorIp(ip: string): Promise<string> {
+function descargarPorIp(ip: string, credencial: Credenciales): Promise<string> {
   return new Promise<string>((resolve, reject) => {
     const pedido = https.request(
       {
@@ -147,12 +213,18 @@ function descargarPorIp(ip: string): Promise<string> {
           host: HOST,
           accept: 'application/json',
           'user-agent': 'Compras-Don-Gines/1.0',
+          [credencial.encabezado]: credencial.clave,
         },
         timeout: TIEMPO_LIMITE_MS,
         rejectUnauthorized: true,
       },
       (respuesta) => {
         const estado = respuesta.statusCode ?? 0;
+        if (estado === 401 || estado === 403) {
+          respuesta.resume();
+          reject(claveRechazada());
+          return;
+        }
         if (estado < 200 || estado >= 300) {
           respuesta.resume();
           reject(new Error(`Control de Stock respondió ${estado}`));
@@ -187,17 +259,37 @@ function descargarPorIp(ip: string): Promise<string> {
 
 /** El texto crudo del catálogo. Quien lo valida es otro. */
 export async function descargarCatalogoDeStock(): Promise<string> {
+  /*
+   * Las credenciales primero, antes de tocar la red.
+   *
+   * Si falta configuración no hay nada que intentar, y además así no se manda
+   * un pedido sin clave que del otro lado quede anotado como un intento
+   * fallido de autenticación.
+   */
+  const credencial = credenciales();
   let ultimoError: unknown;
 
   // Camino normal: el más rápido cuando el DNS del servidor funciona.
   try {
     const respuesta = await fetch(URL_CATALOGO, {
       cache: 'no-store',
-      headers: { accept: 'application/json' },
+      headers: {
+        accept: 'application/json',
+        [credencial.encabezado]: credencial.clave,
+      },
       signal: AbortSignal.timeout(TIEMPO_LIMITE_MS),
-      // Una redirección sacaría el pedido del dominio autorizado.
+      // Una redirección sacaría el pedido del dominio autorizado —y se llevaría
+      // la clave con él.
       redirect: 'error',
     });
+    /*
+     * Un rechazo de credenciales termina acá.
+     *
+     * No se prueba el camino de respaldo: 401 quiere decir que llegamos y que
+     * no nos reconocieron, así que resolver el nombre por otra vía sólo
+     * mandaría la misma clave otra vez para que la vuelvan a rechazar.
+     */
+    if (respuesta.status === 401 || respuesta.status === 403) throw claveRechazada();
     if (!respuesta.ok) throw new Error(`Control de Stock respondió ${respuesta.status}`);
     const texto = await leerConLimite(respuesta);
     if (texto.trim() === '') throw new Error('la respuesta vino vacía');
@@ -207,14 +299,15 @@ export async function descargarCatalogoDeStock(): Promise<string> {
     ultimoError = error;
   }
 
-  // Camino de respaldo, sólo si el primero falló.
+  // Camino de respaldo, sólo si el primero falló por no poder llegar.
   try {
     const ips = await resolverPorDoh();
     for (const ip of ips) {
       try {
-        const texto = await descargarPorIp(ip);
+        const texto = await descargarPorIp(ip, credencial);
         if (texto.trim() !== '') return texto;
       } catch (error) {
+        if (error instanceof AppError) throw error;
         ultimoError = error;
       }
     }
@@ -222,10 +315,16 @@ export async function descargarCatalogoDeStock(): Promise<string> {
       ultimoError = new Error('el DNS no devolvió ninguna dirección pública utilizable');
     }
   } catch (error) {
+    if (error instanceof AppError) throw error;
     ultimoError = error;
   }
 
-  console.error('No se pudo leer el catálogo de Control de Stock', ultimoError);
-  const detalle = ultimoError instanceof Error ? ultimoError.message : 'no respondió.';
-  throw noSePudo(`${detalle}.`);
+  /*
+   * Lo que se registra pasa por el mismo filtro que lo que se muestra.
+   * Un log no es un lugar más seguro que una pantalla: lo lee cualquiera que
+   * tenga acceso al panel de Render.
+   */
+  const crudo = ultimoError instanceof Error ? ultimoError.message : String(ultimoError ?? '');
+  console.error('No se pudo leer el catálogo de Control de Stock:', sinLaClave(crudo));
+  throw noSePudo(`${crudo || 'no respondió'}.`);
 }

@@ -175,6 +175,28 @@ Todas están documentadas en [`.env.example`](.env.example). Las que importan:
 |---|---|---|
 | `OCR_MAX_ATTEMPTS` | `3` | Vueltas de relectura focalizada cuando el detalle no cierra. |
 
+### Integración con Control de Stock
+
+El catálogo lo trae el **servidor** de Compras, nunca el navegador: Safari bloquea el pedido
+entre dominios, y además así la clave no sale del servidor. Control de Stock exige una clave
+compartida y contesta `401` con `INTEGRATION_KEY_REQUIRED` si no llega.
+
+Sin las dos variables, la pantalla dice *«La integración con Control de Stock no está
+configurada»* y no sale a la red. Si Control de Stock rechaza la clave, dice *«La clave de
+integración fue rechazada»*. En ningún caso el valor aparece en la pantalla, en la respuesta
+ni en los registros.
+
+| Variable | Por defecto | Para qué |
+|---|---|---|
+| `STOCK_INTEGRATION_KEY` | — | La clave compartida. **Secreta**: se carga en el panel de Render y en Control de Stock, nunca en el repositorio. Jamás `NEXT_PUBLIC_`. |
+| `STOCK_INTEGRATION_HEADER` | — | El nombre del encabezado HTTP en el que Control de Stock espera la clave. No se adivina: lo define el contrato de esa aplicación. |
+| `STOCK_CATALOG_URL` | El endpoint de producción | Sólo para apuntar a un entorno de prueba. Exige `https`, salvo contra la máquina local. |
+| `STOCK_SCHEMA_VERSIONS` | `1,1.0,1.0.0` | Versiones de esquema aceptadas. **Reemplaza** la lista, no la agrega: para sumar la `2.0` hay que escribir `1,1.0,1.0.0,2.0`. No saltea ninguna otra validación. |
+
+El encabezado es configuración y no una suposición: mandar la clave en el que a uno le parezca
+es volver a fallar con otro disfraz. Si Control de Stock cambia el nombre, se cambia la variable
+sin desplegar.
+
 ### Identificación de la versión
 
 Ninguna hace falta en Render: la plataforma define `RENDER_GIT_COMMIT` y `RENDER_GIT_BRANCH`

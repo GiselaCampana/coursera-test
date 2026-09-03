@@ -12,8 +12,43 @@
  * cuando la prueba se lo pide, para poder mirar una modificación.
  */
 import { createServer } from 'node:http';
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/*
+ * El mismo entorno que el servidor de la aplicación.
+ *
+ * Playwright lanza este proceso por su cuenta, así que no hereda lo que
+ * `servidor-e2e.mjs` carga. Sin esto los dos lados usarían claves distintas y
+ * la prueba fallaría por la configuración y no por el código.
+ */
+const raiz = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const rutaEnv = path.join(raiz, '.env.e2e');
+if (existsSync(rutaEnv)) {
+  for (const linea of readFileSync(rutaEnv, 'utf8').split('\n')) {
+    const limpia = linea.trim();
+    if (limpia === '' || limpia.startsWith('#')) continue;
+    const corte = limpia.indexOf('=');
+    if (corte < 0) continue;
+    const clave = limpia.slice(0, corte).trim();
+    if (process.env[clave] !== undefined) continue;
+    process.env[clave] = limpia.slice(corte + 1).trim().replace(/^["']|["']$/g, '');
+  }
+}
 
 const PUERTO = Number(process.env.STOCK_FALSO_PUERTO ?? 3111);
+
+/**
+ * La clave que este Control de Stock de mentira exige, igual que el real.
+ *
+ * Sin esto, la prueba del navegador pasaría con o sin autenticación y no diría
+ * nada sobre lo único que se agregó: que el pedido sale firmado. Los dos
+ * valores son de prueba y viven en `.env.e2e`; el secreto de verdad no está en
+ * el repositorio.
+ */
+const ENCABEZADO = (process.env.STOCK_INTEGRATION_HEADER ?? 'x-integration-key').toLowerCase();
+const CLAVE = process.env.STOCK_INTEGRATION_KEY ?? '';
 
 /** Los PLU del sembrado de pruebas, para que ninguno quede inactivo por error. */
 const DEL_SEMBRADO = [
@@ -73,6 +108,22 @@ const servidor = createServer((pedido, respuesta) => {
   }
 
   if (url.pathname === '/api/integrations/catalog') {
+    // Se contesta igual que el real: 401 con el código, sin decir nada de la
+    // clave esperada.
+    const recibida = pedido.headers[ENCABEZADO];
+    // La variante 401 rechaza aunque la clave sea la correcta: es como la
+    // prueba pide ver el caso que la usuaria encontró en producción.
+    if (variante === 401 || recibida === undefined) {
+      respuesta.writeHead(401, { 'content-type': 'application/json' });
+      respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_REQUIRED' }));
+      return;
+    }
+    if (recibida !== CLAVE) {
+      respuesta.writeHead(401, { 'content-type': 'application/json' });
+      respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_INVALID' }));
+      return;
+    }
+
     respuesta.writeHead(200, { 'content-type': 'application/json' });
     respuesta.end(JSON.stringify(catalogo()));
     return;

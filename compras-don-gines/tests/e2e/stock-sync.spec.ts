@@ -249,6 +249,31 @@ test.describe('sincronización con Control de Stock', () => {
     await servirVariante(1);
   });
 
+  test('si Control de Stock rechaza la clave, lo dice y no toca nada', async ({ page }) => {
+    /*
+     * El caso que la usuaria vio en producción: Control de Stock contesta 401
+     * con «INTEGRATION_KEY_REQUIRED». Lo que hace falta es que la pantalla lo
+     * diga con palabras que se entiendan —no «error 401»— y que no se escriba
+     * una sola fila.
+     */
+    const antes = await loQueEsDeCompras();
+    await servirVariante(401);
+
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/catalogo');
+    const tarjeta = page.locator('.card').filter({
+      has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
+    });
+    await tarjeta.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
+
+    await expect(tarjeta.getByText('La clave de integración fue rechazada')).toBeVisible();
+    // Y no hay nada que confirmar: sin catálogo no hay vista previa.
+    await expect(tarjeta.getByRole('button', { name: 'Confirmar y aplicar' })).toHaveCount(0);
+    expect(await loQueEsDeCompras()).toEqual(antes);
+
+    await servirVariante(1);
+  });
+
   test('un operador no sincroniza el catálogo', async ({ page }) => {
     await ingresar(page, 'operador');
     await page.goto('/configuracion/catalogo');
