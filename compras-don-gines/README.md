@@ -181,21 +181,29 @@ El catálogo lo trae el **servidor** de Compras, nunca el navegador: Safari bloq
 entre dominios, y además así la clave no sale del servidor. Control de Stock exige una clave
 compartida y contesta `401` con `INTEGRATION_KEY_REQUIRED` si no llega.
 
-Sin las dos variables, la pantalla dice *«La integración con Control de Stock no está
-configurada»* y no sale a la red. Si Control de Stock rechaza la clave, dice *«La clave de
-integración fue rechazada»*. En ningún caso el valor aparece en la pantalla, en la respuesta
-ni en los registros.
+El pedido sale así, y el `Bearer ` lo pone el código:
+
+```
+Authorization: Bearer <STOCK_INTEGRATION_KEY>
+```
+
+**Hay un solo secreto que cargar: `STOCK_INTEGRATION_KEY`.** Sin esa variable la pantalla dice
+*«La integración con Control de Stock no está configurada»* y no sale a la red. Si Control de
+Stock rechaza la clave, dice *«La clave de integración fue rechazada»*. En ningún caso el valor
+aparece en la pantalla, en la respuesta ni en los registros.
 
 | Variable | Por defecto | Para qué |
 |---|---|---|
-| `STOCK_INTEGRATION_KEY` | — | La clave compartida. **Secreta**: se carga en el panel de Render y en Control de Stock, nunca en el repositorio. Jamás `NEXT_PUBLIC_`. |
-| `STOCK_INTEGRATION_HEADER` | — | El nombre del encabezado HTTP en el que Control de Stock espera la clave. No se adivina: lo define el contrato de esa aplicación. |
+| `STOCK_INTEGRATION_KEY` | — | La clave compartida. **Secreta**: se carga en el panel de Render y en Control de Stock, nunca en el repositorio. Jamás `NEXT_PUBLIC_`. Se pega sola, sin `Bearer `. |
+| `STOCK_INTEGRATION_HEADER` | `Authorization` | Casi nunca hace falta. Está por si Control de Stock cambia el encabezado, para poder seguirlo sin desplegar. Un encabezado propio (`x-api-key`) lleva la clave sola, sin esquema. |
 | `STOCK_CATALOG_URL` | El endpoint de producción | Sólo para apuntar a un entorno de prueba. Exige `https`, salvo contra la máquina local. |
 | `STOCK_SCHEMA_VERSIONS` | `1,1.0,1.0.0` | Versiones de esquema aceptadas. **Reemplaza** la lista, no la agrega: para sumar la `2.0` hay que escribir `1,1.0,1.0.0,2.0`. No saltea ninguna otra validación. |
 
-El encabezado es configuración y no una suposición: mandar la clave en el que a uno le parezca
-es volver a fallar con otro disfraz. Si Control de Stock cambia el nombre, se cambia la variable
-sin desplegar.
+El esquema lo arma el código a propósito. `Authorization` no lleva la credencial sola: lleva un
+esquema y después la credencial, y mandar la clave cruda ahí es exactamente el `401` que hubo
+que diagnosticar. Dejarlo librado a que quien carga el secreto escriba el prefijo sería volver
+a ese error por una vía distinta. Si la clave igual se pega con el prefijo puesto, no se
+duplica.
 
 ### Identificación de la versión
 

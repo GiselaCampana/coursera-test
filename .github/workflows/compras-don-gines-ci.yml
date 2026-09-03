@@ -86,7 +86,6 @@ jobs:
           STORAGE_SIGNING_SECRET="ci-only-secret-do-not-use-in-production"
           APP_URL="http://127.0.0.1:3100"
           STOCK_CATALOG_URL="http://127.0.0.1:3111/api/integrations/catalog"
-          STOCK_INTEGRATION_HEADER="x-integration-key"
           STOCK_INTEGRATION_KEY="clave-de-prueba-e2e-no-es-un-secreto"
           EOF
 

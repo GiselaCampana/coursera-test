@@ -43,12 +43,16 @@ const PUERTO = Number(process.env.STOCK_FALSO_PUERTO ?? 3111);
  * La clave que este Control de Stock de mentira exige, igual que el real.
  *
  * Sin esto, la prueba del navegador pasaría con o sin autenticación y no diría
- * nada sobre lo único que se agregó: que el pedido sale firmado. Los dos
- * valores son de prueba y viven en `.env.e2e`; el secreto de verdad no está en
+ * nada sobre lo único que se agregó: que el pedido sale firmado. Y exige el
+ * mismo formato que el real —`Authorization: Bearer <clave>`, confirmado
+ * contra el endpoint—, así que mandar la clave cruda tampoco alcanza acá.
+ *
+ * El valor es de prueba y vive en `.env.e2e`; el secreto de verdad no está en
  * el repositorio.
  */
-const ENCABEZADO = (process.env.STOCK_INTEGRATION_HEADER ?? 'x-integration-key').toLowerCase();
+const ENCABEZADO = (process.env.STOCK_INTEGRATION_HEADER ?? 'Authorization').toLowerCase();
 const CLAVE = process.env.STOCK_INTEGRATION_KEY ?? '';
+const ESPERADO = ENCABEZADO === 'authorization' ? `Bearer ${CLAVE}` : CLAVE;
 
 /** Los PLU del sembrado de pruebas, para que ninguno quede inactivo por error. */
 const DEL_SEMBRADO = [
@@ -118,9 +122,10 @@ const servidor = createServer((pedido, respuesta) => {
       respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_REQUIRED' }));
       return;
     }
-    if (recibida !== CLAVE) {
+    // La clave cruda, sin el «Bearer », se rechaza igual que una equivocada.
+    if (recibida !== ESPERADO) {
       respuesta.writeHead(401, { 'content-type': 'application/json' });
-      respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_INVALID' }));
+      respuesta.end(JSON.stringify({ ok: false, code: 'INVALID_INTEGRATION_KEY' }));
       return;
     }
 

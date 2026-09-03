@@ -4,13 +4,21 @@ import { createServer, type Server } from 'node:http';
 /**
  * La clave de integración con Control de Stock.
  *
- * Lo que se comprueba acá no es que la autenticación "funcione" —eso lo dice
- * cualquier corrida contra el servicio real— sino las cuatro cosas que hacen
+ * El contrato quedó confirmado contra el endpoint real, probando con un valor
+ * ficticio: sin encabezado contesta «INTEGRATION_KEY_REQUIRED», y con
+ * `Authorization: Bearer <lo que sea>` contesta «INVALID_INTEGRATION_KEY».
+ * Este servidor de prueba contesta igual, así que la clave cruda en el
+ * encabezado correcto tampoco alcanza acá: si el código dejara de poner el
+ * «Bearer », estas pruebas fallarían del mismo modo que falla producción.
+ *
+ * Lo que se comprueba no es que la autenticación "funcione" —eso lo dice
+ * cualquier corrida contra el servicio real— sino las cinco cosas que hacen
  * que una clave compartida no se convierta en un problema:
  *
  *  - que sin configurar, la aplicación lo diga y no salga a la red;
  *  - que si la rechazan, lo diga con esas palabras y no con un error genérico;
- *  - que cuando está bien, viaje **en el encabezado** y en ningún otro lado;
+ *  - que viaje en `Authorization` sin que nadie tenga que configurarlo;
+ *  - que viaje como `Bearer <clave>`, con el esquema puesto por el código;
  *  - y que no aparezca en la respuesta, ni en el mensaje de error, ni en la
  *    consola. Un secreto en un log no está más protegido que uno en pantalla:
  *    lo lee cualquiera que entre al panel de Render.
@@ -21,8 +29,9 @@ import { createServer, type Server } from 'node:http';
 
 const PUERTO = 3122;
 const ORIGEN = `http://127.0.0.1:${PUERTO}/api/integrations/catalog`;
-const ENCABEZADO = 'x-clave-de-prueba';
 const CLAVE = 'clave-secreta-de-prueba-9f3a71';
+/** Lo único que este servidor acepta. La clave sola no. */
+const ESPERADO = `Bearer ${CLAVE}`;
 
 /** Un catálogo mínimo pero válido, para que el caso feliz llegue hasta el final. */
 const CATALOGO = JSON.stringify({
@@ -41,16 +50,16 @@ let servidor: Server;
 beforeAll(async () => {
   servidor = createServer((pedido, respuesta) => {
     recibido = { encabezados: pedido.headers, url: pedido.url ?? '' };
-    const clave = pedido.headers[ENCABEZADO];
+    const autorizacion = pedido.headers.authorization;
 
-    if (clave === undefined) {
+    if (autorizacion === undefined) {
       respuesta.writeHead(401, { 'content-type': 'application/json' });
       respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_REQUIRED' }));
       return;
     }
-    if (clave !== CLAVE) {
+    if (autorizacion !== ESPERADO) {
       respuesta.writeHead(401, { 'content-type': 'application/json' });
-      respuesta.end(JSON.stringify({ ok: false, code: 'INTEGRATION_KEY_INVALID' }));
+      respuesta.end(JSON.stringify({ ok: false, code: 'INVALID_INTEGRATION_KEY' }));
       return;
     }
     respuesta.writeHead(200, { 'content-type': 'application/json' });
@@ -74,6 +83,12 @@ async function conEntorno(entorno: Record<string, string | undefined>) {
   return await import('@/lib/services/stock-descarga');
 }
 
+/** Sólo la clave: el encabezado tiene que salir del código, no del entorno. */
+const SOLO_LA_CLAVE = {
+  STOCK_INTEGRATION_KEY: CLAVE,
+  STOCK_INTEGRATION_HEADER: undefined,
+};
+
 const original = { ...process.env };
 
 beforeEach(() => {
@@ -89,7 +104,7 @@ describe('sin configurar', () => {
   it('lo dice con esas palabras, y no sale a la red', async () => {
     const { descargarCatalogoDeStock } = await conEntorno({
       STOCK_INTEGRATION_KEY: undefined,
-      STOCK_INTEGRATION_HEADER: ENCABEZADO,
+      STOCK_INTEGRATION_HEADER: undefined,
     });
 
     await expect(descargarCatalogoDeStock()).rejects.toThrow(
@@ -102,20 +117,14 @@ describe('sin configurar', () => {
     expect(recibido).toBeNull();
   });
 
-  it('también cuando falta el nombre del encabezado', async () => {
+  it('falta configuración es sólo la clave, no el encabezado', async () => {
     /*
-     * El encabezado es parte del contrato y no se adivina. Sin él, mandar la
-     * clave en el que a uno le parezca es fallar de nuevo con otro disfraz.
+     * El encabezado ya no es una incógnita: el contrato dice `Authorization`.
+     * Pedirlo por variable obligaría a cargar dos secretos donde hay uno solo,
+     * y dejaría la integración caída por olvidar el que no es secreto.
      */
-    const { descargarCatalogoDeStock } = await conEntorno({
-      STOCK_INTEGRATION_KEY: CLAVE,
-      STOCK_INTEGRATION_HEADER: undefined,
-    });
-
-    await expect(descargarCatalogoDeStock()).rejects.toThrow(
-      'La integración con Control de Stock no está configurada',
-    );
-    expect(recibido).toBeNull();
+    const { descargarCatalogoDeStock } = await conEntorno(SOLO_LA_CLAVE);
+    await expect(descargarCatalogoDeStock()).resolves.toBeTruthy();
   });
 });
 
@@ -123,7 +132,7 @@ describe('con la clave rechazada', () => {
   it('lo dice con esas palabras y no como un error genérico', async () => {
     const { descargarCatalogoDeStock } = await conEntorno({
       STOCK_INTEGRATION_KEY: 'una-clave-que-no-es',
-      STOCK_INTEGRATION_HEADER: ENCABEZADO,
+      STOCK_INTEGRATION_HEADER: undefined,
     });
 
     await expect(descargarCatalogoDeStock()).rejects.toThrow(
@@ -152,16 +161,43 @@ describe('con la clave rechazada', () => {
 });
 
 describe('con la clave correcta', () => {
-  it('el catálogo llega, y la clave viajó en el encabezado', async () => {
-    const { descargarCatalogoDeStock } = await conEntorno({
-      STOCK_INTEGRATION_KEY: CLAVE,
-      STOCK_INTEGRATION_HEADER: ENCABEZADO,
-    });
+  it('el catálogo llega, y viajó en Authorization sin configurar nada', async () => {
+    const { descargarCatalogoDeStock } = await conEntorno(SOLO_LA_CLAVE);
 
     const texto = await descargarCatalogoDeStock();
     expect(JSON.parse(texto).products).toHaveLength(1);
 
-    expect(recibido!.encabezados[ENCABEZADO]).toBe(CLAVE);
+    // Presencia exacta del encabezado, y de ese y no de otro.
+    expect(Object.keys(recibido!.encabezados)).toContain('authorization');
+  });
+
+  it('el formato es «Bearer <clave>», no la clave cruda', async () => {
+    /*
+     * Lo que costó el 401 de producción. `Authorization` no lleva la credencial
+     * sola: lleva un esquema y después la credencial. Y el esquema lo pone el
+     * código, para que no dependa de que quien carga el secreto en Render se
+     * acuerde de escribirlo.
+     */
+    const { descargarCatalogoDeStock } = await conEntorno(SOLO_LA_CLAVE);
+    await descargarCatalogoDeStock();
+
+    expect(recibido!.encabezados.authorization).toBe(`Bearer ${CLAVE}`);
+    expect(recibido!.encabezados.authorization).not.toBe(CLAVE);
+  });
+
+  it('no duplica el prefijo si la clave ya viene con él', async () => {
+    /*
+     * Un error de carga fácil de cometer —pegar «Bearer abc…» en el panel— y
+     * que del otro lado se vería igual que una clave equivocada: «Bearer Bearer
+     * abc…» es un 401 que nadie sabría de dónde viene.
+     */
+    const { descargarCatalogoDeStock } = await conEntorno({
+      STOCK_INTEGRATION_KEY: `Bearer ${CLAVE}`,
+      STOCK_INTEGRATION_HEADER: undefined,
+    });
+
+    await expect(descargarCatalogoDeStock()).resolves.toBeTruthy();
+    expect(recibido!.encabezados.authorization).toBe(`Bearer ${CLAVE}`);
   });
 
   it('la clave no viaja en la dirección ni en ningún otro encabezado', async () => {
@@ -170,15 +206,12 @@ describe('con la clave correcta', () => {
      * el historial de cualquier intermediario y en el «referer». El encabezado
      * es el único lugar donde no queda anotada sola.
      */
-    const { descargarCatalogoDeStock } = await conEntorno({
-      STOCK_INTEGRATION_KEY: CLAVE,
-      STOCK_INTEGRATION_HEADER: ENCABEZADO,
-    });
+    const { descargarCatalogoDeStock } = await conEntorno(SOLO_LA_CLAVE);
     await descargarCatalogoDeStock();
 
     expect(recibido!.url).not.toContain(CLAVE);
     for (const [nombre, valor] of Object.entries(recibido!.encabezados)) {
-      if (nombre === ENCABEZADO) continue;
+      if (nombre === 'authorization') continue;
       expect(String(valor), `la clave apareció en «${nombre}»`).not.toContain(CLAVE);
     }
   });
@@ -195,7 +228,7 @@ describe('la clave no se filtra', () => {
     vi.resetModules();
     process.env.STOCK_CATALOG_URL = `http://127.0.0.1:${PUERTO + 7}/api/integrations/catalog`;
     process.env.STOCK_INTEGRATION_KEY = CLAVE;
-    process.env.STOCK_INTEGRATION_HEADER = ENCABEZADO;
+    delete process.env.STOCK_INTEGRATION_HEADER;
     const { descargarCatalogoDeStock } = await import('@/lib/services/stock-descarga');
 
     const error = await descargarCatalogoDeStock().catch((e) => e);
@@ -211,10 +244,7 @@ describe('la clave no se filtra', () => {
      * este filtro no tiene nada que tapar. Está para el día que alguien sume un
      * camino que la incluya sin darse cuenta.
      */
-    const { sinLaClave } = await conEntorno({
-      STOCK_INTEGRATION_KEY: CLAVE,
-      STOCK_INTEGRATION_HEADER: ENCABEZADO,
-    });
+    const { sinLaClave } = await conEntorno(SOLO_LA_CLAVE);
     expect(sinLaClave(`falló con ${CLAVE} adentro`)).toBe('falló con «clave oculta» adentro');
     expect(sinLaClave('un mensaje cualquiera')).toBe('un mensaje cualquiera');
   });

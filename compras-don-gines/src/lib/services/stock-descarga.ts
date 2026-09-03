@@ -75,18 +75,22 @@ export const ORIGEN_DEL_CATALOGO = URL_CATALOGO;
  * navegador, no entra en ninguna respuesta y no se escribe en ningún registro:
  * el único lugar donde aparece es el encabezado del pedido saliente.
  *
- * El **nombre del encabezado** también es configuración y no una suposición.
- * Control de Stock contesta 401 con «INTEGRATION_KEY_REQUIRED» pero no dice en
- * qué encabezado lo espera, y mandarlo en el que a uno le parece es fallar de
- * nuevo con otro disfraz. Hasta que el contrato lo diga, lo declara quien
- * administra el servidor.
+ * El encabezado quedó confirmado contra el endpoint real, probando con un valor
+ * ficticio: sin encabezado contesta «INTEGRATION_KEY_REQUIRED», y con
+ * `Authorization: Bearer <lo que sea>` contesta «INVALID_INTEGRATION_KEY». Es
+ * decir que lee ese encabezado y ese esquema. Por eso `Authorization` es el
+ * valor canónico y no hay que configurarlo; STOCK_INTEGRATION_HEADER queda
+ * solamente por si Control de Stock lo cambia, para poder seguirlo sin
+ * desplegar.
  */
 const NOMBRE_CLAVE = 'STOCK_INTEGRATION_KEY';
 const NOMBRE_ENCABEZADO = 'STOCK_INTEGRATION_HEADER';
+const ENCABEZADO_CANONICO = 'Authorization';
 
 interface Credenciales {
   encabezado: string;
-  clave: string;
+  /** Lo que se manda: ya con el esquema puesto, no la clave cruda. */
+  valor: string;
 }
 
 /** Falta configuración. Se dice sin nombrar ningún valor. */
@@ -106,6 +110,28 @@ function claveRechazada(): AppError {
 }
 
 /**
+ * Arma el valor del encabezado: el esquema lo pone el código, no la variable.
+ *
+ * `Authorization` no lleva la clave cruda: lleva un esquema y después la
+ * credencial. Mandar la clave sola en ese encabezado es exactamente el error
+ * que Control de Stock contesta con 401, así que el «Bearer » no puede quedar
+ * librado a que quien carga el secreto se acuerde de escribirlo.
+ *
+ * Y si igual lo escribió, no se duplica: una clave que ya viene con el
+ * prefijo se normaliza en vez de convertirse en «Bearer Bearer …». Es un error
+ * de configuración fácil de cometer y que del otro lado se vería igual que una
+ * clave equivocada.
+ *
+ * Un encabezado que no sea `Authorization` no lleva esquema: los encabezados
+ * propios —un `x-api-key`, por ejemplo— llevan la credencial sola.
+ */
+function valorDelEncabezado(encabezado: string, clave: string): string {
+  if (encabezado.toLowerCase() !== 'authorization') return clave;
+  const yaTraePrefijo = /^bearer\s+/i.exec(clave);
+  return `Bearer ${yaTraePrefijo ? clave.slice(yaTraePrefijo[0].length) : clave}`;
+}
+
+/**
  * Lee las credenciales del entorno, o falla antes de salir a la red.
  *
  * Antes de cualquier pedido: sin clave no hay nada que intentar, y fallar
@@ -114,9 +140,9 @@ function claveRechazada(): AppError {
  */
 function credenciales(): Credenciales {
   const clave = process.env[NOMBRE_CLAVE]?.trim();
-  const encabezado = process.env[NOMBRE_ENCABEZADO]?.trim();
-  if (!clave || !encabezado) throw noConfigurada();
-  return { encabezado, clave };
+  if (!clave) throw noConfigurada();
+  const encabezado = process.env[NOMBRE_ENCABEZADO]?.trim() || ENCABEZADO_CANONICO;
+  return { encabezado, valor: valorDelEncabezado(encabezado, clave) };
 }
 
 /**
@@ -213,7 +239,7 @@ function descargarPorIp(ip: string, credencial: Credenciales): Promise<string> {
           host: HOST,
           accept: 'application/json',
           'user-agent': 'Compras-Don-Gines/1.0',
-          [credencial.encabezado]: credencial.clave,
+          [credencial.encabezado]: credencial.valor,
         },
         timeout: TIEMPO_LIMITE_MS,
         rejectUnauthorized: true,
@@ -275,7 +301,7 @@ export async function descargarCatalogoDeStock(): Promise<string> {
       cache: 'no-store',
       headers: {
         accept: 'application/json',
-        [credencial.encabezado]: credencial.clave,
+        [credencial.encabezado]: credencial.valor,
       },
       signal: AbortSignal.timeout(TIEMPO_LIMITE_MS),
       // Una redirección sacaría el pedido del dominio autorizado —y se llevaría
