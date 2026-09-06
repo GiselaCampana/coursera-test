@@ -116,6 +116,19 @@ afterAll(async () => {
   if (worker) await worker.terminate();
 });
 
+/**
+ * Interpreta lo leído con el analizador real del servidor.
+ *
+ * Contar líneas visuales no alcanza para saber si una factura entra: lo que
+ * decide es cuántos artículos se entienden y si el comprobante cierra. Se usa
+ * el camino de diagnóstico, que corre los mismos analizadores y los mismos
+ * controles sin tocar la base.
+ */
+async function interpretar(lectura: { paginas: unknown[] }) {
+  const { analizarSinGuardar } = await import('@/lib/services/lectura');
+  return analizarSinGuardar(lectura.paginas as Parameters<typeof analizarSinGuardar>[0]);
+}
+
 /** Corre el lector de producción sobre una foto y devuelve lo que sacó. */
 async function leerFoto(archivo: string) {
   const { SesionLectura } = await import('@/lib/cliente/ocr/lector');
@@ -170,6 +183,14 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       console.log('  códigos ausentes:', faltan.map((a) => a.codigo).join(' '));
       console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
 
+      const i = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${i.articulos} artículos · analizador ${i.analizador} · estado ${i.estado} · ` +
+          `filas detector ${i.filasDelDetector} · sin resolver ${i.filasSinResolver} · esperadas ${i.filasEsperadas}`,
+      );
+      console.log('  controles en error:', JSON.stringify(i.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
+      console.log('  calculado:', JSON.stringify(i.calculado));
+
       // El piso que hay que mover. Se afirma sobre el número real de hoy para
       // que cualquier cambio del preproceso se note, en la dirección que sea.
       expect(conSubtotal.length).toBeGreaterThan(0);
@@ -198,6 +219,14 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           `total ${(total / 1000).toFixed(1)}s`,
       );
       console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
+      const interpretado = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${interpretado.articulos} artículos · analizador ${interpretado.analizador} · ` +
+          `estado ${interpretado.estado} · filas detector ${interpretado.filasDelDetector} · ` +
+          `sin resolver ${interpretado.filasSinResolver}`,
+      );
+      console.log('  controles en error:', JSON.stringify(interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
+      console.log('  calculado:', JSON.stringify(interpretado.calculado));
       console.log('  ¿nº 00212356?', plano.includes('00212356'));
       console.log('  ¿total 2.196.120,52?', plano.includes('2.196.120,52'));
 
@@ -227,6 +256,14 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           `total ${(total / 1000).toFixed(1)}s`,
       );
       console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
+      const interpretado = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${interpretado.articulos} artículos · analizador ${interpretado.analizador} · ` +
+          `estado ${interpretado.estado} · filas detector ${interpretado.filasDelDetector} · ` +
+          `sin resolver ${interpretado.filasSinResolver}`,
+      );
+      console.log('  controles en error:', JSON.stringify(interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
+      console.log('  calculado:', JSON.stringify(interpretado.calculado));
       console.log('  ¿nº 00348491?', plano.includes('00348491'));
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 
