@@ -52,6 +52,32 @@ export interface CambioDeCampo {
   despues: string;
 }
 
+/**
+ * Un artículo cuyo proveedor entrante no se pudo resolver.
+ *
+ * Control de Stock nombra proveedores con texto libre, y ese texto muchas veces
+ * es una marca o un fabricante y no la empresa a la que Compras le compra y le
+ * paga. Compras no puede crear una ficha de proveedor con sólo un nombre: le
+ * faltarían CUIT, razón social y condiciones comerciales, que es de donde salen
+ * los plazos de pago y la cuenta corriente.
+ *
+ * Así que no se resuelve, y lo que importa es **qué pasa entonces con el
+ * artículo**. Son tres casos distintos y la pantalla los separa, porque uno es
+ * inofensivo y otro requiere que alguien cargue el proveedor después.
+ */
+export interface ProveedorSinResolver {
+  plu: string;
+  nombre: string;
+  /** Lo que dijo Control de Stock. Vacío si no dijo nada. */
+  entrante: string;
+  /** El proveedor habitual que el artículo ya tiene, cuando lo tiene. */
+  actual: string | null;
+  efecto:
+    | 'Se conserva el proveedor actual'
+    | 'Artículo nuevo, queda sin proveedor habitual'
+    | 'Sigue sin proveedor habitual';
+}
+
 export interface ArticuloDeLaVistaPrevia {
   plu: string;
   nombre: string;
@@ -90,6 +116,17 @@ export interface VistaPreviaDeSincronizacion {
   familiasNuevas: string[];
   /** Nombres de proveedor que Control de Stock usa y Compras no tiene. */
   proveedoresDesconocidos: string[];
+  /**
+   * Nombres que coinciden con **más de un** proveedor de Compras.
+   *
+   * Tampoco se aplican. «Reconocido» tiene que querer decir reconocido sin
+   * ambigüedad: elegir uno de dos por el orden en que salieron de la base es
+   * reasignarle el proveedor a un artículo por azar, y de ahí cuelgan el plazo
+   * de pago y la cuenta corriente.
+   */
+  proveedoresAmbiguos: string[];
+  /** Artículo por artículo, qué pasa cuando el proveedor no resuelve. */
+  proveedoresSinResolver: ProveedorSinResolver[];
   /** Cuántos se escribieron. Cero mientras es sólo una vista previa. */
   aplicados: number;
 }
@@ -116,6 +153,35 @@ const mostrar = (valor: string | null | undefined): string =>
  */
 function familiaDe(articulo: ProductoDeStock): string | null {
   return articulo.tipo ?? null;
+}
+
+/**
+ * Índice de proveedores por nombre, con la ambigüedad marcada.
+ *
+ * Un nombre puede llegar a más de un proveedor: la razón social de uno puede
+ * coincidir con el alias de otro. Antes ganaba el último que saliera de la
+ * base, en silencio. Ahora un nombre así queda con `null` —ambiguo— y se trata
+ * igual que uno desconocido: no se aplica, se avisa, y el artículo conserva el
+ * proveedor que ya tenía.
+ *
+ * Lo usan la vista previa y la confirmación, y por eso vive en un solo lugar:
+ * si cada una armara el suyo, podrían no coincidir y la vista previa mentiría.
+ */
+function indiceDeProveedores(
+  filas: { id: string; tradeName: string; aliases: { normalized: string }[] }[],
+): Map<string, string | null> {
+  const porNombre = new Map<string, string | null>();
+  const anotar = (nombre: string, id: string) => {
+    if (nombre === '') return;
+    const anterior = porNombre.get(nombre);
+    if (anterior === undefined) porNombre.set(nombre, id);
+    else if (anterior !== id) porNombre.set(nombre, null); // ambiguo
+  };
+  for (const fila of filas) {
+    anotar(normalizeText(fila.tradeName), fila.id);
+    for (const alias of fila.aliases) anotar(alias.normalized, fila.id);
+  }
+  return porNombre;
 }
 
 /** Lo que hay hoy en Compras, en la forma en que hace falta compararlo. */
@@ -170,11 +236,8 @@ async function calcular(
   const proveedores = await prisma.supplier.findMany({
     select: { id: true, tradeName: true, aliases: { select: { normalized: true } } },
   });
-  const proveedorPorNombre = new Map<string, (typeof proveedores)[number]>();
-  for (const proveedor of proveedores) {
-    proveedorPorNombre.set(normalizeText(proveedor.tradeName), proveedor);
-    for (const alias of proveedor.aliases) proveedorPorNombre.set(alias.normalized, proveedor);
-  }
+  const proveedorPorNombre = indiceDeProveedores(proveedores);
+  const nombrePorId = new Map(proveedores.map((p) => [p.id, p.tradeName]));
 
   const familias = await prisma.productFamily.findMany({ select: { id: true, name: true, normalized: true } });
   const familiaPorNombre = new Map(familias.map((f) => [f.normalized, f]));
@@ -190,6 +253,8 @@ async function calcular(
     yaEstabanInactivos: 0,
     familiasNuevas: [],
     proveedoresDesconocidos: [],
+    proveedoresAmbiguos: [],
+    proveedoresSinResolver: [],
     aplicados: 0,
   };
 
@@ -204,10 +269,49 @@ async function calcular(
       familiasQueFaltan.set(normalizeText(familia), familia);
     }
 
+    /*
+     * El proveedor entrante, resuelto o no.
+     *
+     * `undefined` es que el nombre no existe en Compras; `null`, que existe más
+     * de una vez. Los dos casos terminan igual —no se aplica— pero se informan
+     * distinto, porque uno se arregla dando de alta un proveedor y el otro
+     * desambiguando alias que ya están cargados.
+     */
     const proveedorNormal = articulo.proveedor ? normalizeText(articulo.proveedor) : '';
-    const proveedor = proveedorNormal ? proveedorPorNombre.get(proveedorNormal) : undefined;
-    if (articulo.proveedor && !proveedor && !vista.proveedoresDesconocidos.includes(articulo.proveedor)) {
-      vista.proveedoresDesconocidos.push(articulo.proveedor);
+    const resuelto = proveedorNormal ? proveedorPorNombre.get(proveedorNormal) : undefined;
+    const proveedorId = resuelto ?? null;
+
+    if (articulo.proveedor && resuelto === undefined) {
+      if (!vista.proveedoresDesconocidos.includes(articulo.proveedor)) {
+        vista.proveedoresDesconocidos.push(articulo.proveedor);
+      }
+    } else if (articulo.proveedor && resuelto === null) {
+      if (!vista.proveedoresAmbiguos.includes(articulo.proveedor)) {
+        vista.proveedoresAmbiguos.push(articulo.proveedor);
+      }
+    }
+
+    /*
+     * Qué le pasa a **este** artículo cuando el proveedor no resuelve.
+     *
+     * Contar los nombres sueltos no alcanza para decidir: lo que hay que saber
+     * antes de confirmar es si algún artículo pierde el proveedor que ya tiene.
+     * Ninguno lo pierde —y esta lista es donde se ve—, pero los artículos
+     * nuevos sí quedan sin proveedor y alguien los tiene que completar después.
+     */
+    if (proveedorId === null) {
+      const actualNombre = actual?.defaultSupplier?.tradeName ?? null;
+      vista.proveedoresSinResolver.push({
+        plu: articulo.plu,
+        nombre: articulo.nombre,
+        entrante: articulo.proveedor ?? '',
+        actual: actualNombre,
+        efecto: !actual
+          ? 'Artículo nuevo, queda sin proveedor habitual'
+          : actualNombre
+            ? 'Se conserva el proveedor actual'
+            : 'Sigue sin proveedor habitual',
+      });
     }
 
     if (!actual) {
@@ -215,7 +319,12 @@ async function calcular(
       continue;
     }
 
-    const cambios = diferencias(actual, articulo, familia, proveedor?.tradeName ?? null);
+    const cambios = diferencias(
+      actual,
+      articulo,
+      familia,
+      proveedorId ? (nombrePorId.get(proveedorId) ?? null) : null,
+    );
     const resumen = { plu: articulo.plu, nombre: articulo.nombre, cambios };
 
     /*
@@ -349,14 +458,16 @@ export async function aplicarSincronizacionDeStock(
       familiaPorNombre.set(normal, creada.id);
     }
 
+    /*
+     * El mismo índice que armó la vista previa, con la misma regla de
+     * ambigüedad. Nunca se crea un proveedor acá: un nombre de Control de Stock
+     * puede ser una marca o un fabricante, y una ficha sin CUIT, razón social
+     * ni condiciones comerciales no sirve para pagarle a nadie.
+     */
     const proveedores = await tx.supplier.findMany({
       select: { id: true, tradeName: true, aliases: { select: { normalized: true } } },
     });
-    const proveedorPorNombre = new Map<string, string>();
-    for (const p of proveedores) {
-      proveedorPorNombre.set(normalizeText(p.tradeName), p.id);
-      for (const alias of p.aliases) proveedorPorNombre.set(alias.normalized, p.id);
-    }
+    const proveedorPorNombre = indiceDeProveedores(proveedores);
 
     let escritos = 0;
 
@@ -376,6 +487,13 @@ export async function aplicarSincronizacionDeStock(
 
       const familia = familiaDe(articulo);
       const familyId = familia ? (familiaPorNombre.get(normalizeText(familia)) ?? null) : null;
+      /*
+       * Nulo si el nombre no existe, si es ambiguo, o si no vino ninguno. En
+       * los tres casos `defaultSupplierId` **queda fuera** del objeto de abajo,
+       * y lo que queda fuera no se escribe: el artículo conserva el proveedor
+       * habitual que ya tenía. Un proveedor no es una etiqueta: de él cuelgan
+       * el plazo de pago, la cuenta corriente y a quién se le paga.
+       */
       const proveedorId = articulo.proveedor
         ? (proveedorPorNombre.get(normalizeText(articulo.proveedor)) ?? null)
         : null;

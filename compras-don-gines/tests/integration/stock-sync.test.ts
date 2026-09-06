@@ -6,6 +6,7 @@ import {
   aplicarSincronizacionDeStock,
   vistaPreviaDeStock,
 } from '@/lib/services/stock-sync';
+import { normalizeText } from '@/lib/domain/matching';
 import { AUDIT_ACTIONS } from '@/lib/services/audit';
 import { resolvePricingRule, suggestPricesFor } from '@/lib/services/pricing';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
@@ -357,6 +358,156 @@ describe('la aritmética de la vista previa cierra', () => {
         vista.yaEstabanInactivos,
     );
     expect(vista.enCompras).toBe(await prisma.product.count());
+  });
+});
+
+describe('un proveedor que no resuelve nunca borra el que ya está', () => {
+  /*
+   * Control de Stock nombra proveedores con texto libre, y ese texto es muchas
+   * veces una marca o un fabricante y no la empresa a la que Compras le compra.
+   * De `defaultSupplierId` cuelgan el plazo de pago, la agenda y la cuenta
+   * corriente: perderlo por una referencia que no se pudo resolver sería un
+   * daño silencioso, y encima en el campo del que más cuesta darse cuenta.
+   */
+  it('el proveedor habitual se conserva si el nombre entrante es desconocido', async () => {
+    const antes = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(antes.defaultSupplierId).not.toBeNull();
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        comoEnStock({ supplier: { id: 'x', name: 'Lácteos Que No Existen SRL' } }),
+      ]),
+    });
+
+    const despues = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(despues.defaultSupplierId).toBe(antes.defaultSupplierId);
+  });
+
+  it('y también si el maestro no nombra ningún proveedor', async () => {
+    const antes = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock({ supplier: null })]),
+    });
+
+    const despues = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(despues.defaultSupplierId).toBe(antes.defaultSupplierId);
+  });
+
+  it('un nombre que coincide con dos proveedores tampoco se aplica', async () => {
+    /*
+     * «Reconocido» tiene que querer decir reconocido sin ambigüedad. Elegir uno
+     * de dos por el orden en que salieron de la base es reasignarle el
+     * proveedor a un artículo por azar.
+     */
+    const otro = await prisma.supplier.create({
+      data: { tradeName: 'Otro Proveedor', legalName: 'Otro S.A.', cuit: '30-99999999-1' },
+    });
+    await prisma.supplierAlias.create({
+      data: {
+        supplierId: otro.id,
+        alias: 'Distribución Errecalde',
+        normalized: normalizeText('Distribución Errecalde'),
+      },
+    });
+
+    const antes = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+    expect(vista.proveedoresAmbiguos).toContain('Distribución Errecalde');
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+    const despues = await prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } });
+    expect(despues.defaultSupplierId).toBe(antes.defaultSupplierId);
+    expect(despues.defaultSupplierId).not.toBe(otro.id);
+  });
+
+  it('un artículo nuevo con proveedor desconocido se crea sin proveedor, y se avisa', async () => {
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        comoEnStock({ plu: '8801', name: 'Nuevo', supplier: { id: 'z', name: 'Marca Cualquiera' } }),
+      ]),
+    });
+
+    const creado = await prisma.product.findUniqueOrThrow({ where: { internalCode: '8801' } });
+    expect(creado.defaultSupplierId).toBeNull();
+  });
+
+  it('la vista previa distingue «se conserva» de «nuevo sin proveedor»', async () => {
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        // Existente con proveedor: se conserva.
+        comoEnStock({ supplier: { id: 'x', name: 'Marca Cualquiera' } }),
+        // Nuevo: queda sin proveedor.
+        comoEnStock({ plu: '8802', name: 'Nuevo', supplier: { id: 'x', name: 'Marca Cualquiera' } }),
+      ]),
+    });
+
+    const porPlu = new Map(vista.proveedoresSinResolver.map((a) => [a.plu, a]));
+
+    expect(porPlu.get('1211')?.efecto).toBe('Se conserva el proveedor actual');
+    expect(porPlu.get('1211')?.actual).toBe('Distribución Errecalde');
+    expect(porPlu.get('1211')?.entrante).toBe('Marca Cualquiera');
+
+    expect(porPlu.get('8802')?.efecto).toBe('Artículo nuevo, queda sin proveedor habitual');
+    expect(porPlu.get('8802')?.actual).toBeNull();
+
+    // Y el renglón de cambios no propone tocar el proveedor de un existente.
+    const cambio = vista.modificados
+      .find((m) => m.plu === '1211')
+      ?.cambios.find((c) => c.campo === 'Proveedor habitual');
+    expect(cambio).toBeUndefined();
+  });
+
+  it('un proveedor reconocido sí se aplica, y se ve como antes → después', async () => {
+    /*
+     * La contracara: conservar no puede significar "no actualizar nunca". Si el
+     * maestro nombra un proveedor que Compras sí reconoce, se aplica, y el
+     * cambio se ve en la vista previa antes de confirmarlo.
+     */
+    await prisma.product.update({
+      where: { internalCode: '1211' },
+      data: { defaultSupplierId: null },
+    });
+
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+    expect(
+      vista.modificados
+        .find((m) => m.plu === '1211')
+        ?.cambios.find((c) => c.campo === 'Proveedor habitual'),
+    ).toEqual({ campo: 'Proveedor habitual', antes: '—', despues: 'Distribución Errecalde' });
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+    const despues = await prisma.product.findUniqueOrThrow({
+      where: { internalCode: '1211' },
+      include: { defaultSupplier: true },
+    });
+    expect(despues.defaultSupplier?.tradeName).toBe('Distribución Errecalde');
+  });
+
+  it('nunca da de alta un proveedor a partir de un nombre', async () => {
+    const antes = await prisma.supplier.count();
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        comoEnStock({ supplier: { id: 'x', name: 'Fabricante Que No Es Proveedor' } }),
+        comoEnStock({ plu: '8803', name: 'Otro', supplier: { id: 'y', name: 'Marca Inventada' } }),
+      ]),
+    });
+
+    /*
+     * Una ficha creada desde un nombre no tiene CUIT, razón social ni
+     * condiciones comerciales, y de ahí salen los plazos de pago y la cuenta
+     * corriente. Darla de alta sola sería fabricar un acreedor.
+     */
+    expect(await prisma.supplier.count()).toBe(antes);
   });
 });
 

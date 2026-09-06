@@ -70,7 +70,15 @@ function catalogo() {
     id: `id-${p.plu}`,
     plu: p.plu,
     name: p.name,
-    supplier: { id: 's1', name: 'Distribución Errecalde' },
+    /*
+     * La variante 3 nombra un proveedor que Compras no tiene dado de alta. Es
+     * el caso que hay que poder mirar: el artículo tiene que conservar el
+     * proveedor habitual que ya tenía, no quedarse sin ninguno.
+     */
+    supplier:
+      variante === 3
+        ? { id: 's9', name: 'Marca Que No Existe' }
+        : { id: 's1', name: 'Distribución Errecalde' },
     type: { id: 't1', name: 'Quesos' },
     subtype: { id: `st-${p.plu}`, name: p.subtype },
     internalUnit: 'kg',

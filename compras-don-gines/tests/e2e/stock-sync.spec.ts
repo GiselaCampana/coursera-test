@@ -277,6 +277,44 @@ test.describe('sincronización con Control de Stock', () => {
     await servirVariante(1);
   });
 
+  test('un proveedor que no resuelve no le borra el proveedor a nadie', async ({ page }) => {
+    /*
+     * El maestro nombra «Marca Que No Existe», que Compras no tiene dada de
+     * alta. Lo que hay que ver en la pantalla es que el artículo que ya tiene
+     * proveedor lo conserva, y que eso se dice con esas palabras: de
+     * `defaultSupplierId` cuelgan el plazo de pago y la cuenta corriente.
+     */
+    const antes = await conPrisma(async (prisma) =>
+      prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } }),
+    );
+    expect(antes.defaultSupplierId).not.toBeNull();
+
+    await servirVariante(3);
+
+    await ingresar(page, 'admin');
+    await page.goto('/configuracion/catalogo');
+    const tarjeta = page.locator('.card').filter({
+      has: page.getByRole('heading', { name: 'Sincronizar con Control de Stock' }),
+    });
+    await tarjeta.getByRole('button', { name: 'Consultar a Control de Stock' }).click();
+
+    await tarjeta.locator('summary').filter({ hasText: 'proveedor sin resolver' }).click();
+    const fila = tarjeta.locator('.lista-simple li').filter({ hasText: '1211' });
+    await expect(fila).toContainText('Se conserva el proveedor actual');
+    await expect(fila).toContainText('Distribución Errecalde');
+
+    // Y al confirmar, no lo pierde.
+    await tarjeta.getByRole('button', { name: 'Confirmar y aplicar' }).click();
+    await expect(tarjeta.getByText(/Catálogo sincronizado/)).toBeVisible();
+
+    const despues = await conPrisma(async (prisma) =>
+      prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } }),
+    );
+    expect(despues.defaultSupplierId).toBe(antes.defaultSupplierId);
+
+    await servirVariante(1);
+  });
+
   test('un operador no sincroniza el catálogo', async ({ page }) => {
     await ingresar(page, 'operador');
     await page.goto('/configuracion/catalogo');

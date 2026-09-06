@@ -194,12 +194,48 @@ function Resumen({ vista, aplicada }: { vista: VistaPreviaDeSincronizacion; apli
         </p>
       ) : null}
 
-      {vista.proveedoresDesconocidos.length > 0 ? (
+      {vista.proveedoresDesconocidos.length > 0 || vista.proveedoresAmbiguos.length > 0 ? (
         <p className="mensaje mensaje-aviso">
-          Control de Stock nombra proveedores que Compras no tiene dados de alta:{' '}
-          {vista.proveedoresDesconocidos.join(', ')}. El catálogo entra igual; esos artículos
-          quedan sin proveedor habitual hasta que los des de alta.
+          {vista.proveedoresDesconocidos.length > 0 ? (
+            <>
+              Control de Stock nombra proveedores que Compras no tiene dados de alta:{' '}
+              {vista.proveedoresDesconocidos.join(', ')}.{' '}
+            </>
+          ) : null}
+          {vista.proveedoresAmbiguos.length > 0 ? (
+            <>
+              Y estos coinciden con más de un proveedor de Compras, así que tampoco se aplican:{' '}
+              {vista.proveedoresAmbiguos.join(', ')}.{' '}
+            </>
+          ) : null}
+          No se dan de alta solos: un nombre puede ser una marca o un fabricante, y una ficha sin
+          CUIT, razón social ni condiciones comerciales no sirve para pagarle a nadie.
         </p>
+      ) : null}
+
+      {vista.proveedoresSinResolver.length > 0 ? (
+        <details className="grupo-cambios">
+          <summary>
+            <strong>Artículos con el proveedor sin resolver</strong>{' '}
+            <span className="chico medio">({vista.proveedoresSinResolver.length})</span>
+          </summary>
+          {/*
+            Los tres casos van separados y con el efecto escrito, porque no son
+            lo mismo: en unos no pasa nada y en otros queda trabajo pendiente.
+            Contar nombres sueltos no alcanza para decidir si confirmar.
+          */}
+          <ul className="lista-simple">
+            {vista.proveedoresSinResolver.map((a) => (
+              <li key={a.plu}>
+                <strong>{a.plu}</strong> {a.nombre} — Control de Stock dice{' '}
+                «{a.entrante === '' ? 'nada' : a.entrante}»
+                {a.actual ? <> · proveedor actual: {a.actual}</> : null}
+                {' · '}
+                <em>{a.efecto}</em>
+              </li>
+            ))}
+          </ul>
+        </details>
       ) : null}
     </>
   );
