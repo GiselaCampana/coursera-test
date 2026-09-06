@@ -4,7 +4,7 @@ import path from 'node:path';
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts'],
+    include: ['tests/unit/**/*.test.ts', 'tests/integration/**/*.test.ts', 'tests/fotos/**/*.test.ts'],
     globals: false,
     testTimeout: 60_000,
     hookTimeout: 120_000,

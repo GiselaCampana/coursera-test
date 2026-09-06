@@ -17,3 +17,6 @@ blob-report/
 .storage-e2e/
 capturas/
 public/ocr/
+
+# Lo descarga tesseract.js al correr las pruebas de fotos reales.
+spa.traineddata
