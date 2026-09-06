@@ -115,7 +115,19 @@ function Resumen({ vista, aplicada }: { vista: VistaPreviaDeSincronizacion; apli
 
       <p className="chico medio">
         Control de Stock devolvió {vista.leidos} artículo{vista.leidos === 1 ? '' : 's'} (esquema{' '}
-        {vista.schemaVersion}).
+        {vista.schemaVersion}). Compras tiene {vista.enCompras}.
+        {vista.yaEstabanInactivos > 0 ? (
+          <>
+            {' '}
+            De esos, {vista.yaEstabanInactivos} ya no {vista.yaEstabanInactivos === 1
+              ? 'está'
+              : 'están'}{' '}
+            en el catálogo de Control de Stock y ya {vista.yaEstabanInactivos === 1
+              ? 'estaba inactivo'
+              : 'estaban inactivos'}
+            : no {vista.yaEstabanInactivos === 1 ? 'cambia' : 'cambian'} nada.
+          </>
+        ) : null}
       </p>
 
       {sinNovedades ? (

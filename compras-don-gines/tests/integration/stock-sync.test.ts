@@ -168,6 +168,227 @@ describe('la vista previa no escribe nada', () => {
   });
 });
 
+describe('la familia sale del tipo, no del subtipo', () => {
+  /*
+   * El defecto que apareció contra el catálogo real: la familia se tomaba del
+   * subtipo, así que cada subtipo se volvía una familia suelta —«Cremoso»,
+   * «Cremosos», «Duros», «Especial», «Especiales»— y el maestro proponía crear
+   * veintiocho familias donde hay un puñado de tipos.
+   *
+   * Familia y tipo son el mismo nivel. El subtipo tiene su propio campo. Que
+   * sean tres pruebas y no una es a propósito: cada una falla por un motivo
+   * distinto, y confundir los tres es exactamente cómo se llegó acá.
+   */
+  it('«Quesos / Cremosos» crea la familia «Quesos» y nunca «Cremosos»', async () => {
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+
+    expect(vista.familiasNuevas).toContain('Quesos');
+    expect(vista.familiasNuevas).not.toContain('Cremosos');
+
+    const familia = vista.modificados[0].cambios.find((c) => c.campo === 'Familia');
+    expect(familia?.despues).toBe('Quesos');
+  });
+
+  it('dos subtipos del mismo tipo no crean dos familias', async () => {
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        comoEnStock({ plu: '5001', name: 'Cremoso', subtype: { id: 'a', name: 'Cremosos' } }),
+        comoEnStock({ plu: '5002', name: 'Sardo', subtype: { id: 'b', name: 'Duros' } }),
+        comoEnStock({ plu: '5003', name: 'Provolone', subtype: { id: 'c', name: 'Especiales' } }),
+      ]),
+    });
+
+    /*
+     * Tres artículos, tres subtipos, un solo tipo: una sola familia. Si esto
+     * diera tres, la familia habría dejado de agrupar y configurar el rubro una
+     * vez volvería a ser configurarlo uno por uno.
+     */
+    expect(vista.familiasNuevas).toEqual(['Quesos']);
+  });
+
+  it('el tipo y el subtipo no quedan intercambiados al aplicar', async () => {
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+
+    const guardado = await prisma.product.findUniqueOrThrow({
+      where: { internalCode: '1211' },
+      include: { family: true },
+    });
+
+    expect(guardado.category).toBe('Quesos');
+    expect(guardado.subtype).toBe('Cremosos');
+    expect(guardado.family?.name).toBe('Quesos');
+    // Y no quedó ninguna familia con nombre de subtipo.
+    expect(await prisma.productFamily.count({ where: { name: 'Cremosos' } })).toBe(0);
+  });
+
+  it('los tres artículos verificados contra el catálogo real quedan bien', async () => {
+    /*
+     * Los que la usuaria comprobó uno por uno en Control de Stock. Sirven mejor
+     * que un caso inventado por dos motivos: son datos reales, y entre los tres
+     * hay dos tipos y tres subtipos, así que la prueba distingue «agrupar por
+     * tipo» de «agrupar por subtipo» sin depender de cómo esté escrita.
+     */
+    const DEL_MAESTRO = [
+      { plu: '1211', nombre: 'Cremoso Punta del Agua', tipo: 'Quesos', subtipo: 'Cremosos' },
+      { plu: '1603', nombre: 'Goya Melincué', tipo: 'Quesos', subtipo: 'Duros' },
+      { plu: '2112', nombre: 'Jamón Cocido Los Calvos 42', tipo: 'Fiambres', subtipo: 'Jamón' },
+    ];
+
+    await aplicarSincronizacionDeStock(escenario.admin, {
+      contenido: respuestaDeStock(
+        DEL_MAESTRO.map((a) =>
+          comoEnStock({
+            plu: a.plu,
+            name: a.nombre,
+            type: { id: `t-${a.tipo}`, name: a.tipo },
+            subtype: { id: `st-${a.plu}`, name: a.subtipo },
+          }),
+        ),
+      ),
+    });
+
+    for (const esperado of DEL_MAESTRO) {
+      const guardado = await prisma.product.findUniqueOrThrow({
+        where: { internalCode: esperado.plu },
+        include: { family: true },
+      });
+      expect(guardado.normalizedName, esperado.plu).toBe(esperado.nombre);
+      expect(guardado.category, `${esperado.plu} tipo`).toBe(esperado.tipo);
+      expect(guardado.subtype, `${esperado.plu} subtipo`).toBe(esperado.subtipo);
+      expect(guardado.family?.name, `${esperado.plu} familia`).toBe(esperado.tipo);
+    }
+
+    // Ni una familia con nombre de subtipo.
+    for (const subtipo of ['Cremosos', 'Duros', 'Jamón']) {
+      expect(
+        await prisma.productFamily.count({ where: { name: subtipo } }),
+        `no debería existir la familia «${subtipo}»`,
+      ).toBe(0);
+    }
+
+    /*
+     * Y los dos quesos comparten familia: es lo que hace que configurar el
+     * marcaje de «Quesos» una vez alcance para los dos.
+     */
+    const [cremoso, goya] = await Promise.all([
+      prisma.product.findUniqueOrThrow({ where: { internalCode: '1211' } }),
+      prisma.product.findUniqueOrThrow({ where: { internalCode: '1603' } }),
+    ]);
+    expect(cremoso.familyId).toBe(goya.familyId);
+  });
+
+  it('sin tipo no se inventa una familia con el subtipo', async () => {
+    /*
+     * Un artículo sin tipo se queda sin familia, y eso se ve: la pantalla de
+     * catálogo cuenta los que no tienen. Caer al subtipo sería volver al mismo
+     * error por la puerta de atrás, y un artículo mal clasificado no se nota.
+     */
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock({ type: null })]),
+    });
+
+    expect(vista.familiasNuevas).toEqual([]);
+    expect(vista.modificados[0].cambios.find((c) => c.campo === 'Familia')).toBeUndefined();
+  });
+});
+
+describe('la aritmética de la vista previa cierra', () => {
+  /*
+   * La pregunta que se hizo mirando producción: «145 artículos en Compras, 149
+   * en el maestro, 134 modificados, 15 nuevos, y cero inactivaciones. ¿Qué pasó
+   * con los otros once?». La respuesta era «ya estaban inactivos», pero la
+   * pantalla no lo decía, y un número que no cierra obliga a desconfiar de
+   * todos los demás.
+   */
+  it('un artículo activo que el maestro ya no nombra sí aparece como baja', async () => {
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+
+    const bajas = vista.quedarianInactivos.map((a) => a.plu);
+    expect(bajas).toContain('1001');
+    expect(vista.yaEstabanInactivos).toBe(0);
+  });
+
+  it('uno que ya estaba inactivo no se informa como baja, pero se cuenta', async () => {
+    await prisma.product.update({ where: { internalCode: '1001' }, data: { active: false } });
+
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock()]),
+    });
+
+    // No es una baja: no cambiaría nada.
+    expect(vista.quedarianInactivos.map((a) => a.plu)).not.toContain('1001');
+    // Pero está contado, para que la cuenta cierre.
+    expect(vista.yaEstabanInactivos).toBe(1);
+  });
+
+  it('todo artículo de los dos lados queda en exactamente un montón', async () => {
+    await prisma.product.update({ where: { internalCode: '1001' }, data: { active: false } });
+
+    const vista = await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([comoEnStock(), comoEnStock({ plu: '9001', name: 'Nuevo' })]),
+    });
+
+    const bajasPorAusencia = vista.quedarianInactivos.filter(
+      (a) => a.motivo === 'Ya no está en el catálogo de Control de Stock',
+    ).length;
+    const bajasPorBaja = vista.quedarianInactivos.length - bajasPorAusencia;
+
+    // Lo que trajo el maestro: cada uno es nuevo, o modificado, o igual, o baja.
+    expect(vista.leidos).toBe(
+      vista.nuevos.length + vista.modificados.length + vista.sinCambios.length + bajasPorBaja,
+    );
+
+    /*
+     * Y lo que tiene Compras: cada uno coincide con el maestro, o no está y
+     * queda inactivo, o no está y ya lo estaba. Esta es la identidad que en
+     * producción no se podía verificar desde la pantalla.
+     */
+    expect(vista.enCompras).toBe(
+      vista.modificados.length +
+        vista.sinCambios.length +
+        bajasPorBaja +
+        bajasPorAusencia +
+        vista.yaEstabanInactivos,
+    );
+    expect(vista.enCompras).toBe(await prisma.product.count());
+  });
+});
+
+describe('mirar no escribe', () => {
+  it('consultar la vista previa no modifica ningún dato, ni crea familias', async () => {
+    const antes = await loQueEsDeCompras();
+    const familiasAntes = await prisma.productFamily.count();
+    const sincronizadosAntes = await prisma.product.count({
+      where: { catalogSyncedAt: { not: null } },
+    });
+
+    await vistaPreviaDeStock(escenario.admin, {
+      contenido: respuestaDeStock([
+        comoEnStock({ name: 'Otro nombre' }),
+        comoEnStock({ plu: '7001', name: 'Uno nuevo' }),
+        comoEnStock({ plu: '7002', name: 'Otro más', type: { id: 't9', name: 'Embutidos' } }),
+      ]),
+    });
+
+    expect(await loQueEsDeCompras()).toEqual(antes);
+    /*
+     * Las familias son el caso fácil de olvidar: se crean antes que los
+     * artículos porque los artículos las necesitan, así que es el lugar donde
+     * una vista previa escribiría sin darse cuenta.
+     */
+    expect(await prisma.productFamily.count()).toBe(familiasAntes);
+    expect(await prisma.product.count({ where: { catalogSyncedAt: { not: null } } })).toBe(
+      sincronizadosAntes,
+    );
+  });
+});
+
 describe('confirmar aplica lo que la vista previa mostró', () => {
   it('crea, actualiza y desactiva, sin borrar ni renumerar', async () => {
     const idAntes = (
@@ -192,12 +413,12 @@ describe('confirmar aplica lo que la vista previa mostró', () => {
     expect(actualizado.id).toBe(idAntes);
     expect(actualizado.category).toBe('Quesos');
     expect(actualizado.subtype).toBe('Cremosos');
-    // Y quedó clasificado en la familia que sale del subtipo del maestro.
+    // Y quedó clasificado en la familia que sale del **tipo** del maestro.
     expect(actualizado.familyId).not.toBeNull();
     const familia = await prisma.productFamily.findUniqueOrThrow({
       where: { id: actualizado.familyId! },
     });
-    expect(familia.name).toBe('Cremosos');
+    expect(familia.name).toBe('Quesos');
 
     expect(await prisma.product.findUnique({ where: { internalCode: '4001' } })).not.toBeNull();
 

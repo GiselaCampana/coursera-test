@@ -75,6 +75,17 @@ export interface VistaPreviaDeSincronizacion {
    * de estar activo.
    */
   quedarianInactivos: { plu: string; nombre: string; motivo: string }[];
+  /** Cuántos artículos tiene hoy Compras, activos e inactivos. */
+  enCompras: number;
+  /**
+   * Los que Compras tiene, el maestro ya no nombra, y **ya estaban inactivos**.
+   *
+   * No cambian nada, así que no van al montón de las bajas. Pero sin contarlos
+   * la cuenta no cierra: alguien mira «145 artículos, 134 modificados, 0
+   * inactivaciones» y no tiene forma de saber qué pasó con los otros once. Un
+   * número que no cierra obliga a desconfiar de todos los demás.
+   */
+  yaEstabanInactivos: number;
   /** Familias que habría que crear para poder clasificar lo que llega. */
   familiasNuevas: string[];
   /** Nombres de proveedor que Control de Stock usa y Compras no tiene. */
@@ -90,14 +101,21 @@ const mostrar = (valor: string | null | undefined): string =>
   valor === null || valor === undefined || valor === '' ? SIN_DATO : valor;
 
 /**
- * De dónde sale la familia con la que Compras agrupa.
+ * De dónde sale la familia con la que Compras agrupa: del **tipo**.
  *
- * El subtipo cuando está, porque es el nivel que agrupa sin mezclar: si el tipo
- * es «Quesos» y el subtipo «Cremosos», la familia útil para marcar precios es
- * la segunda. El tipo queda de respaldo.
+ * Familia y tipo son el mismo nivel —«Quesos»—, y el subtipo —«Cremosos»— vive
+ * en su propio campo. Antes esto devolvía el subtipo, y el resultado fue que
+ * cada subtipo se convertía en una familia suelta: «Cremoso», «Cremosos»,
+ * «Duros», «Especial», «Especiales», veintiocho familias donde el maestro tiene
+ * un puñado de tipos. Eso rompe justo lo que la familia viene a resolver, que
+ * es configurar el rubro una vez en lugar de treinta.
+ *
+ * Sin tipo no hay familia. No se cae al subtipo: sería volver al mismo error
+ * por la puerta de atrás, y el artículo sin familia se ve —la pantalla de
+ * catálogo cuenta los que no tienen— mientras que uno mal clasificado no.
  */
 function familiaDe(articulo: ProductoDeStock): string | null {
-  return articulo.subtipo ?? articulo.tipo ?? null;
+  return articulo.tipo ?? null;
 }
 
 /** Lo que hay hoy en Compras, en la forma en que hace falta compararlo. */
@@ -168,6 +186,8 @@ async function calcular(
     modificados: [],
     sinCambios: [],
     quedarianInactivos: [],
+    enCompras: actuales.length,
+    yaEstabanInactivos: 0,
     familiasNuevas: [],
     proveedoresDesconocidos: [],
     aplicados: 0,
@@ -225,7 +245,13 @@ async function calcular(
    * eso apuntando a un artículo que no existe.
    */
   for (const actual of actuales) {
-    if (vistos.has(actual.internalCode) || !actual.active) continue;
+    if (vistos.has(actual.internalCode)) continue;
+    if (!actual.active) {
+      // Ya estaba inactivo: no hay nada que cambiar, pero se cuenta para que la
+      // aritmética de la pantalla cierre.
+      vista.yaEstabanInactivos += 1;
+      continue;
+    }
     vista.quedarianInactivos.push({
       plu: actual.internalCode,
       nombre: actual.normalizedName,

@@ -178,7 +178,10 @@ test.describe('sincronización con Control de Stock', () => {
         include: { family: true, defaultSupplier: true },
       });
       expect(nuevo.normalizedName).toBe('Provolone de prueba');
-      expect(nuevo.family?.name).toBe('Duros');
+      // La familia sale del tipo —«Quesos»—, no del subtipo —«Duros»—, que
+      // queda en su propio campo.
+      expect(nuevo.family?.name).toBe('Quesos');
+      expect(nuevo.subtype).toBe('Duros');
       expect(nuevo.defaultSupplier?.tradeName).toBe('Distribución Errecalde');
       expect(nuevo.active).toBe(true);
     });
