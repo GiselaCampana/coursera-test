@@ -69,7 +69,7 @@ export default async function PaginaConfiguracion() {
       titulo: 'Catálogo Don Ginés',
       texto:
         'Los artículos con su PLU interno y su familia, tal como los define Control de Stock. ' +
-        'Se importan desde ahí: Compras no numera artículos.',
+        'Entrá para consultar Control de Stock y revisar la vista previa antes de aplicar.',
       visible: hasPermission(user, PERMISSIONS.PRODUCTOS_GESTIONAR),
     },
     {

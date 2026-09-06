@@ -69,6 +69,14 @@ export default async function PaginaCatalogo({
         trae. Un PLU nunca cambia por una factura ni por un parecido de nombre.
       </p>
 
+      {/*
+        La sincronización es la tarea principal de esta pantalla y debe quedar
+        visible apenas se entra, especialmente en el teléfono. La vista previa
+        no escribe datos; la aplicación conserva el segundo paso de
+        confirmación para aplicar cambios.
+      */}
+      <SincronizarConStock />
+
       {importado ? (
         <>
           <p className="mensaje mensaje-ok" role="status">
@@ -257,13 +265,6 @@ export default async function PaginaCatalogo({
           </div>
         )}
       </div>
-
-      {/*
-        La sincronización va antes que el importador de archivos: es el camino
-        normal, y el archivo es la alternativa para cuando la integración no
-        está disponible.
-      */}
-      <SincronizarConStock />
 
       <h2>Importar un archivo de catálogo</h2>
       <Importar />
