@@ -66,7 +66,21 @@ export interface ResultadoPreproceso {
  * punto. La limpieza fuerte queda para la relectura, que es cuando ya sabemos
  * que la lectura suave no alcanzó.
  */
-export function prepararPagina(original: Mapa): ResultadoPreproceso {
+export interface OpcionesDePagina {
+  /**
+   * Bajar la resolución a `LADO_PAGINA`.
+   *
+   * Se apaga para las lecturas dirigidas: la página reducida sirve para ubicar
+   * las zonas, pero ampliar un recorte sacado de ella no devuelve detalle que
+   * ya se perdió. El recorte que se manda a leer conviene sacarlo del original.
+   */
+  reducir?: boolean;
+}
+
+export function prepararPagina(
+  original: Mapa,
+  { reducir = true }: OpcionesDePagina = {},
+): ResultadoPreproceso {
   let mapa = original;
   let perspectivaCorregida = false;
 
@@ -95,7 +109,7 @@ export function prepararPagina(original: Mapa): ResultadoPreproceso {
   // `NO_CONFIABLE` y «sin esquinas» comparten camino a propósito: se sigue con
   // la imagen tal como vino. Recortar mal es peor que no recortar.
 
-  if (Math.max(mapa.width, mapa.height) > LADO_PAGINA * MARGEN_REESCALADO) {
+  if (reducir && Math.max(mapa.width, mapa.height) > LADO_PAGINA * MARGEN_REESCALADO) {
     const factor = LADO_PAGINA / Math.max(mapa.width, mapa.height);
     mapa = escalar(mapa, Math.round(mapa.width * factor), Math.round(mapa.height * factor));
   }

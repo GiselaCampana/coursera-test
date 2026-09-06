@@ -68,6 +68,18 @@ export interface LecturaComprobante {
   observaciones: string[];
 }
 
+/**
+ * ¿Trae el texto algo con forma de número de comprobante?
+ *
+ * Punto de venta y número, separados: «0007-00348491», «00008-00002647».
+ * Es una propiedad del formato de un comprobante argentino, no de un proveedor
+ * en particular, y por eso sirve para decidir si el encabezado se leyó o no.
+ */
+export function traeNumeroDeComprobante(texto: string | null): boolean {
+  if (!texto) return false;
+  return /\b\d{4,5}\s*[-–]\s*\d{6,8}\b/.test(texto);
+}
+
 const PROVEEDOR = 'tesseract-local';
 const MODELO = 'tesseract 5 · spa';
 
@@ -80,6 +92,15 @@ const MODELO = 'tesseract 5 · spa';
  */
 export class SesionLectura {
   private paginas: Mapa[] = [];
+  /**
+   * Los archivos tal como llegaron.
+   *
+   * Se guardan para poder volver al original en una lectura dirigida. No se
+   * guarda el mapa decodificado —serían casi cien megabytes por foto en el
+   * teléfono—: se vuelve a decodificar sólo cuando hace falta, y el costo es
+   * tiempo y no memoria.
+   */
+  private fuentes: FuentePagina[] = [];
   private metadatos: { inclinacion: number; perspectivaCorregida: boolean }[] = [];
   private regionesPorPagina: RegionesDetectadas[] = [];
   private observaciones: string[] = [];
@@ -123,6 +144,7 @@ export class SesionLectura {
     this.paginas = [];
     this.metadatos = [];
     this.observaciones = [];
+    this.fuentes = fuentes.filter((f) => !esPdf(f.archivo, f.nombre));
 
     const crudas: Mapa[] = [];
     for (const fuente of fuentes) {
@@ -274,6 +296,33 @@ export class SesionLectura {
         textoEncabezado = await cronometrar('Encabezado', () =>
           this.leerRegion(mapa, regiones.encabezado!, false, 'LEYENDO_ENCABEZADO'),
         );
+
+        /*
+         * Si no apareció el número de comprobante, se vuelve a leer el
+         * encabezado sacándolo del original.
+         *
+         * El disparador es la forma del dato y no el proveedor: todo
+         * comprobante argentino lleva punto de venta y número, y si eso no está
+         * el encabezado no sirve. Es una zona chica, así que la segunda lectura
+         * cuesta poco, y sale del archivo sin la reducción a `LADO_PAGINA`:
+         * ampliar el recorte de la página reducida agranda píxeles borrosos, no
+         * devuelve detalle.
+         *
+         * Se elige entre las dos lecturas, no se mezclan: gana la que trae el
+         * número. Si la segunda tampoco lo trae, queda la primera.
+         */
+        if (!traeNumeroDeComprobante(textoEncabezado)) {
+          const dirigida = await cronometrar('Encabezado en alta resolución', () =>
+            this.leerRegionDelOriginal(i, regiones.encabezado!, 'LEYENDO_ENCABEZADO'),
+          );
+          if (dirigida && traeNumeroDeComprobante(dirigida)) {
+            this.observaciones.push(
+              'El número de comprobante no salió en la primera lectura del encabezado: ' +
+                'se recuperó releyendo esa zona desde la foto original.',
+            );
+            textoEncabezado = dirigida;
+          }
+        }
       }
 
       resultados.push({
@@ -534,6 +583,40 @@ export class SesionLectura {
   private cuantasFranjas(region: Region): number {
     if (region.height < 0.2) return 1;
     return Math.min(4, Math.max(2, Math.round(region.height / 0.18)));
+  }
+
+  /**
+   * Lee una zona sacándola del original, sin la reducción de la página.
+   *
+   * La página se baja a `LADO_PAGINA` para ubicar las zonas, y para eso está
+   * bien. Pero el recorte que se manda a leer sale de esa página ya reducida, y
+   * ampliarlo no devuelve el detalle que se perdió al reducir: agranda píxeles
+   * borrosos. Para una zona chica y decisiva —el encabezado, con el número de
+   * comprobante— conviene volver al archivo y recortar de ahí.
+   *
+   * Cuesta una decodificación más y una pasada de OCR, y se hace sobre una
+   * región, no sobre la página entera. Devuelve null si no se puede —un PDF, un
+   * archivo que ya no está— y entonces se sigue con lo que había.
+   */
+  private async leerRegionDelOriginal(
+    indice: number,
+    region: Region,
+    etapa: EtapaLectura,
+    psm: PSM = PSM.SINGLE_BLOCK,
+  ): Promise<string | null> {
+    const fuente = this.fuentes[indice];
+    if (!fuente) return null;
+    try {
+      const cruda = await mapaDesdeBlob(fuente.archivo);
+      const { mapa } = prepararPagina(cruda, { reducir: false });
+      const recorte = prepararRecorte(recortar(mapa, region));
+      const lectura = await leerMapa(recorte, { psm }, (p) => this.progresoDelLector(p, etapa));
+      return lectura.texto;
+    } catch {
+      // Una lectura dirigida que falla no puede tumbar la lectura entera: lo
+      // que ya se leyó sigue valiendo.
+      return null;
+    }
   }
 
   private async leerRegion(

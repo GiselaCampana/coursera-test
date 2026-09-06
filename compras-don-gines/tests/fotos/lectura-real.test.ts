@@ -142,7 +142,12 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       );
 
       const pagina = lectura.paginas[0];
-      const texto = [pagina.textoCompleto, pagina.textoArticulos ?? '', pagina.textoResumen ?? '']
+      const texto = [
+        pagina.textoCompleto,
+        pagina.textoEncabezado ?? '',
+        pagina.textoArticulos ?? '',
+        pagina.textoResumen ?? '',
+      ]
         .join('\n')
         .toUpperCase();
       const plano = texto.replace(/\s/g, '');
@@ -177,7 +182,12 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
     async () => {
       const { lectura, medidas, total } = await leerFoto('los-calvos-0010-00212356.jpg');
       const pagina = lectura.paginas[0];
-      const plano = [pagina.textoCompleto, pagina.textoArticulos ?? '', pagina.textoResumen ?? '']
+      const plano = [
+        pagina.textoCompleto,
+        pagina.textoEncabezado ?? '',
+        pagina.textoArticulos ?? '',
+        pagina.textoResumen ?? '',
+      ]
         .join('\n')
         .toUpperCase()
         .replace(/\s/g, '');
@@ -187,6 +197,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           `filas vistas ${pagina.regiones?.filasDetectadas ?? '—'} · ` +
           `total ${(total / 1000).toFixed(1)}s`,
       );
+      console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
       console.log('  ¿nº 00212356?', plano.includes('00212356'));
       console.log('  ¿total 2.196.120,52?', plano.includes('2.196.120,52'));
 
@@ -200,7 +211,12 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
     async () => {
       const { lectura, medidas, total } = await leerFoto('mabelherdi-0007-00348491.jpg');
       const pagina = lectura.paginas[0];
-      const plano = [pagina.textoCompleto, pagina.textoArticulos ?? '', pagina.textoResumen ?? '']
+      const plano = [
+        pagina.textoCompleto,
+        pagina.textoEncabezado ?? '',
+        pagina.textoArticulos ?? '',
+        pagina.textoResumen ?? '',
+      ]
         .join('\n')
         .toUpperCase()
         .replace(/\s/g, '');
@@ -210,6 +226,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           `filas vistas ${pagina.regiones?.filasDetectadas ?? '—'} · ` +
           `total ${(total / 1000).toFixed(1)}s`,
       );
+      console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
       console.log('  ¿nº 00348491?', plano.includes('00348491'));
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 
