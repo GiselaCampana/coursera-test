@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ACCEPT_ATTRIBUTE } from '@/lib/formatos';
 import { AppError, toUserMessage } from '@/lib/errors';
+import { MENSAJE_LECTURA_INSUFICIENTE } from '@/lib/domain/lectura-utilizable';
 import { consultar, pedir } from '@/lib/cliente/red';
 import { formatearPeso, prepararArchivo, type ArchivoPreparado } from '@/lib/cliente/imagenes';
 import { PasoRevision } from './PasoRevision';
@@ -218,6 +219,20 @@ export function NuevaCompra({
         setAvisos((prev) => [...new Set([...prev, ...salida.observaciones])]);
       }
 
+      /*
+       * Si la foto no se leyó, acá se termina: no se entra a la revisión.
+       *
+       * La pantalla de revisión existe para corregir un comprobante que no
+       * cierra, y eso supone que hay un comprobante. Cuando de once renglones
+       * salieron dos, lo que se ofrecería revisar no es una factura incompleta:
+       * es una factura que no se leyó, y confirmarla crearía una compra por una
+       * fracción de lo que dice el papel. Se vuelve al paso 1, donde están los
+       * dos botones para sacar la foto de nuevo o elegir otra.
+       */
+      if (salida.lecturaInsuficiente) {
+        throw new AppError(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+      }
+
       // 3. Traer el comprobante ya calculado para revisarlo.
       const detalle = await consultar(`/api/comprobantes/${documentId}`, { alEsperar: setDespertando });
       const datosDetalle = await detalle.json();
@@ -281,6 +296,11 @@ export function NuevaCompra({
         alEsperar: setDespertando,
       });
       if (salida.observaciones.length > 0) setAvisos(salida.observaciones);
+      // Volver a leer la misma imagen guardada no la mejora: si sigue sin
+      // leerse, hace falta otra foto, no otra vuelta.
+      if (salida.lecturaInsuficiente) {
+        throw new AppError(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+      }
 
       const detalle = await consultar(`/api/comprobantes/${comprobante.id}`, {
         alEsperar: setDespertando,

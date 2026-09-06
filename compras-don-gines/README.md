@@ -315,6 +315,39 @@ no hace falta ninguna clave y no hay costo por comprobante.
 En ningún momento se completa un número para hacer cerrar la cuenta. Lo que no se pudo
 leer queda vacío y el semáforo lo marca.
 
+### Cuando la foto directamente no se leyó
+
+Hay un caso distinto de "el comprobante no cierra", y hace falta tratarlo distinto. Un
+comprobante que no cierra se corrige a mano en la revisión, y para eso está la revisión.
+Pero cuando de once renglones salieron dos, lo que se ofrecería revisar no es una factura
+incompleta: **es una factura que no se leyó**, y confirmarla crearía una compra por una
+fracción de lo que dice el papel.
+
+Antes de cualquier otro control, la lectura se mide contra sí misma. Se la rechaza cuando:
+
+- ningún analizador reconoció un comprobante en el texto;
+- se reconoció el encabezado y no se entendió un solo renglón de la tabla;
+- no se encontró una sola línea con forma de fila, y el recorte de artículos se ubicó por
+  proporciones fijas —ahí puede caer sobre el membrete, y pasó: el analizador recibió la
+  dirección del proveedor donde esperaba la tabla—;
+- se entendió menos de la mitad de las filas que el detector contó sobre la imagen;
+- los renglones interpretados no llegan ni a la mitad del neto impreso en el pie.
+
+Las tres últimas son medidas independientes entre sí: una cuenta filas sobre la foto, otra
+mira dónde se ubicaron las zonas, la tercera compara pesos contra el papel. Ninguna
+depende del proveedor, así que valen igual para un formato que todavía no existe.
+
+En esos casos la revisión **no se abre**: se muestra *«No pudimos leer correctamente los
+renglones de esta factura. Usá la foto original o volvé a sacarla con el papel completo,
+buena luz y sin movimiento»* y se vuelve al paso 1, con los dos botones para sacar la foto
+de nuevo o elegir otra. No se crea una compra parcial ni se inventa un artículo.
+
+El límite es la mitad, y es a propósito: el control fino —"se ven 23 filas y se
+interpretaron 22"— ya lo hace la validación, que deja el comprobante en revisión con el
+detalle de lo que falta. Este otro está para el salto grande. Y sólo mira los pesos que
+faltan, nunca los que sobran: un total leído de más es un precio unitario mal reconocido,
+que es justamente lo que se arregla a mano.
+
 ### Volver a leer es volver a leer
 
 Desde la pantalla de revisión, **"Volver a leer esta imagen"** rehace el circuito completo

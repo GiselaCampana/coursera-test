@@ -279,3 +279,124 @@ describe('Errecalde: una lectura incompleta se rechaza, no se guarda a medias', 
     expect(await prisma.costHistory.count()).toBe(0);
   });
 });
+
+describe('una foto que no se leyó no llega a la revisión', () => {
+  /*
+   * El caso que faltaba, y que aparece con las dos fotos de Los Calvos.
+   *
+   * Hasta acá el servidor sabía plantarse ante una factura leída a medias: la
+   * marcaba en rojo y la mandaba igual a la pantalla de revisión, que es lo
+   * correcto cuando falta un renglón y se completa a mano. Pero cuando de once
+   * renglones salen dos, revisar no arregla nada: lo que hay en pantalla no es
+   * una factura incompleta, es una factura que no se leyó, y confirmarla
+   * crearía una compra por una fracción de lo que dice el papel.
+   *
+   * Las dos fotos reales están en tests/fotos y no corren en CI porque
+   * necesitan Tesseract. Lo que sí corre siempre es esto: las mismas señales
+   * que produjeron esas lecturas, entrando por la misma ruta HTTP.
+   */
+
+  /** El texto de la tabla, cortado en los primeros N renglones. */
+  function primerosRenglones(cuantos: number): string {
+    const lineas = LOS_CALVOS_ARTICULOS_OCR.split('\n');
+    // La primera línea es el encabezado de columnas; los renglones van después.
+    return [lineas[0], ...lineas.slice(1, 1 + cuantos)].join('\n');
+  }
+
+  it('dos renglones de los que se ven diez: se rechaza y se pide otra foto', async () => {
+    /*
+     * La tabla sale cortada en las dos lecturas, la de la franja y la de la
+     * página entera. Tiene que ser en las dos: si el texto de la página
+     * completa trajera los nueve renglones, el candidato que gana sería ése y
+     * la lectura estaría **bien**, no incompleta. Es lo que pasa de verdad
+     * cuando la foto no da: no se rompe un recorte, se lee mal todo.
+     */
+    const recortado = [
+      LOS_CALVOS_ENCABEZADO_OCR,
+      primerosRenglones(2),
+      LOS_CALVOS_RESUMEN_OCR,
+    ].join('\n');
+
+    const documentId = await abrirComprobante(escenario.sucursales.devoto);
+    const lectura = await mandarLectura(documentId, [
+      {
+        ...pagina({
+          completo: recortado,
+          encabezado: LOS_CALVOS_ENCABEZADO_OCR,
+          articulos: primerosRenglones(2),
+          resumen: LOS_CALVOS_RESUMEN_OCR,
+        }),
+        // Lo que el detector contó sobre la imagen, que es la medida
+        // independiente de cuántas filas hay en el papel.
+        regiones: { filasDetectadas: 10 },
+      },
+    ]);
+
+    expect(lectura.estado).toBe(200);
+    expect(lectura.cuerpo.puedeGuardar).toBe(false);
+
+    const control = (lectura.cuerpo.controles as { code: string; message: string }[]).find(
+      (c) => c.code === 'LECTURA_UTILIZABLE',
+    );
+    expect(control).toBeDefined();
+    // El mensaje es el que ve la usuaria, y dice qué hacer con el papel.
+    expect(control?.message).toContain('volvé a sacarla');
+    expect(control?.message).toContain('foto original');
+  });
+
+  it('la misma factura leída entera no dispara el control', async () => {
+    /*
+     * La otra mitad, y la que evita que este control se vuelva una molestia:
+     * con los nueve renglones leídos y nueve filas vistas, no tiene nada que
+     * decir. Un control que se dispara siempre no protege de nada; enseña a
+     * ignorarlo.
+     */
+    const documentId = await abrirComprobante(escenario.sucursales.devoto);
+    const lectura = await mandarLectura(documentId, [
+      {
+        ...pagina({
+          completo: LOS_CALVOS_TEXT,
+          encabezado: LOS_CALVOS_ENCABEZADO_OCR,
+          articulos: LOS_CALVOS_ARTICULOS_OCR,
+          resumen: LOS_CALVOS_RESUMEN_OCR,
+        }),
+        regiones: { filasDetectadas: 9 },
+      },
+    ]);
+
+    const control = (lectura.cuerpo.controles as { code: string; severity: string }[]).find(
+      (c) => c.code === 'LECTURA_UTILIZABLE',
+    );
+    expect(control?.severity).toBe('OK');
+    expect(lectura.cuerpo.puedeGuardar).toBe(true);
+  });
+
+  it('con la tabla caída sobre el membrete, la ruta contesta con el mensaje y no guarda nada', async () => {
+    /*
+     * Los Calvos 0010-00212356: de la página entera salieron mil quinientos
+     * caracteres, ninguna línea con forma de fila, y el recorte de artículos
+     * terminó sobre la dirección del proveedor. Ningún analizador reconoce un
+     * comprobante ahí, y la ruta tiene que decirlo en castellano en vez de
+     * dejar un comprobante vacío dando vueltas.
+     */
+    const documentId = await abrirComprobante(escenario.sucursales.devoto);
+    const lectura = await mandarLectura(documentId, [
+      {
+        ...pagina({
+          completo: 'LOS CALVOS S.A.\nAv. San Martín 2345\nSan Martín, Buenos Aires\nTel 4755-0000',
+          articulos: 'LOS CALVOS S.A.\nAv. San Martín 2345',
+        }),
+        // Sin una sola fila reconocida, las zonas se reparten por proporciones.
+        regiones: { filasDetectadas: 0 },
+      },
+    ]);
+
+    expect(lectura.estado).toBeGreaterThanOrEqual(400);
+    expect(lectura.cuerpo.error).toContain('No pudimos leer correctamente los renglones');
+
+    // Y nada quedó escrito: ni renglones, ni impuestos, ni compra.
+    expect(await prisma.documentItem.count({ where: { documentId } })).toBe(0);
+    expect(await prisma.purchaseMovement.count()).toBe(0);
+    expect(await prisma.costHistory.count()).toBe(0);
+  });
+});

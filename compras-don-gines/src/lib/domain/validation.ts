@@ -10,6 +10,12 @@ import {
 } from '@/lib/money';
 import { summarizeItems, type CostedItem } from '@/lib/domain/costing';
 import type { Conciliacion } from '@/lib/domain/conciliacion';
+import {
+  CODIGO_LECTURA_UTILIZABLE,
+  MENSAJE_LECTURA_INSUFICIENTE,
+  evaluarLecturaUtilizable,
+  type SenalesDeLectura,
+} from '@/lib/domain/lectura-utilizable';
 
 export type CheckSeverity = 'OK' | 'WARN' | 'ERROR';
 export type CheckState = 'OK' | 'RECONCILIADO' | 'DIFERENCIA' | 'PENDIENTE';
@@ -65,6 +71,14 @@ export interface ValidationInput {
    * el informe. No cambia ningún control ni el estado del semáforo.
    */
   reconciliation?: Conciliacion | null;
+  /**
+   * Cómo salió la lectura, para poder frenar una foto que no se pudo leer.
+   *
+   * Va acá y no en un control aparte porque `canSave` se decide en un solo
+   * lugar: si esto viviera afuera, habría dos criterios para lo mismo y tarde o
+   * temprano dirían cosas distintas.
+   */
+  lectura?: SenalesDeLectura | null;
 }
 
 export interface ValidationReport {
@@ -113,6 +127,14 @@ export interface ValidationReport {
    * consultar después junto a la imagen del comprobante.
    */
   reconciliation?: Conciliacion | null;
+  /**
+   * Cómo salió la lectura, para poder frenar una foto que no se pudo leer.
+   *
+   * Va acá y no en un control aparte porque `canSave` se decide en un solo
+   * lugar: si esto viviera afuera, habría dos criterios para lo mismo y tarde o
+   * temprano dirían cosas distintas.
+   */
+  lectura?: SenalesDeLectura | null;
 }
 
 const present = (v: MoneyInput): boolean =>
@@ -202,6 +224,34 @@ export function validateDocument(input: ValidationInput): ValidationReport {
   const attempts = input.attempts ?? 1;
   const checks: CheckResult[] = [];
   const sums = summarizeItems(items);
+
+  /*
+   * Control 0: ¿esta lectura sirve para revisar?
+   *
+   * Va primero porque es distinto de todos los demás. Los otros dicen que el
+   * comprobante no cierra —algo que se corrige a mano en la revisión—; éste
+   * dice que la foto no se pudo leer, y ahí revisar no tiene sentido: no hay
+   * qué revisar. Frena el guardado por el mismo camino que el resto, así
+   * `canSave` sigue decidiéndose en un solo lugar.
+   */
+  if (input.lectura) {
+    const veredicto = evaluarLecturaUtilizable(input.lectura);
+    checks.push(
+      veredicto.utilizable
+        ? {
+            code: CODIGO_LECTURA_UTILIZABLE,
+            label: 'Calidad de la lectura',
+            severity: 'OK',
+            message: 'La foto se leyó lo suficiente como para revisar el comprobante.',
+          }
+        : {
+            code: CODIGO_LECTURA_UTILIZABLE,
+            label: 'Calidad de la lectura',
+            severity: 'ERROR',
+            message: `${MENSAJE_LECTURA_INSUFICIENTE} ${veredicto.motivos.join(' ')}`,
+          },
+    );
+  }
 
   // --- 1. Aritmética de cada renglón ------------------------------------
   const badArithmetic: string[] = [];

@@ -200,3 +200,85 @@ test.describe('lectura automática sin servicios pagos', () => {
   });
 });
 
+
+/**
+ * Cuando la foto no se leyó, la revisión no se abre.
+ *
+ * Lo que se prueba acá es el cableado, no la calidad del OCR: que el veredicto
+ * del servidor llegue al navegador, frene el paso a «Revisar los datos» y deje
+ * a la vista los dos botones para volver a sacar la foto. Por eso la respuesta
+ * del control se inyecta en vez de depender de que Tesseract lea mal: una
+ * prueba que necesita que el reconocimiento falle se rompería el día que
+ * mejore, y ese día no habría ningún defecto que arreglar.
+ *
+ * Las dos fotos reales que motivaron el control —Los Calvos 0010-00212356 y
+ * 0010-00213103 reescalada— se miden en tests/fotos/lectura-real.test.ts, que
+ * corre el lector de verdad sobre ellas.
+ */
+test.describe('una lectura insuficiente frena antes de la revisión', () => {
+  test.afterAll(async () => {
+    await limpiarComprobantesLeidos();
+  });
+
+  test.beforeEach(async ({ page }) => {
+    await ingresar(page, 'admin');
+    await page.goto('/nueva-compra');
+  });
+
+  test('muestra el mensaje, no abre la revisión y deja volver a sacar la foto', async ({
+    page,
+  }, testInfo) => {
+    soloEnIphone(test, testInfo.project.name);
+
+    // El servidor contesta que la lectura no alcanza. Es la misma forma de
+    // respuesta que produce la ruta real ante una foto ilegible.
+    await page.route('**/api/comprobantes/*/lectura', async (ruta) => {
+      await ruta.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          documentId: 'x',
+          estado: 'DIFERENCIA',
+          puedeGuardar: false,
+          controles: [
+            {
+              code: 'LECTURA_UTILIZABLE',
+              label: 'Calidad de la lectura',
+              severity: 'ERROR',
+              message:
+                'No pudimos leer correctamente los renglones de esta factura. Usá la foto ' +
+                'original o volvé a sacarla con el papel completo, buena luz y sin movimiento. ' +
+                'En la imagen se ven 10 filas y se entendieron 2: falta más de la mitad de la tabla.',
+            },
+          ],
+          calculado: null,
+          analizador: 'los-calvos',
+          renglonesAsociados: 0,
+          renglonesSinAsociar: 0,
+          intentos: 1,
+          observaciones: [],
+          releer: null,
+        }),
+      });
+    });
+
+    const galeria = page.locator('input[type="file"]').nth(1);
+    await galeria.setInputFiles([
+      { name: 'factura.jpg', mimeType: 'image/jpeg', buffer: await facturaLosCalvosJpeg() },
+    ]);
+    await expect(page.locator('.miniatura')).toHaveCount(1);
+    await page.getByRole('button', { name: 'Leer el comprobante' }).click();
+
+    // El mensaje, en castellano y diciendo qué hacer con el papel.
+    await expect(page.getByRole('alert')).toContainText('volvé a sacarla con el papel completo', {
+      timeout: 4 * MINUTOS,
+    });
+
+    // Y lo que no tiene que pasar: entrar a revisar dos renglones de diez.
+    await expect(page.getByRole('heading', { name: 'Revisar los datos' })).toHaveCount(0);
+
+    // Los dos caminos para arreglarlo siguen a mano.
+    await expect(page.getByRole('button', { name: 'Sacar foto' })).toBeEnabled();
+    await expect(page.getByRole('button', { name: 'Elegir del teléfono' })).toBeEnabled();
+  });
+});

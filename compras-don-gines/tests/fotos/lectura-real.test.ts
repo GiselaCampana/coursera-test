@@ -231,6 +231,58 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       console.log('  ¿total 2.196.120,52?', plano.includes('2.196.120,52'));
 
       expect(plano.length).toBeGreaterThan(100);
+
+      /*
+       * Mientras esta foto se lea así, la lectura tiene que rechazarse.
+       *
+       * De la página entera salen mil quinientos caracteres, ninguna línea con
+       * forma de fila, y el recorte de artículos termina sobre el membrete: el
+       * número de comprobante y el total se leen, la tabla no. Cero artículos
+       * con el encabezado a la vista es el caso que más engaña, porque la
+       * pantalla parece haber entendido la factura.
+       *
+       * El día que la foto se lea bien, esta afirmación va a fallar. Está bien
+       * que falle: significa que hay que actualizarla con los nueve renglones.
+       */
+      expect(interpretado.articulos).toBe(0);
+      expect(
+        interpretado.controles.some(
+          (c) => c.code === 'LECTURA_UTILIZABLE' && c.severity === 'ERROR',
+        ),
+      ).toBe(true);
+    },
+    600_000,
+  );
+
+  it(
+    'Los Calvos 0010-00213103, reescalada: la lectura no alcanza y hay que rechazarla',
+    async () => {
+      const { lectura, medidas, total } = await leerFoto('los-calvos-0010-00213103.jpg');
+      const pagina = lectura.paginas[0];
+
+      console.log(
+        `[Los Calvos 213103] página ${medidas[0].ancho}×${medidas[0].alto} · ` +
+          `filas vistas ${pagina.regiones?.filasDetectadas ?? '—'} · ` +
+          `total ${(total / 1000).toFixed(1)}s`,
+      );
+      const interpretado = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${interpretado.articulos} artículos · analizador ${interpretado.analizador} · ` +
+          `estado ${interpretado.estado} · filas detector ${interpretado.filasDelDetector} · ` +
+          `sin resolver ${interpretado.filasSinResolver} · esperadas ${interpretado.filasEsperadas}`,
+      );
+      console.log(
+        '  controles en error:',
+        JSON.stringify(interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)),
+      );
+
+      /*
+       * Este comprobante tiene once renglones y de la foto reescalada salen dos.
+       * Lo que se afirma acá no es cuántos se leen —eso puede mejorar— sino que
+       * mientras no se lean, la lectura se rechace en vez de ofrecer una compra
+       * de dos artículos.
+       */
+      expect(interpretado.controles.some((c) => c.code === 'LECTURA_UTILIZABLE')).toBe(true);
     },
     600_000,
   );

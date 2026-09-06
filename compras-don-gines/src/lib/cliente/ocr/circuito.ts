@@ -1,5 +1,6 @@
 import { AppError } from '@/lib/errors';
 import { pedir } from '@/lib/cliente/red';
+import { CODIGO_LECTURA_UTILIZABLE } from '@/lib/domain/lectura-utilizable';
 import type { ZonaAReleer } from '@/lib/ocr/types';
 
 /**
@@ -37,6 +38,17 @@ export interface EntradaDeCircuito {
 export interface SalidaDeCircuito {
   intentos: number;
   observaciones: string[];
+  /**
+   * La foto no se pudo leer, y no hay revisión que hacer.
+   *
+   * Es distinto de "el comprobante no cierra". Un comprobante que no cierra se
+   * revisa a mano y para eso está la pantalla de revisión; una foto que no se
+   * leyó no tiene qué revisar, y llevar a esa pantalla dos renglones de once es
+   * ofrecer una compra que no existe.
+   */
+  lecturaInsuficiente: boolean;
+  /** Qué decirle a quien está con el papel en la mano. */
+  motivoInsuficiente: string | null;
 }
 
 export async function leerYControlar(entrada: EntradaDeCircuito): Promise<SalidaDeCircuito> {
@@ -71,6 +83,7 @@ export async function leerYControlar(entrada: EntradaDeCircuito): Promise<Salida
    * buscar esa franja sola en vez de repetir la página entera.
    */
   let zona: ZonaAReleer | null = null;
+  let insuficiente: { code: string; severity: string; message: string } | undefined;
 
   for (;;) {
     if (intento > 1) alAvanzar({ etapa: 'RELEYENDO', detalle: motivo ?? null });
@@ -92,13 +105,31 @@ export async function leerYControlar(entrada: EntradaDeCircuito): Promise<Salida
       for (const o of control.observaciones) if (!observaciones.includes(o)) observaciones.push(o);
     }
 
+    /*
+     * El veredicto de calidad se toma de la última vuelta, no de la primera.
+     *
+     * Una relectura focalizada puede recuperar los renglones que faltaban, así
+     * que cortar en la primera vuelta por lectura insuficiente sería tirar
+     * justamente la vuelta que existe para arreglarla. Se deja que el bucle
+     * termine y recién ahí se decide.
+     */
+    insuficiente = (control.controles ?? []).find(
+      (c: { code: string; severity: string }) =>
+        c.code === CODIGO_LECTURA_UTILIZABLE && c.severity === 'ERROR',
+    );
+
     if (control.puedeGuardar || !control.releer || intento >= maximoIntentos) break;
     motivo = control.releer.motivo;
     zona = control.releer.zona ?? null;
     intento += 1;
   }
 
-  return { intentos: intento, observaciones };
+  return {
+    intentos: intento,
+    observaciones,
+    lecturaInsuficiente: Boolean(insuficiente),
+    motivoInsuficiente: insuficiente?.message ?? null,
+  };
 }
 
 /**

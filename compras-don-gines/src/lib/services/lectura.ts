@@ -18,6 +18,10 @@ import {
   type ValidationReport,
 } from '@/lib/domain/validation';
 import { conciliarCentavos, type Conciliacion } from '@/lib/domain/conciliacion';
+import {
+  CODIGO_LECTURA_UTILIZABLE,
+  MENSAJE_LECTURA_INSUFICIENTE,
+} from '@/lib/domain/lectura-utilizable';
 import { mergeHeaders, toPrintedSummary, toRawItems } from '@/lib/ocr/normalize';
 import { elegirAnalizador } from '@/lib/ocr/parsers';
 import type { AnalisisComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
@@ -105,6 +109,19 @@ interface Candidato {
   filasSinResolver: number;
   /** ¿Alguno de esos jirones está entre el último artículo leído y el pie? */
   faltaElFinalDeLaTabla: boolean;
+  /**
+   * Las filas que contó el detector sobre la imagen, sin mezclar.
+   *
+   * Es distinto de `filasEnLaImagen`, que ya viene combinado con lo que
+   * entendió el analizador. Para preguntarse «¿se entendió lo que se ve?» hace
+   * falta el número crudo: el combinado no puede contradecir al analizador
+   * porque lo tiene adentro.
+   */
+  filasDelDetector: number | null;
+  /** ¿Se ubicaron las zonas mirando el texto, o por proporciones fijas? */
+  zonasPorProporcion: boolean;
+  /** ¿Salió del encabezado algún dato que identifique el comprobante? */
+  encabezadoReconocido: boolean;
 }
 
 interface CandidatoEvaluado extends Candidato {
@@ -204,9 +221,9 @@ export async function registrarLectura(
     }
 
     if (candidatos.length === 0) {
-      throw new ValidationError(
-        'No se pudo interpretar el texto reconocido. Probá sacar la foto de nuevo.',
-      );
+      // Ningún analizador reconoció un comprobante en el texto. No hay compra
+      // parcial que ofrecer: hay que sacar la foto de nuevo.
+      throw new ValidationError(MENSAJE_LECTURA_INSUFICIENTE);
     }
 
     // --- 3. Proveedor y condiciones ---------------------------------------
@@ -382,6 +399,7 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
   const conRecortes = juntarPaginas(paginas, false);
   const soloCompleto = juntarPaginas(paginas, true);
   const filasEnLaImagen = contarFilasVistas(paginas);
+  const zonasPorProporcion = seRepartioPorProporciones(paginas);
 
   const candidatos: Candidato[] = [];
   for (const [modo, textos] of [
@@ -423,6 +441,9 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
       filasEnLaImagen: filasDeEsteCandidato > 0 ? filasDeEsteCandidato : filasEnLaImagen,
       filasSinResolver: sinResolver,
       faltaElFinalDeLaTabla: analisis.faltaElFinalDeLaTabla ?? false,
+      filasDelDetector: filasEnLaImagen,
+      zonasPorProporcion,
+      encabezadoReconocido: encabezadoDaSenales(analisis.header),
     });
   }
   return candidatos;
@@ -440,6 +461,34 @@ function contarFilasVistas(paginas: PaginaLeida[]): number | null {
     }
   }
   return alguna ? total : null;
+}
+
+/**
+ * ¿El recorte de la tabla se ubicó por proporciones fijas?
+ *
+ * Cuando en la página completa no hay una sola línea con forma de fila, el
+ * detector no tiene con qué ubicar la tabla y reparte la hoja en bandas fijas.
+ * Es lo correcto —da algo con qué reintentar—, pero significa que el recorte de
+ * «artículos» está puesto a ciegas y puede caer sobre el membrete. Pasó: sobre
+ * una foto de Los Calvos el analizador recibió la dirección del proveedor donde
+ * esperaba la tabla.
+ *
+ * Se pregunta sólo sobre las páginas que traen el dato: un intento guardado por
+ * una versión anterior no lo tiene, y ausencia de dato no es evidencia de
+ * fallo.
+ */
+function seRepartioPorProporciones(paginas: PaginaLeida[]): boolean {
+  const conDato = paginas.filter((p) => p.regiones != null);
+  if (conDato.length === 0) return false;
+  return conDato.every((p) => (p.regiones?.filasDetectadas ?? 0) === 0);
+}
+
+/** ¿El encabezado trae algo que identifique al comprobante o a quien lo emitió? */
+function encabezadoDaSenales(header: OcrHeader | null | undefined): boolean {
+  if (!header) return false;
+  return Boolean(
+    header.fullNumber || header.number || header.cuit || header.legalName || header.supplierName,
+  );
 }
 
 /** Une las páginas en un solo juego de textos por zona. */
@@ -515,6 +564,23 @@ function elegirMejor(
       attempts: intentos,
       filasEnLaImagen: candidato.filasEnLaImagen,
       reconciliation: conciliado.conciliacion,
+      // Antes que si el comprobante cierra: si la foto se pudo leer.
+      lectura: {
+        articulos: costeados.length,
+        filasEnLaImagen: candidato.filasDelDetector,
+        zonasPorProporcion: candidato.zonasPorProporcion,
+        encabezadoReconocido: candidato.encabezadoReconocido,
+        analizador: candidato.analizador,
+        // La tercera medida, la que no depende de contar filas: cuánto suman
+        // los renglones que se entendieron contra cuánto dice el pie.
+        sumaDeRenglones: costeados
+          .reduce((total, i) => total.plus(i.netAmount), toDecimal('0'))
+          .toFixed(2),
+        netoImpreso:
+          printed.netTotal === null || printed.netTotal === undefined
+            ? null
+            : toDecimal(printed.netTotal).toFixed(2),
+      },
     });
 
     const diferencia = printed.netTotal
@@ -600,7 +666,23 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
       articulos: 0,
       analizador: null,
       estado: null,
-      controles: [],
+      /*
+       * El mismo control que emitiría la validación, dicho desde acá.
+       *
+       * Sin candidatos no hay nada que validar, así que `validateDocument` no
+       * llega a correr. Pero el diagnóstico tiene que decir lo mismo que el
+       * guardado: por este camino `registrarLectura` lanza el error con este
+       * mensaje, y la pantalla de diagnóstico mostraba una lista de controles
+       * vacía, que se lee como "no hubo problemas".
+       */
+      controles: [
+        {
+          code: CODIGO_LECTURA_UTILIZABLE,
+          label: 'Calidad de la lectura',
+          severity: 'ERROR',
+          message: `${MENSAJE_LECTURA_INSUFICIENTE} No se reconoció ningún comprobante en el texto leído.`,
+        },
+      ],
       observaciones: ['No se reconoció ningún comprobante en el texto leído.'],
       calculado: null,
       filasDelDetector: null,
