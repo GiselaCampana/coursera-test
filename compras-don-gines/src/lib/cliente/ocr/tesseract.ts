@@ -138,8 +138,44 @@ export async function leerMapa(
   const imagen = await mapaABlob(mapa, 'image/png');
   const { data } = await worker.recognize(imagen, {}, { text: true, blocks: true });
 
+  const lineas = lineasDeBloques(data.blocks);
+
+  return {
+    texto: data.text ?? '',
+    confianza: (data.confidence ?? 0) / 100,
+    lineas,
+  };
+}
+
+/** La forma en que Tesseract entrega las líneas, reducida a lo que se usa. */
+export interface BloqueDeTesseract {
+  paragraphs?: {
+    lines?: {
+      text: string;
+      confidence: number;
+      bbox: { x0: number; y0: number; x1: number; y1: number };
+    }[];
+  }[];
+}
+
+/**
+ * Aplana los bloques de Tesseract a líneas, **en píxeles**.
+ *
+ * Las cajas salen tal como las da Tesseract: en píxeles de la imagen que se le
+ * pasó, sin normalizar. Quien las consume —`detectarRegiones`— recibe aparte el
+ * ancho y el alto, y normaliza por su cuenta.
+ *
+ * Está separada del worker a propósito, y es la única que hace esta conversión.
+ * Antes el arnés de pruebas de fotos reales tenía su propia copia y las
+ * normalizaba a 0..1: el recorte de la tabla salía como una franja del 5 % en
+ * el borde de la página, no aportaba nada, y el diagnóstico parecía válido
+ * —«Errecalde pierde renglones»— cuando en realidad los veía todos. Que el
+ * arnés llame a esta misma función es lo que hace imposible que vuelvan a
+ * divergir las unidades.
+ */
+export function lineasDeBloques(bloques: BloqueDeTesseract[] | undefined | null): LineaOcr[] {
   const lineas: LineaOcr[] = [];
-  for (const bloque of data.blocks ?? []) {
+  for (const bloque of bloques ?? []) {
     for (const parrafo of bloque.paragraphs ?? []) {
       for (const linea of parrafo.lines ?? []) {
         const texto = linea.text.replace(/\n+$/, '');
@@ -157,12 +193,21 @@ export async function leerMapa(
       }
     }
   }
+  return lineas;
+}
 
-  return {
-    texto: data.text ?? '',
-    confianza: (data.confidence ?? 0) / 100,
-    lineas,
-  };
+/**
+ * ¿Vienen las cajas normalizadas a 0..1 en vez de en píxeles?
+ *
+ * El control que hace ruidoso el error que ya se cometió una vez. Unas
+ * coordenadas normalizadas no fallan: producen regiones diminutas y un
+ * diagnóstico que parece válido. Con una imagen de más de un par de píxeles,
+ * que **todas** las cajas quepan dentro del cuadrado unitario no puede pasar
+ * por casualidad.
+ */
+export function cajasParecenNormalizadas(lineas: LineaOcr[], ancho: number, alto: number): boolean {
+  if (lineas.length === 0 || ancho <= 2 || alto <= 2) return false;
+  return lineas.every((l) => l.caja.x1 <= 1 && l.caja.y1 <= 1);
 }
 
 export { PSM };

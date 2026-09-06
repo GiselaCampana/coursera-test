@@ -84,26 +84,20 @@ vi.mock('@/lib/cliente/ocr/tesseract', async (original) => {
         .toBuffer();
       const { data } = await worker.recognize(png, {}, { text: true, blocks: true });
 
-      const lineas = [];
-      for (const bloque of data.blocks ?? []) {
-        for (const parrafo of bloque.paragraphs ?? []) {
-          for (const linea of parrafo.lines ?? []) {
-            const texto = linea.text.replace(/\n+$/, '');
-            if (texto.trim() === '') continue;
-            lineas.push({
-              texto,
-              confianza: linea.confidence / 100,
-              // En píxeles, igual que el módulo real: `detectarRegiones`
-              // recibe el ancho y el alto y normaliza por su cuenta.
-              caja: {
-                x0: linea.bbox.x0,
-                y0: linea.bbox.y0,
-                x1: linea.bbox.x1,
-                y1: linea.bbox.y1,
-              },
-            });
-          }
-        }
+      /*
+       * La misma función que usa el módulo real, no una copia.
+       *
+       * El arnés tenía su propia versión y normalizaba las cajas a 0..1
+       * mientras el módulo real las entrega en píxeles. No fallaba: producía
+       * regiones diminutas y un diagnóstico que parecía válido. Compartir la
+       * función es lo que hace imposible que vuelvan a divergir.
+       */
+      const lineas = real.lineasDeBloques(data.blocks);
+      if (real.cajasParecenNormalizadas(lineas, mapa.width, mapa.height)) {
+        throw new Error(
+          'Las cajas llegaron normalizadas a 0..1 y tienen que venir en píxeles: ' +
+            'la medición que salga de acá no significaría nada.',
+        );
       }
       return { texto: data.text, confianza: (data.confidence ?? 0) / 100, lineas };
     },
