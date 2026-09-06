@@ -93,11 +93,13 @@ vi.mock('@/lib/cliente/ocr/tesseract', async (original) => {
             lineas.push({
               texto,
               confianza: linea.confidence / 100,
+              // En píxeles, igual que el módulo real: `detectarRegiones`
+              // recibe el ancho y el alto y normaliza por su cuenta.
               caja: {
-                x0: linea.bbox.x0 / mapa.width,
-                y0: linea.bbox.y0 / mapa.height,
-                x1: linea.bbox.x1 / mapa.width,
-                y1: linea.bbox.y1 / mapa.height,
+                x0: linea.bbox.x0,
+                y0: linea.bbox.y0,
+                x1: linea.bbox.x1,
+                y1: linea.bbox.y1,
               },
             });
           }
@@ -164,6 +166,10 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           `códigos ${conCodigo.length}/23 · subtotales ${conSubtotal.length}/23 · ` +
           `preparar ${(preparado / 1000).toFixed(1)}s · total ${(total / 1000).toFixed(1)}s`,
       );
+
+      const faltan = ERRECALDE_ARTICULOS_IMPRESOS.filter((a) => !plano.includes(a.codigo));
+      console.log('  códigos ausentes:', faltan.map((a) => a.codigo).join(' '));
+      console.log('  tiempos por zona:', JSON.stringify(pagina.tiempos));
 
       // El piso que hay que mover. Se afirma sobre el número real de hoy para
       // que cualquier cambio del preproceso se note, en la dirección que sea.

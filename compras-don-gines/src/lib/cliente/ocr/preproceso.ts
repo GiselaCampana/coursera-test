@@ -13,12 +13,14 @@ import {
   aEscalaDeGrises,
   clonarMapa,
   binarizarSauvola,
+  clasificarCuadrilatero,
   corregirPerspectiva,
   detectarEsquinas,
   enderezar,
   enfocar,
   escalar,
   normalizarContraste,
+  recortarAlRectangulo,
   reducirRuido,
   type Mapa,
 } from '@/lib/cliente/ocr/imagen';
@@ -68,11 +70,30 @@ export function prepararPagina(original: Mapa): ResultadoPreproceso {
   let mapa = original;
   let perspectivaCorregida = false;
 
+  /*
+   * Qué se le hace al papel lo decide su geometría, no su proveedor.
+   *
+   * Medido sobre las tres facturas reales: deformar un papel que sólo está
+   * torcido lo empeora. En la de Los Calvos la corrección dejaba una página
+   * casi cuadrada —2200×2196 saliendo de 4284×5712— y el detector veía 7 filas
+   * de 9; en la de Mabelherdi se perdía el número de comprobante. La razón es
+   * que el warp reinterpola todos los píxeles y redondea los trazos finos, y
+   * sobre un papel plano no hay nada que enderezar que el enderezado no
+   * arregle más barato.
+   */
   const esquinas = detectarEsquinas(mapa);
-  if (esquinas) {
+  const forma = esquinas ? clasificarCuadrilatero(esquinas) : null;
+
+  if (esquinas && forma === 'PERSPECTIVA') {
     mapa = corregirPerspectiva(mapa, esquinas);
     perspectivaCorregida = true;
+  } else if (esquinas && forma === 'RECTANGULO_ROTADO') {
+    // Sin deformar: se saca el fondo y el enderezado de más abajo se ocupa del
+    // ángulo, que es una sola interpolación en lugar de dos.
+    mapa = recortarAlRectangulo(mapa, esquinas);
   }
+  // `NO_CONFIABLE` y «sin esquinas» comparten camino a propósito: se sigue con
+  // la imagen tal como vino. Recortar mal es peor que no recortar.
 
   if (Math.max(mapa.width, mapa.height) > LADO_PAGINA * MARGEN_REESCALADO) {
     const factor = LADO_PAGINA / Math.max(mapa.width, mapa.height);

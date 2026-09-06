@@ -543,6 +543,163 @@ export function detectarEsquinas(mapa: Mapa): [Punto, Punto, Punto, Punto] | nul
  * corrección de perspectiva cuesta unos puntos de confianza; aplicar una mal
  * calculada cuesta el comprobante entero.
  */
+/**
+ * Qué forma tiene el cuadrilátero del papel, en números.
+ *
+ * Tres propiedades, y las tres se miden sobre la geometría: no dependen de qué
+ * proveedor emitió el comprobante ni de ninguna constante ajustada a una foto
+ * en particular.
+ */
+export interface MedidasDelCuadrilatero {
+  /** Cuánto se apartan las esquinas de los 90°, en grados. */
+  desviacionAngular: number;
+  /** Cuánto se apartan de ser paralelos los lados opuestos, en grados. */
+  desviacionParalelismo: number;
+  /** Cuánto más largo es un lado que su opuesto. 1 es igual. */
+  razonDeEscala: number;
+}
+
+export function medirCuadrilatero(
+  esquinas: [Punto, Punto, Punto, Punto],
+): MedidasDelCuadrilatero {
+  const [sa, sb, sc, sd] = esquinas;
+  const largo = (a: Punto, b: Punto) => Math.hypot(a.x - b.x, a.y - b.y);
+  const direccion = (a: Punto, b: Punto) => Math.atan2(b.y - a.y, b.x - a.x);
+
+  const arriba = largo(sa, sb);
+  const derecha = largo(sb, sc);
+  const abajo = largo(sc, sd);
+  const izquierda = largo(sd, sa);
+
+  const razon = (p: number, q: number) => Math.max(p, q) / Math.max(1e-6, Math.min(p, q));
+  const razonDeEscala = Math.max(razon(arriba, abajo), razon(izquierda, derecha));
+
+  /*
+   * Paralelismo: se comparan las direcciones de los lados opuestos, tomados en
+   * el mismo sentido. En un rectángulo —esté rotado como esté— arriba y abajo
+   * apuntan igual; en un trapecio de perspectiva, convergen.
+   */
+  const enGrados = (radianes: number) => {
+    let g = Math.abs((radianes * 180) / Math.PI) % 180;
+    if (g > 90) g = 180 - g;
+    return g;
+  };
+  const desviacionParalelismo = Math.max(
+    enGrados(direccion(sa, sb) - direccion(sd, sc)),
+    enGrados(direccion(sa, sd) - direccion(sb, sc)),
+  );
+
+  let desviacionAngular = 0;
+  for (let i = 0; i < 4; i++) {
+    const previa = esquinas[(i + 3) % 4];
+    const actual = esquinas[i];
+    const siguiente = esquinas[(i + 1) % 4];
+    const u = { x: previa.x - actual.x, y: previa.y - actual.y };
+    const v = { x: siguiente.x - actual.x, y: siguiente.y - actual.y };
+    const normas = Math.hypot(u.x, u.y) * Math.hypot(v.x, v.y);
+    if (normas < 1e-6) return { desviacionAngular: 90, desviacionParalelismo: 90, razonDeEscala: 99 };
+    const coseno = (u.x * v.x + u.y * v.y) / normas;
+    const grados = (Math.acos(Math.min(1, Math.max(-1, coseno))) * 180) / Math.PI;
+    desviacionAngular = Math.max(desviacionAngular, Math.abs(grados - 90));
+  }
+
+  return { desviacionAngular, desviacionParalelismo, razonDeEscala };
+}
+
+/**
+ * Recorta al rectángulo que contiene el papel, sin deformar nada.
+ *
+ * Es lo que reemplaza a la corrección de perspectiva cuando el papel está sólo
+ * torcido: se saca el fondo —la mesa, la caja, lo que haya alrededor— y se deja
+ * el papel entero, con sus píxeles intactos. Enderezarlo viene después, y esa
+ * sí es una interpolación que hace falta.
+ *
+ * Se toma la caja con un margen, porque las esquinas detectadas caen sobre el
+ * borde del papel y cortar justo ahí se lleva la primera letra de la primera
+ * línea.
+ */
+export function recortarAlRectangulo(
+  mapa: Mapa,
+  esquinas: [Punto, Punto, Punto, Punto],
+  margen = 0.01,
+): Mapa {
+  const xs = esquinas.map((p) => p.x);
+  const ys = esquinas.map((p) => p.y);
+  const holgura = Math.round(Math.min(mapa.width, mapa.height) * margen);
+
+  const x0 = Math.max(0, Math.min(...xs) - holgura);
+  const y0 = Math.max(0, Math.min(...ys) - holgura);
+  const x1 = Math.min(mapa.width, Math.max(...xs) + holgura);
+  const y1 = Math.min(mapa.height, Math.max(...ys) + holgura);
+
+  const ancho = Math.max(1, x1 - x0);
+  const alto = Math.max(1, y1 - y0);
+  if (ancho >= mapa.width && alto >= mapa.height) return mapa;
+
+  const destino = crearMapa(ancho, alto);
+  for (let y = 0; y < alto; y++) {
+    const origen = ((y + y0) * mapa.width + x0) * 4;
+    destino.data.set(mapa.data.subarray(origen, origen + ancho * 4), y * ancho * 4);
+  }
+  return destino;
+}
+
+export type FormaDelPapel = 'RECTANGULO_ROTADO' | 'PERSPECTIVA' | 'NO_CONFIABLE';
+
+/**
+ * Hasta dónde llega «un rectángulo apenas rotado».
+ *
+ * Con estas tolerancias, un papel plano fotografiado de frente y torcido en la
+ * mesa entra holgado: la detección de esquinas sobre una foto tiene ruido de
+ * varios píxeles y eso ya mueve un par de grados.
+ */
+const RECTANGULO_ANGULO = 6;
+const RECTANGULO_PARALELISMO = 6;
+const RECTANGULO_ESCALA = 1.08;
+
+/**
+ * Desde dónde vale la pena deformar la imagen.
+ *
+ * No es un número ajustado a las facturas de este proyecto: es dónde deja de
+ * convenir el arreglo. Corregir la perspectiva reinterpola **todos** los
+ * píxeles, y esa interpolación redondea los trazos finos —la diferencia entre
+ * leer «37,60» y leer «37,00»—. Se paga sólo cuando el escorzo es tan marcado
+ * que sin corregirlo la altura del renglón cambia demasiado de un borde al
+ * otro: a razón 1,4 el texto de un lado mide 40 % menos que el del otro, y ahí
+ * el OCR sí empieza a fallar. Por debajo, la deformación cuesta más de lo que
+ * arregla y alcanza con enderezar.
+ */
+const PERSPECTIVA_ANGULO = 20;
+const PERSPECTIVA_ESCALA = 1.4;
+
+/**
+ * Decide qué hacer con el papel detectado, mirando sólo su geometría.
+ *
+ * - `RECTANGULO_ROTADO`: está plano y sólo torcido. Se endereza, que cuesta una
+ *   sola interpolación en vez de dos, y no se deforma.
+ * - `PERSPECTIVA`: hay escorzo de verdad y conviene corregirlo.
+ * - `NO_CONFIABLE`: la forma no es ni una cosa ni la otra —papel arrugado, un
+ *   borde tapado, un reflejo que se comió una esquina—. Ahí no se toca nada y
+ *   se sigue con la imagen tal como vino: recortar mal es peor que no recortar.
+ */
+export function clasificarCuadrilatero(esquinas: [Punto, Punto, Punto, Punto]): FormaDelPapel {
+  const m = medirCuadrilatero(esquinas);
+
+  if (
+    m.desviacionAngular <= RECTANGULO_ANGULO &&
+    m.desviacionParalelismo <= RECTANGULO_PARALELISMO &&
+    m.razonDeEscala <= RECTANGULO_ESCALA
+  ) {
+    return 'RECTANGULO_ROTADO';
+  }
+
+  if (m.desviacionAngular >= PERSPECTIVA_ANGULO || m.razonDeEscala >= PERSPECTIVA_ESCALA) {
+    return 'PERSPECTIVA';
+  }
+
+  return 'NO_CONFIABLE';
+}
+
 export function pareceHojaDePapel(esquinas: [Punto, Punto, Punto, Punto]): boolean {
   const lado = (a: Punto, b: Punto) => Math.hypot(a.x - b.x, a.y - b.y);
   const [sa, sb, sc, sd] = esquinas;
