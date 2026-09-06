@@ -269,10 +269,17 @@ test.describe('una lectura insuficiente frena antes de la revisión', () => {
     await expect(page.locator('.miniatura')).toHaveCount(1);
     await page.getByRole('button', { name: 'Leer el comprobante' }).click();
 
-    // El mensaje, en castellano y diciendo qué hacer con el papel.
-    await expect(page.getByRole('alert')).toContainText('volvé a sacarla con el papel completo', {
-      timeout: 4 * MINUTOS,
-    });
+    /*
+     * El mensaje, en castellano y diciendo qué hacer con el papel.
+     *
+     * Se apunta al recuadro de error de la aplicación y no a `role=alert` a
+     * secas: Next mete su propio anunciador de rutas con ese rol, vacío, y la
+     * consulta engancharía los dos.
+     */
+    await expect(page.locator('.mensaje-error')).toContainText(
+      'volvé a sacarla con el papel completo',
+      { timeout: 4 * MINUTOS },
+    );
 
     // Y lo que no tiene que pasar: entrar a revisar dos renglones de diez.
     await expect(page.getByRole('heading', { name: 'Revisar los datos' })).toHaveCount(0);
