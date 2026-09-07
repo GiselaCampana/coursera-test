@@ -4,6 +4,7 @@ import { createWorker, PSM, type Worker } from 'tesseract.js';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import type { Mapa } from '@/lib/cliente/ocr/imagen';
+import type { RenglonInterpretado } from '@/lib/services/lectura';
 
 /**
  * El lector real, sobre las fotos reales.
@@ -129,6 +130,51 @@ async function interpretar(lectura: { paginas: unknown[] }) {
   return analizarSinGuardar(lectura.paginas as Parameters<typeof analizarSinGuardar>[0]);
 }
 
+/**
+ * Imprime renglón por renglón lo que se interpretó, contra lo que dice el papel.
+ *
+ * Saber que faltan $130.335,29 no dice qué corregir. Saber qué renglón, con qué
+ * cantidad, con qué precio, y si el importe se leyó del papel o se calculó como
+ * cantidad × precio, sí: un importe calculado cuadra por construcción y por eso
+ * es el primero que hay que mirar cuando el comprobante no cierra.
+ */
+function informarRenglones(
+  renglones: RenglonInterpretado[],
+  impresos: { codigo: string; descripcion: string; subtotal: string }[],
+) {
+  const porCodigo = new Map(impresos.map((a) => [a.codigo, a]));
+  let diferencia = 0;
+
+  console.log('  renglón por renglón (leído → impreso):');
+  for (const r of renglones) {
+    const papel = r.codigo ? porCodigo.get(r.codigo) : undefined;
+    const esperado = papel ? Number(papel.subtotal) : null;
+    const leido = Number(r.importe);
+    const delta = esperado === null ? null : leido - esperado;
+    if (delta !== null) diferencia += delta;
+    console.log(
+      `    ${String(r.linea).padStart(2)} ${(r.codigo ?? '—').padEnd(10)} ` +
+        `${r.descripcion.slice(0, 34).padEnd(34)} ` +
+        `${r.cantidad.padStart(10)} ${r.unidad.padEnd(3)} × ${r.precioUnitario.padStart(11)} = ` +
+        `${r.importe.padStart(12)}${r.importeImpreso ? ' (del papel)' : ' (CALCULADO)'}` +
+        (delta === null
+          ? '   ¿sin correspondencia en el papel?'
+          : Math.abs(delta) < 0.005
+            ? '   ok'
+            : `   papel ${esperado!.toFixed(2)} → ${delta > 0 ? '+' : ''}${delta.toFixed(2)}`),
+    );
+  }
+
+  const sinLeer = impresos.filter((a) => !renglones.some((r) => r.codigo === a.codigo));
+  if (sinLeer.length > 0) {
+    console.log('  renglones del papel que no se leyeron:');
+    for (const a of sinLeer) {
+      console.log(`    ${a.codigo} ${a.descripcion} ${a.subtotal}`);
+    }
+  }
+  console.log(`  suma de las diferencias explicadas: ${diferencia.toFixed(2)}`);
+}
+
 /** Corre el lector de producción sobre una foto y devuelve lo que sacó. */
 async function leerFoto(archivo: string) {
   const { SesionLectura } = await import('@/lib/cliente/ocr/lector');
@@ -190,6 +236,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       );
       console.log('  controles en error:', JSON.stringify(i.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
       console.log('  calculado:', JSON.stringify(i.calculado));
+      informarRenglones(i.renglones, ERRECALDE_ARTICULOS_IMPRESOS);
 
       // El piso que hay que mover. Se afirma sobre el número real de hoy para
       // que cualquier cambio del preproceso se note, en la dirección que sea.
@@ -316,6 +363,25 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       );
       console.log('  controles en error:', JSON.stringify(interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
       console.log('  calculado:', JSON.stringify(interpretado.calculado));
+      /*
+       * El texto de cada zona, a un archivo, cuando se pide.
+       *
+       * Es la herramienta con la que se arma un fixture nuevo: se corre con
+       * OCR_VOLCAR=/ruta/x.json, y de ahí sale el texto real de las cuatro
+       * zonas para poder analizarlo sin volver a pasar Tesseract. Así se
+       * construyó `mabelherdi-foto.ts`, que es lo que hace que el cruce entre
+       * el detalle de una pasada y el pie de la otra se pueda probar en CI.
+       */
+      if (process.env.OCR_VOLCAR) {
+        const { writeFileSync } = await import('node:fs');
+        writeFileSync(
+          process.env.OCR_VOLCAR,
+          JSON.stringify(lectura.paginas, null, 2),
+        );
+      }
+
+      const { MABELHERDI_ARTICULOS_IMPRESOS } = await import('../fixtures/mabelherdi');
+      informarRenglones(interpretado.renglones, MABELHERDI_ARTICULOS_IMPRESOS);
       console.log('  ¿nº 00348491?', plano.includes('00348491'));
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 

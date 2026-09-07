@@ -229,6 +229,39 @@ export async function loadEditableDocument(user: AuthUser, documentId: string) {
 // Lectura automática
 // ---------------------------------------------------------------------------
 
+/**
+ * Por qué no se puede validar, con la diferencia que falta cerrar.
+ *
+ * «No coincide con los totales impresos» es cierto y no sirve: quien está
+ * frente a la pantalla necesita saber **cuánto** falta y **dónde**, porque eso
+ * es lo que va a ir a buscar al papel. Los controles ya calcularon la
+ * diferencia de cada concepto; acá sólo se dicen.
+ *
+ * Se nombran neto, IVA, percepciones y total en ese orden, que es el del pie
+ * del comprobante, y después el resto. Nada se ajusta para que cierre: lo único
+ * que hace esta función es contar lo que falta.
+ */
+function diferenciaPendiente(report: ValidationReport): string {
+  const orden = ['ART_NETO', 'IVA_TASA', 'PERCEPCION_TASA', 'TOTAL_GENERAL'];
+  const fallas = report.checks
+    .filter((c) => c.severity === 'ERROR')
+    .sort((a, b) => {
+      const ia = orden.indexOf(a.code);
+      const ib = orden.indexOf(b.code);
+      return (ia === -1 ? orden.length : ia) - (ib === -1 ? orden.length : ib);
+    });
+
+  if (fallas.length === 0) {
+    return 'El comprobante no se puede guardar como controlado.';
+  }
+
+  const detalle = fallas
+    .map((c) => (c.difference ? `${c.label}: ${c.message} (faltan ${c.difference})` : `${c.label}: ${c.message}`))
+    .join(' ');
+
+  return `El comprobante todavía no cierra contra el papel, así que no se puede validar. ${detalle}`;
+}
+
 export async function matchItemsToProducts(items: CostedItem[], supplierId: string | null) {
   if (items.length === 0) return [];
   const products = await prisma.product.findMany({
@@ -499,10 +532,9 @@ export async function confirmDocument(
   let forced = false;
   if (!report.canSave) {
     if (!input.override) {
-      throw new ValidationError(
-        'El comprobante no se puede guardar como controlado porque el detalle no coincide con los totales impresos.',
-        { checks: report.checks.filter((c) => c.severity === 'ERROR') },
-      );
+      throw new ValidationError(diferenciaPendiente(report), {
+        checks: report.checks.filter((c) => c.severity === 'ERROR'),
+      });
     }
     if (!hasPermission(user, PERMISSIONS.COMPROBANTES_ANULAR)) {
       throw new ForbiddenError(

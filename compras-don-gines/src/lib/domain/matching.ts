@@ -42,6 +42,20 @@ export interface MatchResult {
   reason?: string;
   /** Candidatos cercanos, para ofrecerlos en la revisión manual. */
   suggestions?: { productId: string; score: number }[];
+  /**
+   * El código de proveedor tal como lo tiene el catálogo, cuando el leído
+   * difiere de él en un solo carácter.
+   *
+   * No es una tolerancia en la búsqueda —el producto ya se identificó por su
+   * descripción, sin mirar el código— sino el reconocimiento de una errata del
+   * OCR sobre un código que el catálogo ya tiene. La factura de Errecalde salió
+   * con «ART-60487» donde el papel dice «ART-00487»: el cero se leyó seis. El
+   * artículo es el mismo, y guardar el código roto haría que la próxima factura
+   * no lo encuentre por código y que se aprenda un alias equivocado.
+   *
+   * Se ofrece, no se aplica sola: quien la use tiene que dejar constancia.
+   */
+  supplierCodeCorregido?: string;
 }
 
 /**
@@ -153,14 +167,14 @@ export function matchProduct(input: MatchInput, candidates: ProductCandidate[]):
   // 2. Alias exacto ya normalizado (aprendido de facturas anteriores).
   for (const c of candidates) {
     if (c.normalizedName === description) {
-      return { productId: c.id, method: 'ALIAS', score: 1 };
+      return { productId: c.id, method: 'ALIAS', score: 1, ...errataDeCodigo(input, c, candidates) };
     }
     const hit = c.aliases?.find(
       (a) =>
         a.normalized === description &&
         (!input.supplierId || !a.supplierId || a.supplierId === input.supplierId),
     );
-    if (hit) return { productId: c.id, method: 'ALIAS', score: 1 };
+    if (hit) return { productId: c.id, method: 'ALIAS', score: 1, ...errataDeCodigo(input, c, candidates) };
   }
 
   // 3. Coincidencia difusa, sólo con umbral alto y sin empate.
@@ -197,5 +211,75 @@ export function matchProduct(input: MatchInput, candidates: ProductCandidate[]):
     };
   }
 
-  return { productId: best.productId, method: 'FUZZY', score: best.score, suggestions };
+  const elegido = candidates.find((c) => c.id === best.productId);
+  return {
+    productId: best.productId,
+    method: 'FUZZY',
+    score: best.score,
+    suggestions,
+    ...(elegido ? errataDeCodigo(input, elegido, candidates) : {}),
+  };
+}
+
+/**
+ * ¿El código leído es el del producto con un carácter cambiado?
+ *
+ * Se pregunta **después** de haber identificado el producto por su descripción,
+ * y sólo entonces: el código no participa de la búsqueda, así que esto no
+ * afloja ningún criterio de asociación. Lo único que hace es reconocer que
+ * «ART-60487» y «ART-00487» son el mismo código con una errata del OCR.
+ *
+ * Tres condiciones, y las tres hacen falta:
+ *
+ *  1. El código leído no existe tal cual en el catálogo. Si existe es de otro
+ *     artículo y no hay ninguna errata que corregir.
+ *  2. El producto ya identificado tiene, para este proveedor, exactamente un
+ *     código a distancia uno del leído.
+ *  3. Ningún otro producto tiene otro código a distancia uno. Con dos
+ *     candidatos no se puede saber cuál era, y elegir sería inventar.
+ */
+function errataDeCodigo(
+  input: MatchInput,
+  producto: ProductCandidate,
+  candidates: ProductCandidate[],
+): { supplierCodeCorregido?: string } {
+  if (!input.supplierCode || !input.supplierId) return {};
+  const leido = normalizarCodigo(input.supplierCode);
+  if (leido === '') return {};
+
+  const delProveedor = (c: ProductCandidate) =>
+    (c.aliases ?? []).filter((a) => a.supplierCode && a.supplierId === input.supplierId);
+
+  // 1. Si el código leído existe tal cual, no hay errata: es otro artículo.
+  for (const c of candidates) {
+    for (const a of delProveedor(c)) {
+      if (normalizarCodigo(a.supplierCode!) === leido) return {};
+    }
+  }
+
+  // 2 y 3. Un único código del catálogo a un carácter de distancia.
+  const cercanos: { productId: string; codigo: string }[] = [];
+  for (const c of candidates) {
+    for (const a of delProveedor(c)) {
+      if (aUnCaracter(leido, normalizarCodigo(a.supplierCode!))) {
+        cercanos.push({ productId: c.id, codigo: a.supplierCode! });
+      }
+    }
+  }
+  const unicos = [...new Set(cercanos.map((c) => normalizarCodigo(c.codigo)))];
+  if (unicos.length !== 1) return {};
+
+  const suyo = cercanos.find((c) => c.productId === producto.id);
+  if (!suyo) return {};
+  return { supplierCodeCorregido: suyo.codigo };
+}
+
+/** ¿Los dos códigos tienen el mismo largo y difieren en un solo carácter? */
+function aUnCaracter(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let distintos = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i] && ++distintos > 1) return false;
+  }
+  return distintos === 1;
 }

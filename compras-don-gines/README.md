@@ -315,6 +315,38 @@ no hace falta ninguna clave y no hay costo por comprobante.
 En ningún momento se completa un número para hacer cerrar la cuenta. Lo que no se pudo
 leer queda vacío y el semáforo lo marca.
 
+### Abrir la revisión y validar son dos cosas distintas
+
+Se parecen y no son lo mismo, y tratarlas igual hace daño en los dos sentidos.
+
+**Abrir la revisión** es dejar que una persona mire lo que se leyó y lo arregle.
+Alcanza con que haya renglones identificables. Que un importe esté mal no es
+motivo para cerrar la puerta: la pantalla de revisión existe justamente para
+eso, y sin ella el único camino sería volver a sacar la foto de una factura que
+se leyó bien salvo un número.
+
+**Validar** es decir que el comprobante es correcto, y de ahí salen el
+movimiento de mercadería, el costo de cada artículo, la deuda con el proveedor y
+la fecha de pago. Eso queda bloqueado mientras el neto, el IVA, las percepciones
+y el total no cierren contra el pie impreso dentro de la tolerancia de redondeo.
+Un neto incompleto se convierte en un costo incompleto y de ahí en un precio de
+venta mal calculado.
+
+Cuando no cierra, el mensaje dice **cuánto** falta y **en qué concepto** —«La
+suma de los artículos da $3.700.132,08 y el neto impreso es $3.830.467,37: hay
+una diferencia de $130.335,29»— porque quien lo lee va a ir a buscar esa
+diferencia al papel. «Requiere revisión» no le dice a dónde mirar.
+
+Nada se ajusta para que cierre. Lo único que se toca son los centavos de
+redondeo, y sólo cuando el renglón ya coincidía con el papel hasta los pesos y
+el pie cierra consigo mismo; queda escrito en el informe y en la auditoría, con
+el importe leído, el que quedó y la diferencia.
+
+Un administrador **sí** puede forzar el guardado de un comprobante que no
+cierra, con permiso propio y dejando el motivo por escrito, y queda en la
+auditoría. Es la única puerta, y es deliberada: existe para el comprobante que
+el papel imprime mal.
+
 ### Cuando la foto directamente no se leyó
 
 Hay un caso distinto de "el comprobante no cierra", y hace falta tratarlo distinto. Un

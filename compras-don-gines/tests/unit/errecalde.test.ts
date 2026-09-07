@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Decimal, parseArNumber } from '@/lib/money';
 import { elegirAnalizador } from '@/lib/ocr/parsers';
-import { analizadorErrecalde } from '@/lib/ocr/parsers/errecalde';
+import { analizadorErrecalde, analizarFila } from '@/lib/ocr/parsers/errecalde';
 import { validateDocument } from '@/lib/domain/validation';
 import { costItems } from '@/lib/domain/costing';
 import { toPrintedSummary, toRawItems } from '@/lib/ocr/normalize';
@@ -251,5 +251,50 @@ describe('una lectura rota no se acepta', () => {
       filasEnLaImagen: 2,
     });
     expect(informe.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS')).toBeUndefined();
+  });
+});
+
+/**
+ * El precio, cuando la franja cortó el importe.
+ *
+ * Sobre la foto real el recorte de la tabla cortó justo después del «0% 21%» en
+ * dos renglones, y ahí no hay importe impreso contra el cual arbitrar entre las
+ * lecturas posibles del precio. Se tomaba la literal, que es la peor cuando el
+ * OCR se comió la coma: REGGIANITO BARRA salía a $12,31 el kilo en vez de
+ * $12.308,09, y sus 10,6 kg valían $130,47 en vez de $130.465,79.
+ *
+ * Eso era, entero, el descalce de $130.335,29 contra el neto impreso de esa
+ * factura.
+ */
+describe('un renglón sin importe impreso', () => {
+  it('repone la coma del precio: la plata no tiene cinco decimales', () => {
+    const fila = analizarFila('ART-00704 REGGIANITO BARRA MELINCUE   123   10.6kg — $12.30809 0% 21%');
+
+    expect(fila).not.toBeNull();
+    expect(fila!.precio?.toFixed(2)).toBe('12308.09');
+    expect(fila!.cantidad.toFixed(1)).toBe('10.6');
+    // El importe se calculó, y queda dicho: no se pudo contrastar con el papel.
+    expect(fila!.subtotalImpreso).toBe(false);
+    expect(fila!.subtotal.toFixed(2)).toBe('130465.75');
+  });
+
+  it('no repone nada cuando la lectura literal ya es plata', () => {
+    /*
+     * «$384748» puede ser $384.748 o $3.847,48 y las dos son importes posibles.
+     * Sin importe impreso no hay con qué decidir, así que se deja la literal:
+     * elegir la otra porque hace cerrar la factura sería ajustar contra el pie.
+     */
+    const fila = analizarFila('ART-02174 PERNIL TERMOLI   40   156.3kg — $384748 0% 21%');
+    expect(fila!.precio?.toFixed(2)).toBe('384748.00');
+  });
+
+  it('con el importe impreso manda la aritmética, no esta regla', () => {
+    // Acá sí hay contra qué contrastar, y gana la combinación que cierra.
+    const fila = analizarFila(
+      'ART-02174 PERNIL TERMOLI   40   156.3kg — $384748 0% 21% — $601.361,45',
+    );
+    expect(fila!.precio?.toFixed(2)).toBe('3847.48');
+    expect(fila!.subtotalImpreso).toBe(true);
+    expect(fila!.subtotal.toFixed(2)).toBe('601361.45');
   });
 });

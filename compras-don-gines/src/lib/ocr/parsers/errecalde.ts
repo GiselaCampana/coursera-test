@@ -1084,6 +1084,28 @@ function cantidadCompatible(cantidad: Decimal, crudo: string, basuraPegada: stri
   return faltantes <= basuraPegada.replace(/\s/g, '').length;
 }
 
+/**
+ * El precio, cuando no hay importe impreso con el cual contrastarlo.
+ *
+ * Con importe se prueban todas las variantes contra cantidad × precio y gana la
+ * que cierra. Sin importe no hay con qué arbitrar, y hasta acá se tomaba la
+ * primera —la lectura literal—, que es la peor cuando el OCR se comió la coma.
+ *
+ * Sobre REGGIANITO BARRA la franja cortó justo después del «0% 21%» y el precio
+ * salió «$12.30809». Leído literal da $12,31; con la coma repuesta dos lugares
+ * desde la derecha da $12.308,09, que es lo que dice el papel. Los 10,6 kg de
+ * ese renglón valían $130.465,79 y se cargaban $130,47: era, entera, la
+ * diferencia de $130.335,29 contra el neto impreso.
+ *
+ * Lo que decide no es cuál de las dos hace cerrar la factura —eso sería ajustar
+ * contra el pie— sino que un precio es plata, y la plata no tiene cinco
+ * decimales. Se prefiere la primera variante que sea un importe posible; si
+ * ninguna lo es, se deja la literal, sin inventar nada.
+ */
+function precioSinContraste(precios: Decimal[]): Decimal | null {
+  return precios.find((p) => p.decimalPlaces() <= 2) ?? precios[0] ?? null;
+}
+
 function conciliar(
   cantidadTexto: string,
   precioTexto: string,
@@ -1103,7 +1125,7 @@ function conciliar(
   // Sin subtotal impreso: se calcula con la cantidad y el precio, y se avisa.
   if (subtotales.length === 0) {
     const cantidad = cantidades.find((c) => c.gt(0));
-    const precio = precios[0] ?? null;
+    const precio = precioSinContraste(precios);
     if (!cantidad || !precio) return null;
     return { cantidad, precio, subtotal: cantidad.times(precio), impreso: false };
   }
@@ -1215,7 +1237,7 @@ function conciliar(
    */
   const cantidad = cantidades.find((c) => c.gt(0));
   if (!cantidad) return null;
-  const precio = precios[0] ?? null;
+  const precio = precioSinContraste(precios);
   const posibles =
     netoImpreso && netoImpreso.gt(0)
       ? subtotales.filter((s) => s.lte(netoImpreso.times(1.02)))

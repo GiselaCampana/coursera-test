@@ -214,15 +214,58 @@ const NO_ES_ARTICULO =
  * cuando el OCR lo leyó como un cinco: lo que decide es que el resto sea un
  * número.
  */
-function numerosDeLaCola(cola: string): Decimal[] {
-  const encontrados: Decimal[] = [];
+interface NumeroDeLaCola {
+  valor: Decimal;
+  /** ¿Venía con el signo pesos delante? */
+  conPeso: boolean;
+}
+
+function numerosDeLaCola(cola: string): NumeroDeLaCola[] {
+  const encontrados: NumeroDeLaCola[] = [];
   for (const bruto of cola.match(/\$?\s*[\dOoQlI|SsBbZzgq][\dOoQlI|SsBbZzgq.,]*/g) ?? []) {
     const limpio = bruto.replace(/^\$\s*/, '').trim();
     if (limpio === '') continue;
     const valor = conDosDecimales(limpio);
-    if (valor !== null) encontrados.push(valor);
+    if (valor !== null) encontrados.push({ valor, conPeso: /^\$/.test(bruto.trim()) });
   }
   return encontrados;
+}
+
+/**
+ * Cuál de los números de la cola es el Importe, y cuál el Pr Unit.
+ *
+ * Las tres columnas de plata —Sugerido, Pr Unit, Importe— se imprimen con el
+ * signo pesos, y el Importe es la última de las tres. Eso es lo que decide, y
+ * no la posición dentro de la lista de números leídos.
+ *
+ * La diferencia importa porque el OCR mete números que no son columnas. Sobre
+ * la foto real, un renglón salió «$3500 1 $206812 $2066.12»: ese «1» suelto
+ * —basura de la línea de la tabla— corre todo un lugar, y tomando el tercer
+ * número el Importe pasaba a ser el Pr Unit. Se cargaba $2.068,12 donde el
+ * papel dice $2.066,12. Y del otro lado, «$2066.12 6 xo» deja un «6» colgando
+ * al final, así que tomar el último número tampoco sirve.
+ *
+ * El signo pesos separa las dos cosas: la basura viene sin él. Con los tres
+ * signos a la vista se toman las tres últimas columnas con signo, que es lo que
+ * salva el «1» de adelante y el «6» de atrás.
+ *
+ * Cuando el OCR se comió el signo de alguna —«$5500 5324675 $974025», donde el
+ * segundo signo se leyó como un cinco— no hay con qué separar la basura, y se
+ * vuelve a contar desde la izquierda como se hacía antes. Es peor, pero es lo
+ * único que queda, y no empeora ningún renglón respecto de lo que ya había.
+ */
+function columnasDePlata(
+  numeros: NumeroDeLaCola[],
+): { importe: Decimal; unitarioImpreso: Decimal } | null {
+  if (numeros.length < 3) return null;
+  const conPeso = numeros.filter((n) => n.conPeso);
+  if (conPeso.length >= 3) {
+    return {
+      importe: conPeso[conPeso.length - 1].valor,
+      unitarioImpreso: conPeso[conPeso.length - 2].valor,
+    };
+  }
+  return { importe: numeros[2].valor, unitarioImpreso: numeros[1].valor };
 }
 
 function analizarArticulos(texto: string): { items: OcrItem[]; avisos: string[] } {
@@ -287,11 +330,12 @@ function analizarArticulos(texto: string): { items: OcrItem[]; avisos: string[] 
      * cuál: con menos no se puede distinguir el importe del sugerido, y
      * confundirlos multiplicaría el costo de la factura.
      */
-    if (numeros.length < 3) {
+    const columnas = columnasDePlata(numeros);
+    if (!columnas) {
       avisos.push(`Renglón «${descripcion}»: no se leyeron las tres columnas de importes.`);
       continue;
     }
-    const importe = numeros[2];
+    const importe = columnas.importe;
 
     numero += 1;
 
@@ -311,7 +355,7 @@ function analizarArticulos(texto: string): { items: OcrItem[]; avisos: string[] 
      * renglón que en realidad está perfecto. Si al sacarle ese primer dígito el
      * número coincide con el derivado, era el signo y no una diferencia.
      */
-    const impreso = numeros[1];
+    const impreso = columnas.unitarioImpreso;
     const sinElPeso = conDosDecimales(
       impreso.times(100).toFixed(0).replace(/^5/, ''),
     );

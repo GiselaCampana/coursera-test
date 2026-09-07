@@ -308,18 +308,52 @@ export function validateDocument(input: ValidationInput): ValidationReport {
   if (filasVistas !== null && filasVistas >= UMBRAL_TABLA_RECONOCIBLE) {
     const faltan = filasVistas - items.length;
     const completo = items.length >= filasVistas;
+
+    /*
+     * Una o dos filas de menos, con el detalle cerrando exacto, es del detector.
+     *
+     * El conteo de filas es evidencia visual y el pie impreso es aritmética, y
+     * cuando la suma del detalle da exacta contra el neto impreso no puede
+     * faltar un importe: un renglón que falta se lleva el suyo con él. Sobre la
+     * foto de Mabelherdi el detector cuenta diez filas donde hay nueve —una
+     * línea del membrete o un borde de la tabla— y los nueve renglones suman
+     * 32.998,85 contra los 32.998,85 del pie. Con la severidad anterior ese
+     * comprobante quedaba trabado para siempre por una fila que no existe.
+     *
+     * **Las dos condiciones hacen falta, y la del tope es la que importa.** Que
+     * la suma cierre no alcanza por sí solo: cuando de veintitrés filas se lee
+     * una, esa única lectura cierra perfecto consigo misma, y si el pie tampoco
+     * se leyó bien el neto impreso puede salir de ella y confirmarla. Ese es
+     * exactamente el modo de fallar para el que existe este control, y ahí la
+     * aritmética no es evidencia de nada.
+     *
+     * El tope de dos no sale de estas facturas: un detector de filas se
+     * equivoca por un artefacto o dos —una línea del encabezado, el borde de
+     * abajo—, no por veintidós. Un descalce grande es una lectura incompleta
+     * aunque las cuentas parezcan cerrar.
+     */
+    const TOLERADAS_POR_EL_DETECTOR = 2;
+    const elDetalleCierra =
+      present(printed.netTotal) &&
+      sums.netAmount.minus(money(printed.netTotal)).abs().lte(roundingTolerance(money(printed.netTotal)));
+    const esFalsoPositivoDelDetector = elDetalleCierra && faltan <= TOLERADAS_POR_EL_DETECTOR;
+
     checks.push({
       code: 'ART_RENGLONES_COMPLETOS',
       label: 'Renglones leídos contra filas de la tabla',
-      severity: completo ? 'OK' : 'ERROR',
+      severity: completo ? 'OK' : esFalsoPositivoDelDetector ? 'WARN' : 'ERROR',
       expected: String(filasVistas),
       actual: String(items.length),
       difference: String(-faltan),
       message: completo
         ? `Se interpretaron ${items.length} renglones y en la imagen se ven ${filasVistas} filas.`
-        : `En la imagen se ven ${filasVistas} filas de la tabla y se interpretaron ` +
-          `${items.length}: ${faltan === 1 ? 'falta 1 artículo' : `faltan ${faltan} artículos`}. ` +
-          'La lectura está incompleta y no sirve aunque los renglones leídos cierren entre sí.',
+        : esFalsoPositivoDelDetector
+          ? `En la imagen se ven ${filasVistas} filas y se interpretaron ${items.length}, pero la ` +
+            'suma de los renglones da exactamente el neto impreso: no falta ningún importe, así ' +
+            'que la fila de más es del detector y no del comprobante.'
+          : `En la imagen se ven ${filasVistas} filas de la tabla y se interpretaron ` +
+            `${items.length}: ${faltan === 1 ? 'falta 1 artículo' : `faltan ${faltan} artículos`}. ` +
+            'La lectura está incompleta y no sirve aunque los renglones leídos cierren entre sí.',
     });
   }
 

@@ -645,7 +645,14 @@ describe('el backend revalida antes de guardar', () => {
     }).catch((e) => e);
 
     expect(error).toBeInstanceOf(Error);
-    expect(error.message).toMatch(/no se puede guardar como controlado/i);
+    /*
+     * Y la negativa dice **cuánto** falta, no sólo que no cierra: quien la lee
+     * va a ir a buscar esa diferencia al papel, y «requiere revisión» no le
+     * dice a dónde mirar. Acá falta el renglón nueve, $314.132.
+     */
+    expect(error.message).toMatch(/no cierra contra el papel/i);
+    expect(error.message).toContain('Neto de los artículos');
+    expect(error.message).toContain('1.792.751,44');
 
     const guardado = await prisma.document.findUniqueOrThrow({ where: { id: documento.id } });
     expect(guardado.status).toBe('REQUIERE_REVISION');

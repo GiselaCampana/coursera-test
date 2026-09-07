@@ -247,6 +247,29 @@ export async function registrarLectura(
       : null;
     const asociaciones = await matchItemsToProducts(mejor.costeados, proveedor.supplierId);
 
+    /*
+     * Códigos de proveedor con una errata del OCR, corregidos contra el catálogo.
+     *
+     * El artículo ya quedó identificado por su descripción; esto sólo repone el
+     * código que el catálogo ya tiene cuando el leído difiere en un carácter.
+     * Sobre la foto de Errecalde el cero de «ART-00487» sale seis en seis
+     * renglones distintos, y guardar el código roto tiene dos consecuencias: la
+     * próxima factura de ese proveedor no encuentra el artículo por código, y si
+     * alguien confirma el renglón se aprende un alias equivocado que después
+     * hay que desarmar a mano.
+     *
+     * Nunca en silencio: cada corrección se dice en las observaciones, con el
+     * código leído y el que quedó. Es una lectura corregida, no un código
+     * inventado.
+     */
+    const codigosCorregidos: string[] = [];
+    const costeadosFinales = mejor.costeados.map((item, i) => {
+      const corregido = asociaciones[i]?.supplierCodeCorregido;
+      if (!corregido || corregido === item.supplierCode) return item;
+      codigosCorregidos.push(`${item.supplierCode} → ${corregido} (${item.description})`);
+      return { ...item, supplierCode: corregido };
+    });
+
     // --- 5. Se guarda lo leído -------------------------------------------
     await prisma.$transaction(async (tx) => {
       await tx.documentItem.deleteMany({ where: { documentId } });
@@ -299,9 +322,9 @@ export async function registrarLectura(
         },
       });
 
-      if (mejor.costeados.length > 0) {
+      if (costeadosFinales.length > 0) {
         await tx.documentItem.createMany({
-          data: mejor.costeados.map((item, i) => ({
+          data: costeadosFinales.map((item, i) => ({
             documentId,
             ...itemToColumns(item),
             productId: asociaciones[i]?.productId ?? null,
@@ -316,6 +339,12 @@ export async function registrarLectura(
 
     const observaciones = [...new Set([...(lectura.observaciones ?? []), ...mejor.observaciones])];
     if (mejor.conciliacion) observaciones.push(mejor.conciliacion.mensaje);
+    if (codigosCorregidos.length > 0) {
+      observaciones.push(
+        `Se corrigieron ${codigosCorregidos.length} código(s) de proveedor contra el catálogo: ` +
+          `${codigosCorregidos.join('; ')}.`,
+      );
+    }
 
     await recordAudit({
       userId: user.id,
@@ -401,13 +430,51 @@ function analizarIntento(paginas: PaginaLeida[], numeroDeIntento: number): Candi
   const filasEnLaImagen = contarFilasVistas(paginas);
   const zonasPorProporcion = seRepartioPorProporciones(paginas);
 
-  const candidatos: Candidato[] = [];
-  for (const [modo, textos] of [
+  /*
+   * Las dos lecturas se analizan por separado y después se cruzan.
+   *
+   * El detalle y el pie no salen igual de bien de la misma pasada, y no tienen
+   * por qué: el recorte de la tabla se lee ampliado y binarizado para las
+   * columnas, y el del pie para otra cosa. Sobre la foto de Mabelherdi los
+   * nueve renglones del recorte suman exactos contra el papel y el pie de esa
+   * misma pasada sale vacío; la pasada de página completa trae el pie entero y
+   * el detalle con dos renglones rotos. Elegir una de las dos enteras obligaba
+   * a tirar la mitad buena de la que perdía.
+   *
+   * Así que se arman también los cruces: el detalle de una con el pie de la
+   * otra. No se mezcla nada adentro de un renglón ni adentro del pie —cada
+   * valor conserva su procedencia— y quién gana lo sigue decidiendo el mismo
+   * puntaje de siempre, que premia cerrar contra lo impreso. Un cruce que no
+   * sirva pierde solo.
+   */
+  const lecturas = ([
     ['recortes', conRecortes],
     ['página completa', soloCompleto],
-  ] as const) {
-    const { analizador } = elegirAnalizador(textos);
-    const analisis = analizador.analizar(textos);
+  ] as const)
+    .map(([modo, textos]) => {
+      const { analizador } = elegirAnalizador(textos);
+      return { modo, analizador, analisis: analizador.analizar(textos) };
+    })
+    .filter((l) => l.analisis.items.length > 0 || Boolean(l.analisis.summary?.total));
+
+  const combinaciones = lecturas.flatMap((detalle) =>
+    lecturas.map((pie) => ({
+      modo: detalle.modo === pie.modo ? detalle.modo : `${detalle.modo} + pie de ${pie.modo}`,
+      analizador: detalle.analizador,
+      analisis: {
+        ...detalle.analisis,
+        summary: pie.analisis.summary,
+        header: mergeHeaders(detalle.analisis.header, pie.analisis.header),
+        observaciones:
+          detalle.modo === pie.modo
+            ? detalle.analisis.observaciones
+            : [...new Set([...detalle.analisis.observaciones, ...pie.analisis.observaciones])],
+      },
+    })),
+  );
+
+  const candidatos: Candidato[] = [];
+  for (const { modo, analizador, analisis } of combinaciones) {
     if (analisis.items.length === 0 && !analisis.summary?.total) continue;
 
     /*
@@ -659,6 +726,15 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
   filasEsperadas: number | null;
   /** Qué franja pediría releer el ciclo de lectura, si es que pediría alguna. */
   zonaSugerida: ZonaAReleer | null;
+  /**
+   * Cada renglón interpretado, con de dónde salió su importe.
+   *
+   * Es lo que hace falta para explicar una diferencia contra el pie. Saber que
+   * faltan $130.335,29 no dice nada sobre qué corregir; saber qué renglón, con
+   * qué cantidad y con qué precio, y si el importe se leyó del papel o se
+   * calculó como cantidad × precio, sí.
+   */
+  renglones: RenglonInterpretado[];
 } {
   const candidatos = analizarIntento(paginas, 1);
   if (candidatos.length === 0) {
@@ -689,6 +765,7 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
       filasSinResolver: 0,
       filasEsperadas: null,
       zonaSugerida: null,
+      renglones: [],
     };
   }
 
@@ -704,6 +781,42 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
     filasSinResolver: mejor.filasSinResolver,
     filasEsperadas: mejor.filasEnLaImagen,
     zonaSugerida: zonaAReleer(mejor),
+    renglones: mejor.costeados.map(aRenglonInterpretado),
+  };
+}
+
+/** Un renglón como quedó interpretado, en texto y sin Decimal. */
+export interface RenglonInterpretado {
+  linea: number;
+  codigo: string | null;
+  descripcion: string;
+  cantidad: string;
+  unidad: string;
+  precioUnitario: string;
+  /** El importe bruto del renglón, antes de la bonificación. */
+  importe: string;
+  /**
+   * ¿El importe salió impreso del comprobante, o se calculó?
+   *
+   * Un importe calculado coincide con cantidad × precio por construcción, así
+   * que no sirve para verificar nada: es el que hay que mirar primero cuando el
+   * comprobante no cierra.
+   */
+  importeImpreso: boolean;
+  neto: string;
+}
+
+function aRenglonInterpretado(item: CostedItem): RenglonInterpretado {
+  return {
+    linea: item.lineNumber,
+    codigo: item.supplierCode,
+    descripcion: item.description,
+    cantidad: item.quantity.toFixed(3),
+    unidad: item.unit,
+    precioUnitario: item.unitNetPrice.toFixed(2),
+    importe: item.grossSubtotal.toFixed(2),
+    importeImpreso: item.grossFromPrint,
+    neto: item.netAmount.toFixed(2),
   };
 }
 

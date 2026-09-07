@@ -75,3 +75,28 @@ NET ALA ingresados en el detalle de la operación
 Hoja 1 de 1
 
 `;
+
+/**
+ * Los nueve renglones tal como los imprime la factura.
+ *
+ * Salen del papel, no de una corrida del analizador: los nueve importes suman
+ * exactamente 32.998,85, que es el neto gravado impreso en el pie. Esa igualdad
+ * es la que los hace utilizables como referencia.
+ *
+ * La columna «Sugerido» va aparte a propósito. Es el precio de venta sugerido
+ * al público —$3.500, $3.600, $5.500— y **no es un importe de compra**: si
+ * entrara como importe, el comprobante quedaría costeado contra el precio de
+ * góndola. Está acá para poder afirmar en una prueba que ninguno de esos
+ * valores aparece nunca como importe ni como precio unitario.
+ */
+export const MABELHERDI_ARTICULOS_IMPRESOS = [
+  { codigo: '300052821', descripcion: 'PEP COMUN 120GRX21', cantidad: '1', precio: '2066.12', subtotal: '2066.12', sugerido: '3500' },
+  { codigo: '300052756', descripcion: 'PEP RUEDITAS 120GRX21', cantidad: '1', precio: '2066.12', subtotal: '2066.12', sugerido: '3500' },
+  { codigo: '300063087', descripcion: 'TWISTOS MINIT QUESO 95GX30X1', cantidad: '1', precio: '2125.15', subtotal: '2125.15', sugerido: '3600' },
+  { codigo: '300060664', descripcion: 'CHEETOS QUESO 85GX24X1', cantidad: '2', precio: '2066.12', subtotal: '4132.24', sugerido: '3500' },
+  { codigo: '300065284', descripcion: 'LAYS PROVOLETA 77GX25X1', cantidad: '1', precio: '2066.12', subtotal: '2066.12', sugerido: '3500' },
+  { codigo: '300060192', descripcion: 'DORITOS QUESO 77GX26', cantidad: '2', precio: '2066.12', subtotal: '4132.24', sugerido: '3500' },
+  { codigo: '300065287', descripcion: 'LAYS CLASICAS 134GX18X1', cantidad: '3', precio: '3246.75', subtotal: '9740.25', sugerido: '5500' },
+  { codigo: '300064630', descripcion: 'PEHUA PAPA ACANA 90GX22 RM', cantidad: '2', precio: '1475.80', subtotal: '2951.60', sugerido: '2500' },
+  { codigo: '300059545', descripcion: 'DORITOS QUESO 40GX70X1', cantidad: '3', precio: '1239.67', subtotal: '3719.01', sugerido: '2100' },
+];

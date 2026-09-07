@@ -184,3 +184,142 @@ describe('cómo un renglón encuentra su PLU', () => {
     expect(resultado.reason).toContain('No hay productos cargados');
   });
 });
+
+/**
+ * Un código de proveedor con una errata del OCR.
+ *
+ * Sobre la foto de Errecalde, seis de los veintitrés códigos salen con un
+ * dígito cambiado: «ART-60487» donde el papel dice «ART-00487», y lo mismo con
+ * 8 y con 9 en lugar del cero. El artículo se reconoce igual, porque la
+ * descripción alcanza; lo que se rompe es el código que queda guardado, y con
+ * él la próxima factura, que ya no lo encuentra por código y aprende un alias
+ * equivocado.
+ *
+ * La corrección se hace **después** de haber identificado el producto por su
+ * descripción, y sólo repone un código que el catálogo ya tiene. No afloja
+ * ningún criterio de asociación ni inventa un código nuevo.
+ */
+describe('códigos de proveedor con una errata del OCR', () => {
+  const catalogo: ProductCandidate[] = [
+    {
+      id: 'p-mortadela',
+      internalCode: '3001',
+      normalizedName: 'mortadela piccola mini calchaqui',
+      aliases: [
+        {
+          normalized: 'mortadela piccola mini calchaqui',
+          supplierId: 'errecalde',
+          supplierCode: 'ART-00487',
+        },
+      ],
+    },
+    {
+      id: 'p-leberwurst',
+      internalCode: '3002',
+      normalizedName: 'leberwurst calchaqui',
+      aliases: [
+        { normalized: 'leberwurst calchaqui', supplierId: 'errecalde', supplierCode: 'ART-00347' },
+      ],
+    },
+  ];
+
+  it('repone el código del catálogo cuando difiere en un solo carácter', () => {
+    const r = matchProduct(
+      {
+        description: 'MORTADELA PICCOLA MINI CALCHAQUI',
+        supplierCode: 'ART-60487',
+        supplierId: 'errecalde',
+      },
+      catalogo,
+    );
+    expect(r.productId).toBe('p-mortadela');
+    expect(r.supplierCodeCorregido).toBe('ART-00487');
+  });
+
+  it('no toca un código que existe tal cual en el catálogo', () => {
+    /*
+     * Si el código leído es de otro artículo, no hay errata que corregir: hay
+     * una factura que trae ese artículo. Corregirlo sería cargar la compra al
+     * producto equivocado, que es exactamente lo que no puede pasar.
+     */
+    const r = matchProduct(
+      {
+        description: 'LEBERWURST CALCHAQUI',
+        supplierCode: 'ART-00347',
+        supplierId: 'errecalde',
+      },
+      catalogo,
+    );
+    expect(r.productId).toBe('p-leberwurst');
+    expect(r.supplierCodeCorregido).toBeUndefined();
+  });
+
+  it('no corrige cuando dos códigos del catálogo están a un carácter', () => {
+    // Con dos candidatos no se puede saber cuál era, y elegir sería inventar.
+    const ambiguo: ProductCandidate[] = [
+      ...catalogo,
+      {
+        id: 'p-otro',
+        internalCode: '3003',
+        normalizedName: 'otro fiambre',
+        aliases: [
+          { normalized: 'otro fiambre', supplierId: 'errecalde', supplierCode: 'ART-10487' },
+        ],
+      },
+    ];
+    const r = matchProduct(
+      {
+        description: 'MORTADELA PICCOLA MINI CALCHAQUI',
+        supplierCode: 'ART-60487',
+        supplierId: 'errecalde',
+      },
+      ambiguo,
+    );
+    expect(r.productId).toBe('p-mortadela');
+    expect(r.supplierCodeCorregido).toBeUndefined();
+  });
+
+  it('no cruza proveedores', () => {
+    /*
+     * El mismo código puede ser un artículo en un proveedor y otro distinto en
+     * otro. Un código de Los Calvos no corrige nada de Errecalde.
+     */
+    const deOtro: ProductCandidate[] = [
+      {
+        id: 'p-mortadela',
+        internalCode: '3001',
+        normalizedName: 'mortadela piccola mini calchaqui',
+        aliases: [
+          {
+            normalized: 'mortadela piccola mini calchaqui',
+            supplierId: 'los-calvos',
+            supplierCode: 'ART-00487',
+          },
+        ],
+      },
+    ];
+    const r = matchProduct(
+      {
+        description: 'MORTADELA PICCOLA MINI CALCHAQUI',
+        supplierCode: 'ART-60487',
+        supplierId: 'errecalde',
+      },
+      deOtro,
+    );
+    expect(r.supplierCodeCorregido).toBeUndefined();
+  });
+
+  it('no corrige códigos de largo distinto', () => {
+    // "ART-0487" no es "ART-00487" con una errata: le falta un dígito, y
+    // reponerlo sería adivinar dónde.
+    const r = matchProduct(
+      {
+        description: 'MORTADELA PICCOLA MINI CALCHAQUI',
+        supplierCode: 'ART-0487',
+        supplierId: 'errecalde',
+      },
+      catalogo,
+    );
+    expect(r.supplierCodeCorregido).toBeUndefined();
+  });
+});
