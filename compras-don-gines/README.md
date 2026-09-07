@@ -21,11 +21,12 @@ controlado**. Ni el frontend ni una lectura "casi buena" pueden saltearse ese co
 4. [Variables de entorno](#variables-de-entorno)
 5. [Usuarios iniciales](#usuarios-iniciales)
 6. [Cómo funciona la lectura](#cómo-funciona-la-lectura)
-7. [Los autocontroles](#los-autocontroles)
-8. [Pruebas](#pruebas)
-9. [Despliegue](#despliegue)
-10. [Copias de seguridad](#copias-de-seguridad)
-11. [Qué está hecho y qué falta](#qué-está-hecho-y-qué-falta)
+7. [Precios para Pedidos Don Ginés](#precios-para-pedidos-don-ginés)
+8. [Los autocontroles](#los-autocontroles)
+9. [Pruebas](#pruebas)
+10. [Despliegue](#despliegue)
+11. [Copias de seguridad](#copias-de-seguridad)
+12. [Qué está hecho y qué falta](#qué-está-hecho-y-qué-falta)
 
 ---
 
@@ -519,6 +520,67 @@ El parser resuelve como el mismo importe `2.196.120,52`, `2 196 120,52`, `$ 2.19
 y `2196120,52`, y distingue una tasa del `1,5 %` de un importe de `$ 1,50`. La regla del
 punto: agrupa miles sólo si lo que está antes es un primer grupo real de 1 a 3 dígitos sin
 cero a la izquierda, así `16.037` son dieciséis mil pero `0.015` es una fracción.
+
+---
+
+## Precios para Pedidos Don Ginés
+
+Pedidos Don Ginés es la aplicación con la que un cliente arma su pedido. Lee el catálogo
+de precios de Compras por una sola puerta:
+
+```
+GET /api/integrations/public-prices?branch=devoto
+Authorization: Bearer <PRICES_INTEGRATION_KEY>
+Accept: application/json
+```
+
+**Hay un solo secreto que cargar: `PRICES_INTEGRATION_KEY`.** Es una credencial propia:
+no es la de Control de Stock y no se comparte con ella, así que rotar una no toca a la
+otra. Se pega sola, sin `Bearer `; el esquema lo pone quien llama.
+
+| Variable | Por omisión | Para qué |
+|---|---|---|
+| `PRICES_INTEGRATION_KEY` | — | La clave con la que Pedidos se identifica. **Secreta**: se carga en el panel de Render y en el administrador de secretos de Pedidos, nunca en el repositorio. Jamás `NEXT_PUBLIC_`. |
+
+Sin la variable el endpoint queda **cerrado**, no abierto: contesta el mismo 401 que con
+una clave equivocada. Las tres negativas —sin encabezado, con otro esquema, con la clave
+mal— contestan exactamente lo mismo, para no decirle a quien prueba en qué se está
+equivocando.
+
+`branch` acepta únicamente `devoto`, `pueyrredon` y `san_martin`; cualquier otra cosa, y
+también su ausencia, es un 400. Mientras las tres cobren lo mismo reciben el mismo
+precio, sin inventar diferencias.
+
+### Qué sale, y qué no
+
+Cada artículo lleva exactamente diez campos: `plu`, `name`, `description`, `category`,
+`unit`, `unitPrice`, `step`, `defaultQuantity`, `image`, `featured`. Ni uno más. El objeto
+se arma campo por campo y no filtrando un producto, porque un campo nuevo en el modelo se
+filtraría solo; así no aparece hasta que alguien lo escriba a propósito.
+
+`unitPrice` es el **precio normal aprobado**, el que una persona miró y confirmó. Nunca el
+costo, el último costo, el sugerido, el marcaje, el margen, el precio del proveedor ni un
+precio especial en efectivo. Y no se recalcula acá: la formación de precios vive en
+`services/pricing.ts` y ya está resuelta cuando el precio se aprueba. Recalcularla sería
+una segunda copia de esas reglas.
+
+No salen —ni anidados, ni en un error— costos, marcajes, márgenes, impuestos internos,
+proveedores, códigos de proveedor, facturas, notas de crédito, pagos, saldos, deudas,
+stock, movimientos, usuarios, sesiones ni variables de entorno. La consulta tampoco
+escribe nada: ni un producto, ni un precio, ni una fecha de sincronización.
+
+### Qué se deja afuera
+
+Un artículo que no se puede publicar con certeza no se publica, y queda dicho el motivo:
+
+- sin PLU, o identificado por código de barras en lugar de PLU;
+- sin precio de venta aprobado, o con un precio que no es mayor que cero;
+- con más de una referencia de precio normal que no coinciden entre sí;
+- sin una unidad comercial publicable. El maple, el pack, la horma, la caja y la tira no
+  se deducen del nombre: mientras no estén configurados, ese artículo no sale.
+
+Si el catálogo superara el límite publicable, la respuesta **falla entera**. Nunca se
+recorta en silencio: un cliente vería media fiambrería sin que nadie se entere.
 
 ---
 
