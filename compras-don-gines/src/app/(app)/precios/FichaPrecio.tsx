@@ -17,10 +17,13 @@ export function FichaPrecio({
   productId,
   nombre,
   sugerido,
+  porUnidad = false,
 }: {
   productId: string;
   nombre: string;
   sugerido: string;
+  /** El artículo se vende entero, así que el precio es por unidad y no por kilo. */
+  porUnidad?: boolean;
 }) {
   const [abierto, setAbierto] = useState(false);
   const [estado, accion] = useActionState<ResultadoPrecio, FormData>(aprobarPrecio, {});
@@ -59,7 +62,9 @@ export function FichaPrecio({
 
       <div className="fila fila-2">
         <div className="campo">
-          <label htmlFor={`precio-${productId}`}>Precio por kilo para {nombre}</label>
+          <label htmlFor={`precio-${productId}`}>
+            {porUnidad ? 'Precio por unidad' : 'Precio por kilo'} para {nombre}
+          </label>
           <input
             id={`precio-${productId}`}
             name="precio"

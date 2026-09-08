@@ -273,6 +273,43 @@ async function sembrarCon(prisma: PrismaClient) {
     },
   });
 
+  /*
+   * Un artículo que se vende entero, para poder aprobarle precio por unidad.
+   *
+   * Se compra por unidad, no tiene peso con el cual pasarlo a kilos y se
+   * identifica por código de barras: las tres cosas juntas son lo que hace que
+   * `suggestPricesFor` lo reconozca como vendido entero. Sin uno así en el
+   * escenario, la pantalla de Precios no tiene a quién mostrarle el precio por
+   * unidad y la prueba pasaría sin haber ejercitado nada.
+   */
+  const maple = await prisma.product.create({
+    data: {
+      internalCode: '3001',
+      normalizedName: 'Maple de huevos',
+      category: 'Almacén',
+      purchaseUnit: 'UNIT',
+      purchaseUnitWeightKg: null,
+      usesPlu: false,
+      barcode: '7790001000019',
+      saleMode: 'FETEABLE',
+      targetMarginPct: '0.45',
+      marginBasis: 'SOBRE_COSTO',
+      cashDiscountPct: '0.10',
+      roundingRule: 'NEAREST_100',
+    },
+  });
+
+  // $1.500 el maple, que con el 45 % da $2.175 justos.
+  await prisma.costHistory.create({
+    data: {
+      productId: maple.id,
+      branchId: devoto.id,
+      date: new Date('2026-08-20T12:00:00Z'),
+      unitNetPrice: '1500',
+      unitCost: '1500',
+    },
+  });
+
   const producto = await prisma.product.create({
     data: {
       internalCode: '1001',

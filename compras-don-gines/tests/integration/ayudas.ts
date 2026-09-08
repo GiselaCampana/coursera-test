@@ -244,6 +244,9 @@ export async function sembrarEscenario(): Promise<Escenario> {
     ['1211', 'Cremoso Punta del Agua', 'CREMOSO PUNTA DEL AGUA'],
   ];
 
+  /** Los quesos del catálogo sembrado: los dos sardos y el cremoso. */
+  const esQueso = (codigo: string) => codigo.startsWith('2') || codigo === '1211';
+
   const productos: Record<string, string> = {};
   for (const [codigo, nombre, alias] of definiciones) {
     // Los códigos 2xxx son los quesos de Errecalde; el resto, de Los Calvos. El
@@ -254,7 +257,17 @@ export async function sembrarEscenario(): Promise<Escenario> {
       data: {
         internalCode: codigo,
         normalizedName: nombre,
-        category: 'Fiambres',
+        /*
+         * La clasificación real de cada artículo, no una sola para todos.
+         *
+         * Estaban todos como «Fiambres», incluidos los tres quesos. Con eso, el
+         * informe del catálogo público mostraba «Cremoso Punta del Agua →
+         * Fiambres» y parecía que el endpoint estaba reclasificando algo. No lo
+         * estaba: transmite la categoría guardada tal cual, y lo que estaba mal
+         * era el dato sembrado. Un fixture que miente hace perder una tarde
+         * buscando un defecto que no existe.
+         */
+        category: esQueso(codigo) ? 'Quesos' : 'Fiambres',
         purchaseUnit: 'KG',
         saleMode: 'FETEABLE',
         avgPieceWeightKg: '3.000',

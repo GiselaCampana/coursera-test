@@ -589,6 +589,34 @@ Un aviso sobre el modo de venta: hoy `SaleMode` es un enum de Postgres con dos v
 configurado todavía; agregarlo es una migración. La regla ya lo contempla y hay pruebas
 que lo fijan, así que el día que el valor exista no hay nada más que cambiar acá.
 
+### Fijarle precio a un artículo que se vende entero
+
+Un maple, una lata, un pack: se compran por unidad, se venden por unidad y no tienen
+ningún peso cargado con el cual pasarlos a kilos. Aparecen en la pantalla de **Precios**
+con su costo unitario y su precio por unidad sugerido, y se aprueban ahí, con el mismo
+formulario que el resto. **No se aprueban solos**: mientras nadie confirme el precio, el
+artículo no llega al catálogo de Pedidos.
+
+El precio queda **exacto**, con sus centavos: el redondeo al $100 existe porque un precio
+por kilo se cobra así en el mostrador, y redondear un maple sería cambiarle el precio
+después de que alguien lo aprobó. Tampoco lleva el descuento por pagar en efectivo: el
+precio normal es el mismo para todos los medios de pago.
+
+La aprobación ya no le pide un costo por kilo. Pedírselo era pedirle que dejara de ser lo
+que es: la única forma de cumplirlo habría sido inventarle un peso, y entonces el precio
+de la góndola saldría de un número que nadie midió. El que **sí** se vende por kilo —una
+lata de cinco kilos que se fetea— sigue necesitando su peso, porque sin él no hay forma
+de saber cuánto vale el kilo.
+
+Quién es uno de éstos lo decide `suggestPricesFor` y nadie más. Es la misma definición
+que usan la pantalla de Precios para mostrarlos y el catálogo público para publicarlos:
+tres lugares, una sola regla.
+
+En el historial, `approvedPricePerKg` lleva el precio **en la unidad en la que se vende el
+artículo**: por kilo el que se corta, por unidad el que se vende entero. El nombre de la
+columna quedó del día en que todo se vendía por kilo; lo que decide cómo leerla es
+`soldByUnit`.
+
 ### Qué se deja afuera
 
 Un artículo que no se puede publicar con certeza no se publica, y queda dicho el motivo:

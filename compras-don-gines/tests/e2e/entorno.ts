@@ -72,3 +72,22 @@ export async function limpiarComprobantesLeidos(): Promise<void> {
     await prisma.$disconnect();
   }
 }
+
+/**
+ * Borra los precios de venta que dejó aprobados una prueba.
+ *
+ * Los dos proyectos —teléfono y escritorio— corren contra la misma base, uno
+ * después del otro. Sin esto, la prueba de aprobación pasa la primera vez y
+ * falla la segunda por un motivo que no es un defecto: el precio ya está
+ * aprobado porque lo aprobó ella misma en la corrida anterior.
+ */
+export async function limpiarPreciosAprobados(internalCode: string): Promise<void> {
+  cargarEntornoE2E();
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  try {
+    await prisma.salePriceHistory.deleteMany({ where: { product: { internalCode } } });
+  } finally {
+    await prisma.$disconnect();
+  }
+}

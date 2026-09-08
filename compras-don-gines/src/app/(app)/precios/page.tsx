@@ -258,7 +258,12 @@ export default async function PaginaPrecios({
 
                 {fila.approvedPricePerKg ? (
                   <div className="dato destacado">
-                    <dt>Precio base aprobado por kilo</dt>
+                    {/* El precio aprobado va en la unidad en la que se vende el
+                        artículo: por kilo el que se corta, por unidad el que se
+                        vende entero. Decir "por kilo" sobre un maple sería
+                        decirle a quien mira la pantalla que un maple pesa un
+                        kilo. */}
+                    <dt>{fila.soldByUnit ? 'Precio aprobado por unidad' : 'Precio base aprobado por kilo'}</dt>
                     <dd>{formatARS(fila.approvedPricePerKg)}</dd>
                   </div>
                 ) : null}
@@ -318,6 +323,22 @@ export default async function PaginaPrecios({
                   feteadoPieceDigitalMarginPct={fila.feteadoPieceDigitalMarginPct}
                   feteadoPieceCashMarginPct={fila.feteadoPieceCashMarginPct}
                   wholeUnitMarginPct={fila.wholeUnitMarginPct}
+                />
+              ) : null}
+
+              {/*
+                * El que se vende entero también se aprueba, con su precio por
+                * unidad. Antes el formulario no se le mostraba y no había forma
+                * de fijarle un precio: quedaba con el sugerido a la vista y sin
+                * nadie que pudiera confirmarlo, así que nunca llegaba al
+                * catálogo de Pedidos.
+                */}
+              {puedeAprobar && fila.soldByUnit && fila.wholeUnitTotal ? (
+                <FichaPrecio
+                  productId={fila.productId}
+                  nombre={fila.name}
+                  sugerido={fila.wholeUnitTotal}
+                  porUnidad
                 />
               ) : null}
 

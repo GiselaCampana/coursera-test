@@ -633,8 +633,13 @@ describe('la consulta que va a hacer Pedidos', () => {
           plu: '1211',
           name: 'Cremoso Punta del Agua',
           description: '',
-          // La categoría que tiene guardada, sin normalizarla ni fusionarla.
-          category: 'Fiambres',
+          /*
+           * La categoría que tiene guardada, sin normalizarla ni fusionarla. El
+           * cremoso es un queso y el catálogo lo tiene clasificado así: lo que
+           * llega a Pedidos es exactamente eso, ni una categoría inventada ni
+           * una fusionada con otra parecida.
+           */
+          category: 'Quesos',
           unit: 'kg',
           unitPrice: 10900,
           step: 0.1,

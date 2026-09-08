@@ -360,7 +360,23 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
       'Todavía no hay ninguna compra de este producto, así que no hay costo sobre el cual fijar el precio.',
     );
   }
-  if (!suggestion.costPerKg) {
+
+  /*
+   * El costo por kilo hace falta para los que se venden por kilo, y sólo para ésos.
+   *
+   * Un artículo que se vende entero —un maple, una lata, un pack— se compra por
+   * unidad y no tiene ningún peso cargado con el cual pasarlo a kilos. Pedirle
+   * un costo por kilo era pedirle que dejara de ser lo que es: la única forma
+   * de cumplirlo habría sido inventarle un peso, y entonces el precio de la
+   * góndola saldría de un número que nadie midió.
+   *
+   * Quién es uno de ésos no se decide acá: lo decide `suggestPricesFor`, que es
+   * donde vive la definición y es la misma que usa la pantalla de Precios para
+   * mostrarlos y el catálogo público para publicarlos. Tres lugares, una sola
+   * regla.
+   */
+  const porUnidad = suggestion.soldByUnit;
+  if (!porUnidad && !suggestion.costPerKg) {
     throw new ValidationError(
       'Este producto se compra por unidad y se vende por kilo. Indicá cuántos kilos trae cada unidad comprada antes de aprobar el precio.',
     );
@@ -377,14 +393,39 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
   const cashDiscount = toDecimal(rule.cashDiscountPct);
   const perPieceDigital = pieceWeight ? money(approved.times(pieceWeight)) : null;
 
+  /*
+   * El renglón del historial, escrito en la unidad en la que se vende el artículo.
+   *
+   * `approvedPricePerKg` lleva el precio por kilo de los que se venden por kilo
+   * y el precio por unidad de los que se venden enteros. El nombre de la
+   * columna quedó del día en que todo se vendía por kilo; lo que decide cómo
+   * leerla es `soldByUnit`, que es lo que ya consultan la pantalla de Precios y
+   * el catálogo público antes de mostrar o publicar cualquier importe.
+   *
+   * Y va sin redondear. El precio por kilo de un artículo al corte se redondea
+   * al $100 porque así se cobra en el mostrador; un maple se cobra por lo que
+   * vale, con sus centavos, y redondearlo sería cambiar el precio después de
+   * que alguien lo aprobó.
+   */
+  const costoBase = porUnidad ? suggestion.cost.unitCost! : suggestion.costPerKg!;
+  const sugerido = porUnidad ? suggestion.tiers.wholeUnitTotal : suggestion.prices!.pricePerKg;
+
   const created = await prisma.salePriceHistory.create({
     data: {
       productId: input.productId,
-      costBasis: suggestion.costPerKg.toString(),
+      costBasis: costoBase.toString(),
       marginBasis: rule.marginBasis,
       marginPct: rule.targetMarginPct,
-      suggestedPricePerKg: suggestion.prices!.pricePerKg.toString(),
+      suggestedPricePerKg: (sugerido ?? approved).toString(),
       approvedPricePerKg: approved.toString(),
+      /*
+       * Las dos fracciones del kilo no existen en un artículo que se vende
+       * entero: no hay cien gramos de un maple ni un cuarto de una lata. Las
+       * columnas son obligatorias, así que se escribe la misma división que se
+       * escribe siempre, y ningún consumidor puede leerlas sin preguntar antes
+       * si el artículo se vende por unidad. El catálogo público ya lo hace: se
+       * saltea el control de coherencia justamente en estos renglones.
+       */
       pricePer100g: money(approved.div(10)).toString(),
       pricePerQuarter: money(approved.div(4)).toString(),
       pricePerPieceDigital: perPieceDigital?.toString() ?? null,
@@ -405,8 +446,10 @@ export async function approveSalePrice(user: AuthUser, input: ApprovePriceInput)
     entityId: input.productId,
     after: {
       producto: suggestion.productName,
-      costoPorKilo: suggestion.costPerKg.toString(),
-      precioSugerido: suggestion.prices!.pricePerKg.toString(),
+      // En qué unidad está expresado todo lo que sigue.
+      unidad: porUnidad ? 'unidad' : 'kilo',
+      costo: costoBase.toString(),
+      precioSugerido: (sugerido ?? approved).toString(),
       precioAprobado: approved.toString(),
       vigenciaDesde: validFrom.toISOString().slice(0, 10),
     },
