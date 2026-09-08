@@ -699,6 +699,68 @@ describe('el backend revalida antes de guardar', () => {
     });
     expect(auditoria).not.toBeNull();
     expect(auditoria!.reason).toContain('teléfono');
+    expect(auditoria!.userId).toBe(escenario.admin.id);
+    expect(auditoria!.createdAt).toBeInstanceOf(Date);
+  });
+
+  it('el asiento del forzado guarda qué era lo que no cerraba', async () => {
+    /*
+     * El motivo dice por qué alguien decidió guardarlo igual. Esto dice **sobre
+     * qué** decidió: el concepto que no cerraba, lo que decía el papel, lo que
+     * daba el detalle y la diferencia.
+     *
+     * Sin eso, el asiento deja constancia de la decisión pero no de aquello
+     * sobre lo que se decidió, y seis meses después nadie puede reconstruir si
+     * la excepción estuvo bien tomada. Que es justamente para lo que existe un
+     * registro de excepciones.
+     */
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
+
+    const datos = datosConfirmacion();
+    await confirmDocument(escenario.admin, {
+      ...datos,
+      // Falta el noveno renglón, que con su 14 % de bonificación son
+      // $270.153,52 de neto que el detalle ya no tiene.
+      items: datos.items.slice(0, 8),
+      documentId: documento.id,
+      override: { reason: 'El proveedor confirmó por teléfono que el subtotal está mal impreso.' },
+    });
+
+    const auditoria = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'comprobante.forzado', entityId: documento.id },
+    });
+    const despues = auditoria.after as {
+      diferenciasPendientes?: {
+        control: string;
+        esperado: string | null;
+        leido: string | null;
+        diferencia: string | null;
+        detalle: string;
+      }[];
+    };
+
+    expect(despues.diferenciasPendientes, JSON.stringify(despues)).toBeDefined();
+    const neto = despues.diferenciasPendientes!.find((d) => d.control === 'Neto de los artículos');
+    expect(neto).toBeDefined();
+    // El neto impreso, el que dio el detalle y la plata que falta.
+    expect(neto!.esperado).toContain('1.792.751,44');
+    expect(neto!.diferencia).toContain('270.153,52');
+  });
+
+  it('un guardado normal no deja una lista de diferencias vacía', async () => {
+    // Ruido: un asiento por cada comprobante bien cargado con un campo que
+    // siempre dice lo mismo hace más difícil encontrar los que sí importan.
+    const documento = await createDocument(escenario.operadorDevoto, escenario.sucursales.devoto);
+    await adjuntarPagina(documento.id, LOS_CALVOS_TEXT);
+    await leerComprobante(escenario.operadorDevoto, documento.id);
+    await confirmDocument(escenario.admin, { ...datosConfirmacion(), documentId: documento.id });
+
+    const auditoria = await prisma.auditLog.findFirstOrThrow({
+      where: { action: 'comprobante.confirmado', entityId: documento.id },
+    });
+    expect((auditoria.after as Record<string, unknown>).diferenciasPendientes).toBeUndefined();
   });
 });
 

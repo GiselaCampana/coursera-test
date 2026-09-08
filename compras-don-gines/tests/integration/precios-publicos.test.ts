@@ -95,6 +95,8 @@ async function nuevoProducto(
     saleMode: 'FETEABLE' | 'AL_CORTE';
     usesPlu: boolean;
     active: boolean;
+    purchaseUnit: 'KG' | 'UNIT';
+    purchaseUnitWeightKg: string | null;
   }> = {},
 ) {
   const nombre = datos.normalizedName ?? 'Producto de prueba';
@@ -103,7 +105,8 @@ async function nuevoProducto(
       internalCode: datos.internalCode ?? '9001',
       normalizedName: nombre,
       category: datos.category === undefined ? 'Quesos' : datos.category,
-      purchaseUnit: 'KG',
+      purchaseUnit: datos.purchaseUnit ?? 'KG',
+      purchaseUnitWeightKg: datos.purchaseUnitWeightKg ?? null,
       saleMode: datos.saleMode ?? 'FETEABLE',
       usesPlu: datos.usesPlu ?? true,
       active: datos.active ?? true,
@@ -239,18 +242,30 @@ describe('qué artículos se publican', () => {
     expect(r.cuerpo.items.map((i: { plu: string }) => i.plu)).toEqual(['9001']);
   });
 
-  it('excluye el que no se identifica por PLU', async () => {
+  it('el que se identifica por código de barras también se publica', async () => {
+    /*
+     * Antes se lo dejaba afuera, porque el contrato llama «plu» a su llave y
+     * este artículo no usa PLU sino código de barras. La decisión fue
+     * publicarlo igual: el cliente que quiere una botella de tomate la quiere
+     * poder pedir, y el código interno sigue siendo la llave con la que Compras
+     * lo identifica. Lo que no cambia es que un artículo **sin** código no se
+     * publica: eso no tiene llave de ninguna clase.
+     */
     const conPlu = await nuevoProducto({ internalCode: '9001', normalizedName: 'Con PLU' });
     const porCodigoDeBarras = await nuevoProducto({
       internalCode: '9002',
       normalizedName: 'Botella de tomate',
       usesPlu: false,
+      purchaseUnit: 'UNIT',
     });
     await conPrecio(conPlu.id, '10900');
     await conPrecio(porCodigoDeBarras.id, '2500');
 
     const r = await consultar();
-    expect(r.cuerpo.items.map((i: { plu: string }) => i.plu)).toEqual(['9001']);
+    expect(r.cuerpo.items.map((i: { plu: string }) => i.plu)).toEqual(['9001', '9002']);
+    // Y sale por unidad, porque se compra por unidad y no hay peso con el cual
+    // pasarlo a kilos.
+    expect(r.cuerpo.items[1].unit).toBe('unidad');
   });
 
   it('excluye el que no tiene precio aprobado', async () => {
@@ -702,5 +717,192 @@ describe('el tope de consultas por minuto', () => {
       expect((await consultar({ authorization: null })).estado).toBe(401);
     }
     expect((await consultar()).estado).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Los artículos que se venden por unidad
+// ---------------------------------------------------------------------------
+
+describe('los artículos que se piden por unidad', () => {
+  /*
+   * Un maple, una lata, un pack, una caja y una tira se piden de a uno, no de a
+   * kilos. Antes se quedaban afuera del catálogo; ahora salen, provisoriamente,
+   * todos como «unidad».
+   *
+   * Cuál de esas denominaciones le corresponde a cada uno **no se deduce del
+   * nombre**. Mientras no exista un campo comercial que lo diga, un artículo que
+   * se llama «maple» sale como unidad igual que los demás: llamarlo maple
+   * porque el nombre dice maple sería inventar una denominación que nadie
+   * configuró.
+   *
+   * Cómo se reconoce hoy uno de éstos: la aplicación no lo puede expresar en
+   * kilos, porque se compra por unidad y no tiene ningún peso cargado con el
+   * cual convertirlo. Es la misma definición que ya usa `services/pricing.ts`
+   * para decidir que un artículo se vende entero.
+   */
+  const porUnidad = {
+    purchaseUnit: 'UNIT' as const,
+    purchaseUnitWeightKg: null,
+  };
+
+  it('un artículo por unidad, activo, con código y precio positivo, se exporta', async () => {
+    const p = await nuevoProducto({
+      internalCode: '9101',
+      normalizedName: 'Maple de huevos',
+      ...porUnidad,
+    });
+    await conPrecio(p.id, '8400');
+
+    const r = await consultar();
+    expect(r.cuerpo.items.map((i: { plu: string }) => i.plu)).toEqual(['9101']);
+  });
+
+  it('sale con unit «unidad», step 1 y defaultQuantity 1', async () => {
+    const p = await nuevoProducto({
+      internalCode: '9101',
+      normalizedName: 'Maple de huevos',
+      ...porUnidad,
+    });
+    await conPrecio(p.id, '8400');
+
+    const item = (await consultar()).cuerpo.items[0];
+    expect(item.unit).toBe('unidad');
+    expect(item.step).toBe(1);
+    expect(item.defaultQuantity).toBe(1);
+  });
+
+  it('conserva los centavos del precio exacto', async () => {
+    /*
+     * Sin redondeo adicional: se publica el número que alguien aprobó, no uno
+     * recalculado. Un precio de $2.350,75 llega con sus setenta y cinco
+     * centavos, no como $2.400 ni como $2.350.
+     */
+    const p = await nuevoProducto({ internalCode: '9101', ...porUnidad });
+    await conPrecio(p.id, '2350.75');
+
+    expect((await consultar()).cuerpo.items[0].unitPrice).toBe(2350.75);
+  });
+
+  it('no usa el precio en efectivo, ni el costo, ni el marcaje', async () => {
+    const p = await nuevoProducto({ internalCode: '9101', ...porUnidad });
+    await prisma.salePriceHistory.create({
+      data: {
+        productId: p.id,
+        costBasis: '1620',
+        marginBasis: 'SOBRE_COSTO',
+        marginPct: '0.45',
+        suggestedPricePerKg: '2349',
+        approvedPricePerKg: '2350.75',
+        pricePer100g: '235.075',
+        pricePerQuarter: '587.6875',
+        // El precio en efectivo, que es el que NO se publica.
+        pricePerPieceDigital: '2350.75',
+        pricePerPieceCash: '2115.68',
+        cashDiscountPct: '0.1',
+        validFrom: new Date('2026-01-01T00:00:00Z'),
+      },
+    });
+
+    const r = await consultar();
+    expect(r.cuerpo.items[0].unitPrice).toBe(2350.75);
+    const texto = JSON.stringify(r.cuerpo);
+    for (const prohibido of ['1620', '2349', '2115.68', '0.45', '0.1']) {
+      expect(texto, `no puede aparecer ${prohibido}`).not.toContain(prohibido);
+    }
+  });
+
+  it('no deduce la unidad desde el nombre', async () => {
+    /*
+     * Dos artículos con nombres que gritan «maple» y «caja», y los dos se venden
+     * por kilo. Si la unidad saliera del nombre, los dos saldrían mal.
+     */
+    const maple = await nuevoProducto({
+      internalCode: '9101',
+      normalizedName: 'Maple queso cremoso',
+      purchaseUnit: 'KG',
+    });
+    const caja = await nuevoProducto({
+      internalCode: '9102',
+      normalizedName: 'Caja de jamón cocido pack x3 tira',
+      purchaseUnit: 'KG',
+    });
+    await conPrecio(maple.id, '10900');
+    await conPrecio(caja.id, '9900');
+
+    const r = await consultar();
+    expect(r.cuerpo.items.map((i: { unit: string }) => i.unit)).toEqual(['kg', 'kg']);
+    expect(r.cuerpo.items.map((i: { step: number }) => i.step)).toEqual([0.1, 0.1]);
+
+    // Y al revés: uno que sí se vende por unidad sale por unidad aunque su
+    // nombre no diga nada de eso.
+    const sinPistas = await nuevoProducto({
+      internalCode: '9103',
+      normalizedName: 'Dulce de batata',
+      ...porUnidad,
+    });
+    await conPrecio(sinPistas.id, '3200');
+    const segunda = await consultar();
+    expect(segunda.cuerpo.items[2].unit).toBe('unidad');
+  });
+
+  it('un artículo por unidad sin código, inactivo o sin precio sigue afuera', async () => {
+    const bueno = await nuevoProducto({ internalCode: '9101', ...porUnidad });
+    const inactivo = await nuevoProducto({
+      internalCode: '9102',
+      normalizedName: 'Dado de baja',
+      active: false,
+      ...porUnidad,
+    });
+    const sinPrecio = await nuevoProducto({
+      internalCode: '9103',
+      normalizedName: 'Sin precio',
+      ...porUnidad,
+    });
+    const enCero = await nuevoProducto({
+      internalCode: '9104',
+      normalizedName: 'En cero',
+      ...porUnidad,
+    });
+    await conPrecio(bueno.id, '8400');
+    await conPrecio(inactivo.id, '8400');
+    void sinPrecio;
+    await conPrecio(enCero.id, '0', { pricePer100g: '0', pricePerQuarter: '0' });
+
+    const r = await consultar();
+    expect(r.cuerpo.items.map((i: { plu: string }) => i.plu)).toEqual(['9101']);
+  });
+
+  it('publicarlos no cambia nada en la base', async () => {
+    const p = await nuevoProducto({ internalCode: '9101', ...porUnidad });
+    await conPrecio(p.id, '8400');
+
+    const foto = async () => ({
+      productos: await prisma.product.findMany({ orderBy: { id: 'asc' } }),
+      precios: await prisma.salePriceHistory.findMany({ orderBy: { id: 'asc' } }),
+      costos: await prisma.costHistory.count(),
+      auditoria: await prisma.auditLog.count(),
+    });
+
+    const antes = await foto();
+    await consultar();
+    await consultar({ branch: 'san_martin' });
+    expect(JSON.stringify(await foto())).toBe(JSON.stringify(antes));
+  });
+
+  it('el precio por 100 g y el del cuarto no lo dejan afuera', async () => {
+    /*
+     * Esas dos columnas son otra escritura del precio por kilo, y en un artículo
+     * que se vende por unidad no son otra escritura de nada: no hay cien gramos
+     * de un maple. Compararlas contra el precio de la unidad daría siempre
+     * distinto, y el control terminaría dejando afuera justamente a los
+     * artículos que tiene que publicar.
+     */
+    const p = await nuevoProducto({ internalCode: '9101', ...porUnidad });
+    await conPrecio(p.id, '8400', { pricePer100g: '0', pricePerQuarter: '0' });
+
+    const r = await consultar();
+    expect(r.cuerpo.items).toHaveLength(1);
+    expect(r.cuerpo.items[0].unitPrice).toBe(8400);
   });
 });

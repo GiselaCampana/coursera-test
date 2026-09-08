@@ -145,6 +145,47 @@ const COMO_SE_PIDE = {
 };
 
 /**
+ * Lo que hace falta saber de un artículo para decidir en qué unidad se pide.
+ *
+ * Va como tipo aparte y no como el producto entero para que la regla se pueda
+ * probar sola, con valores que hoy la base todavía no puede guardar.
+ */
+export interface ComoSeVende {
+  /**
+   * El modo de venta tal como está guardado, como texto.
+   *
+   * Se lee como texto y no como el enum de dos valores a propósito: el día que
+   * exista un modo «UNIDAD» configurable, esta función ya lo entiende y no hay
+   * nada más que tocar acá.
+   */
+  saleMode: string;
+  purchaseUnit: 'KG' | 'UNIT';
+  /** Cuántos kilos trae cada unidad comprada, si se sabe. */
+  purchaseUnitWeightKg: string | null;
+}
+
+/**
+ * ¿Este artículo se pide por unidad o por kilo?
+ *
+ * Por unidad cuando el modo de venta lo dice, y también cuando la aplicación
+ * **no puede expresarlo en kilos**: se compra por unidad y no hay ningún peso
+ * cargado con el cual convertirlo. Eso último no es una suposición sobre el
+ * artículo, es lo que ya define hoy `services/pricing.ts` para decidir que un
+ * artículo se vende entero.
+ *
+ * Lo que no se hace es deducirlo del nombre. Un maple, una lata, un pack, una
+ * caja y una tira salen todos como «unidad»: mientras no exista un campo
+ * comercial que diga cuál es cuál, llamarlo «maple» porque el nombre dice
+ * «maple» sería inventar una denominación que nadie configuró.
+ */
+export function sePidePorUnidad(articulo: ComoSeVende): boolean {
+  if (articulo.saleMode === 'UNIDAD') return true;
+  const peso = articulo.purchaseUnitWeightKg;
+  const sinPeso = peso === null || peso.trim() === '' || Number(peso) <= 0;
+  return articulo.purchaseUnit === 'UNIT' && sinPeso;
+}
+
+/**
  * Cuánto pueden diferir dos lecturas del mismo precio normal.
  *
  * El precio por 100 g y el del cuarto kilo se guardan aparte del precio por
@@ -169,7 +210,8 @@ export async function construirCatalogoPublico(ahora: Date = new Date()): Promis
       normalizedName: true,
       category: true,
       saleMode: true,
-      usesPlu: true,
+      purchaseUnit: true,
+      purchaseUnitWeightKg: true,
       salePrices: {
         // El precio vigente es el último que empezó a regir, no el último
         // cargado: se puede aprobar hoy un precio que rige desde mañana.
@@ -207,15 +249,6 @@ export async function construirCatalogoPublico(ahora: Date = new Date()): Promis
       excluir('No tiene PLU.');
       continue;
     }
-    if (!producto.usesPlu) {
-      /*
-       * Se identifica por código de barras, no por PLU. Publicar su código
-       * interno bajo la etiqueta «plu» sería decirle a Pedidos que es un PLU
-       * cuando no lo es.
-       */
-      excluir('No se identifica por PLU sino por código de barras.');
-      continue;
-    }
     if (pluVistos.has(plu)) {
       excluir(`El PLU ${plu} ya lo tiene otro artículo.`);
       continue;
@@ -234,11 +267,27 @@ export async function construirCatalogoPublico(ahora: Date = new Date()): Promis
      * con el mismo nombre: pasar una donde va la otra no falla, devuelve cero, y
      * el artículo desaparece del catálogo con el motivo equivocado.
      */
-    const precioPorKilo = toDecimal(vigente.approvedPricePerKg.toString());
-    if (!precioPorKilo.isFinite() || precioPorKilo.lte(0)) {
+    const precioNormal = toDecimal(vigente.approvedPricePerKg.toString());
+    if (!precioNormal.isFinite() || precioNormal.lte(0)) {
       excluir('El precio aprobado no es mayor que cero.');
       continue;
     }
+
+    /*
+     * En qué unidad se pide: por unidad o por kilo, y nada más.
+     *
+     * El maple, la lata, el pack, la caja y la tira salen todos como «unidad».
+     * No se deducen del nombre: mientras no exista un campo comercial que diga
+     * cuál es cuál, llamarlo «maple» porque el nombre dice «maple» sería
+     * inventar una denominación que nadie configuró.
+     */
+    const porUnidad = sePidePorUnidad({
+      saleMode: producto.saleMode,
+      purchaseUnit: producto.purchaseUnit as 'KG' | 'UNIT',
+      purchaseUnitWeightKg: producto.purchaseUnitWeightKg?.toString() ?? null,
+    });
+    const pedido = porUnidad ? COMO_SE_PIDE.unidad : COMO_SE_PIDE.kg;
+
 
     /*
      * ¿Hay una sola referencia de precio normal, o hay varias que no coinciden?
@@ -247,35 +296,25 @@ export async function construirCatalogoPublico(ahora: Date = new Date()): Promis
      * por kilo. Si al llevarlos al kilo no dan lo mismo, este artículo tiene
      * más de un precio normal y no hay forma de saber cuál publicar. Elegir uno
      * sería elegir al azar cuánto le cobramos al cliente.
-     */
-    const desdeCien = money(toDecimal(vigente.pricePer100g.toString()).times(10));
-    const desdeCuarto = money(toDecimal(vigente.pricePerQuarter.toString()).times(4));
-    const discrepa = (otro: Decimal) => otro.minus(precioPorKilo).abs().gt(TOLERANCIA_DE_CENTAVOS);
-    if (discrepa(desdeCien) || discrepa(desdeCuarto)) {
-      excluir(
-        'Los precios por kilo, por 100 g y por cuarto no coinciden entre sí: ' +
-          'no hay una única referencia de precio normal.',
-      );
-      continue;
-    }
-
-    /*
-     * En qué unidad se pide.
      *
-     * Los dos modos de venta que existen —al corte y feteable— se venden por
-     * kilo, y ésa es la unidad. El maple, el pack, la horma, la caja y la tira
-     * son otra cosa y no se deducen del nombre del artículo: mientras no haya
-     * una unidad comercial configurada, un artículo que no se venda por kilo no
-     * se publica.
+     * Sólo se pregunta de los que se venden por kilo. En uno que se vende por
+     * unidad esas dos columnas no son otra escritura de nada —no hay cien
+     * gramos de un maple— y compararlas contra el precio de la unidad daría
+     * siempre distinto, que es como este control terminaría dejando afuera
+     * justamente a los artículos que tiene que publicar.
      */
-    const porKilo = producto.saleMode === 'AL_CORTE' || producto.saleMode === 'FETEABLE';
-    if (!porKilo) {
-      excluir(
-        `No tiene una unidad comercial que se pueda publicar (modo de venta «${producto.saleMode}»).`,
-      );
-      continue;
+    if (!porUnidad) {
+      const desdeCien = money(toDecimal(vigente.pricePer100g.toString()).times(10));
+      const desdeCuarto = money(toDecimal(vigente.pricePerQuarter.toString()).times(4));
+      const discrepa = (otro: Decimal) => otro.minus(precioNormal).abs().gt(TOLERANCIA_DE_CENTAVOS);
+      if (discrepa(desdeCien) || discrepa(desdeCuarto)) {
+        excluir(
+          'Los precios por kilo, por 100 g y por cuarto no coinciden entre sí: ' +
+            'no hay una única referencia de precio normal.',
+        );
+        continue;
+      }
     }
-    const pedido = COMO_SE_PIDE.kg;
 
     if (producto.category === null || producto.category.trim() === '') {
       // Se publica igual, con la categoría vacía: inventarle una sería peor.
@@ -295,7 +334,14 @@ export async function construirCatalogoPublico(ahora: Date = new Date()): Promis
       // privada no sirve: se vence o expone una credencial.
       image: null,
       unit: pedido.unit,
-      unitPrice: precioPorKilo.toNumber(),
+      /*
+       * El precio normal aprobado, tal cual está guardado.
+       *
+       * No se le aplica ningún redondeo ni ningún descuento por pagar en
+       * efectivo: acá no se hace una sola cuenta, se publica el número que
+       * alguien aprobó. Por eso los centavos llegan enteros.
+       */
+      unitPrice: precioNormal.toNumber(),
       step: pedido.step,
       defaultQuantity: pedido.defaultQuantity,
     });

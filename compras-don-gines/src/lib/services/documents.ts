@@ -815,6 +815,31 @@ export async function confirmDocument(
        * a fin de mes.
        */
       advertencias: report.checks.filter((c) => c.severity === 'WARN').map((c) => c.label),
+      /*
+       * Qué quedó sin cerrar, cuando se forzó el guardado.
+       *
+       * El motivo dice por qué alguien decidió guardarlo igual; esto dice qué
+       * era lo que no cerraba, con el concepto y la plata. Sin eso, el asiento
+       * de un forzado deja constancia de la decisión pero no de aquello sobre
+       * lo que se decidió, y seis meses después nadie puede reconstruir si la
+       * excepción estuvo bien tomada.
+       *
+       * Va sólo en los forzados: en un guardado normal no hay ninguna
+       * diferencia pendiente, y una lista vacía en cada asiento es ruido.
+       */
+      ...(forced
+        ? {
+            diferenciasPendientes: report.checks
+              .filter((c) => c.severity === 'ERROR')
+              .map((c) => ({
+                control: c.label,
+                esperado: c.expected ?? null,
+                leido: c.actual ?? null,
+                diferencia: c.difference ?? null,
+                detalle: c.message,
+              })),
+          }
+        : {}),
     },
   });
 

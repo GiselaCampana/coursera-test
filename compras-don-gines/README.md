@@ -569,15 +569,35 @@ proveedores, códigos de proveedor, facturas, notas de crédito, pagos, saldos, 
 stock, movimientos, usuarios, sesiones ni variables de entorno. La consulta tampoco
 escribe nada: ni un producto, ni un precio, ni una fecha de sincronización.
 
+### En qué unidad se pide cada artículo
+
+Dos, y nada más: `kg` con paso 0,1 empezando por medio kilo, o `unidad` con paso 1
+empezando por una.
+
+Sale por unidad cuando el modo de venta lo dice, y también cuando la aplicación **no
+puede expresarlo en kilos**: se compra por unidad y no hay ningún peso cargado con el
+cual convertirlo. Eso último es la misma definición que ya usa `services/pricing.ts` para
+decidir que un artículo se vende entero.
+
+El maple, la lata, el pack, la caja y la tira salen todos como `unidad`. Cuál es cuál
+**no se deduce del nombre**: mientras no exista un campo comercial que lo diga, llamarlo
+«maple» porque el nombre dice «maple» sería inventar una denominación que nadie
+configuró.
+
+Un aviso sobre el modo de venta: hoy `SaleMode` es un enum de Postgres con dos valores,
+`FETEABLE` y `AL_CORTE`. **No existe `UNIDAD`**, así que ningún producto puede tener eso
+configurado todavía; agregarlo es una migración. La regla ya lo contempla y hay pruebas
+que lo fijan, así que el día que el valor exista no hay nada más que cambiar acá.
+
 ### Qué se deja afuera
 
 Un artículo que no se puede publicar con certeza no se publica, y queda dicho el motivo:
 
-- sin PLU, o identificado por código de barras en lugar de PLU;
+- sin código interno con el cual identificarlo;
 - sin precio de venta aprobado, o con un precio que no es mayor que cero;
-- con más de una referencia de precio normal que no coinciden entre sí;
-- sin una unidad comercial publicable. El maple, el pack, la horma, la caja y la tira no
-  se deducen del nombre: mientras no estén configurados, ese artículo no sale.
+- si se vende por kilo, con más de una referencia de precio normal que no coinciden entre
+  sí. En uno que se vende por unidad esa pregunta no se hace: no hay cien gramos de un
+  maple, y compararlos daría siempre distinto.
 
 Si el catálogo superara el límite publicable, la respuesta **falla entera**. Nunca se
 recorta en silencio: un cliente vería media fiambrería sin que nadie se entere.
