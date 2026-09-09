@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import sharp from 'sharp';
 import { createWorker, PSM, type Worker } from 'tesseract.js';
 import path from 'node:path';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import type { Mapa } from '@/lib/cliente/ocr/imagen';
 import type { RenglonInterpretado } from '@/lib/services/lectura';
 
@@ -173,6 +173,26 @@ function informarRenglones(
     }
   }
   console.log(`  suma de las diferencias explicadas: ${diferencia.toFixed(2)}`);
+}
+
+/**
+ * El texto de cada zona, a un archivo, cuando se pide.
+ *
+ * Es la herramienta con la que se arma un fixture nuevo: se corre con
+ * OCR_VOLCAR=/ruta/x.json y de ahí sale el texto real de las cuatro zonas para
+ * poder analizarlo —y probarlo en CI— sin volver a pasar Tesseract. Así se
+ * construyó `mabelherdi-foto.ts`, que es lo que hace que el cruce entre el
+ * detalle de una pasada y el pie de la otra se pueda probar sin la foto.
+ *
+ * Está acá y no adentro de un caso porque cualquier factura nueva empieza por
+ * este volcado: cuando vivía dentro del caso de Mabelherdi, sumar un proveedor
+ * obligaba a copiarlo.
+ */
+function volcarSiSePide(sufijo: string, paginas: unknown) {
+  if (!process.env.OCR_VOLCAR) return;
+  const destino = process.env.OCR_VOLCAR.replace(/(?:\.json)?$/, `-${sufijo}.json`);
+  writeFileSync(destino, JSON.stringify(paginas, null, 2));
+  console.log(`  volcado: ${destino}`);
 }
 
 /** Corre el lector de producción sobre una foto y devuelve lo que sacó. */
@@ -363,22 +383,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       );
       console.log('  controles en error:', JSON.stringify(interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
       console.log('  calculado:', JSON.stringify(interpretado.calculado));
-      /*
-       * El texto de cada zona, a un archivo, cuando se pide.
-       *
-       * Es la herramienta con la que se arma un fixture nuevo: se corre con
-       * OCR_VOLCAR=/ruta/x.json, y de ahí sale el texto real de las cuatro
-       * zonas para poder analizarlo sin volver a pasar Tesseract. Así se
-       * construyó `mabelherdi-foto.ts`, que es lo que hace que el cruce entre
-       * el detalle de una pasada y el pie de la otra se pueda probar en CI.
-       */
-      if (process.env.OCR_VOLCAR) {
-        const { writeFileSync } = await import('node:fs');
-        writeFileSync(
-          process.env.OCR_VOLCAR,
-          JSON.stringify(lectura.paginas, null, 2),
-        );
-      }
+      volcarSiSePide('mabelherdi', lectura.paginas);
 
       const { MABELHERDI_ARTICULOS_IMPRESOS } = await import('../fixtures/mabelherdi');
       informarRenglones(interpretado.renglones, MABELHERDI_ARTICULOS_IMPRESOS);
@@ -386,6 +391,54 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 
       expect(plano.length).toBeGreaterThan(100);
+    },
+    600_000,
+  );
+
+  it(
+    'Ezra: los 6 renglones, con las ocho columnas en su lugar',
+    async () => {
+      const { lectura, medidas, total } = await leerFoto('ezra-00002-00000185.jpg');
+      const pagina = lectura.paginas[0];
+
+      console.log(
+        `[Ezra] página ${medidas[0].ancho}×${medidas[0].alto} · ` +
+          `filas vistas ${pagina.regiones?.filasDetectadas ?? '—'} · ` +
+          `total ${(total / 1000).toFixed(1)}s`,
+      );
+      volcarSiSePide('ezra', lectura.paginas);
+
+      const interpretado = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${interpretado.articulos} artículos · analizador ${interpretado.analizador} · ` +
+          `estado ${interpretado.estado} · filas detector ${interpretado.filasDelDetector} · ` +
+          `sin resolver ${interpretado.filasSinResolver}`,
+      );
+      console.log(
+        '  controles en error:',
+        JSON.stringify(
+          interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code),
+        ),
+      );
+      console.log('  calculado:', JSON.stringify(interpretado.calculado));
+
+      const { EZRA_ARTICULOS_IMPRESOS } = await import('../fixtures/ezra');
+      informarRenglones(interpretado.renglones, EZRA_ARTICULOS_IMPRESOS);
+
+      /*
+       * El kilaje no puede estar adentro del nombre.
+       *
+       * Es la marca del corrimiento de columnas: en esta factura la cantidad va
+       * **antes** de la descripción, y un analizador que la espera después se la
+       * come como parte del texto. Se afirma acá, sobre la foto de verdad,
+       * porque es donde el error apareció.
+       */
+      for (const r of interpretado.renglones) {
+        expect(r.descripcion, `el renglón ${r.linea} arrastra el kilaje`).not.toMatch(
+          /^\s*\d+[.,]\d{3}\s/,
+        );
+      }
+      expect(interpretado.articulos).toBe(6);
     },
     600_000,
   );
