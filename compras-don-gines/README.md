@@ -589,6 +589,54 @@ Un aviso sobre el modo de venta: hoy `SaleMode` es un enum de Postgres con dos v
 configurado todavía; agregarlo es una migración. La regla ya lo contempla y hay pruebas
 que lo fijan, así que el día que el valor exista no hay nada más que cambiar acá.
 
+### Por qué maple, pack, horma, caja y tira salen todos como «unidad»
+
+El contrato admite denominaciones específicas, pero hoy **no hay ningún dato con el cual
+distinguirlas**, y por eso todas salen como `unidad`. La auditoría, para que la decisión
+de agregar un campo se tome sobre hechos:
+
+**Lo que entrega Control de Stock.** Un solo campo de unidad, `internalUnit` (se acepta
+`unit` como alternativa). Los valores que llegan son `kg` y `piece`; el lector reconoce
+además kilo/kilos/kilogramo/peso/weight y pieza/unidad/un/u/bulto. Cualquier otra cosa
+—incluido literalmente `"caja"`— queda en **null**, nunca en un valor por omisión. No hay
+ningún campo de presentación comercial: ni maple, ni pack, ni horma, ni caja, ni tira.
+
+**Lo que guarda Compras.** `purchaseUnit` (`KG`/`UNIT`), que es lo que escribe la
+sincronización; `purchaseUnitWeightKg`, `saleMode` y `usesPlu`, que son configuración
+local y la sincronización **no toca**. Ningún campo de denominación comercial.
+
+**Ninguno representa inequívocamente la unidad de venta.** `internalUnit` dice cómo se
+mide el artículo adentro, no cómo se le vende al cliente. Un maple y una lata de dulce de
+cinco kilos llegan los dos como `piece`: el primero se vende entero y el segundo por kilo.
+Lo que los separa en Compras es `purchaseUnitWeightKg`, que se carga a mano y no viene del
+maestro. O sea que el dato disponible distingue «se puede expresar en kilos» de «no», que
+no es lo mismo que la denominación comercial.
+
+**Cómo quedan hoy, con lo que hay:**
+
+| Artículo | `internalUnit` que llega | `purchaseUnit` guardado | Peso cargado | `unit` exportado |
+|---|---|---|---|---|
+| Maple de huevos x30 | `piece` | `UNIT` | — | `unidad` |
+| Pack de gaseosa x6 | `piece` | `UNIT` | — | `unidad` |
+| Horma de queso ~4 kg | `piece` | `UNIT` | 4,000 | **`kg`** |
+| Caja de tomate x12 | `piece` | `UNIT` | — | `unidad` |
+| Tira de chorizos | `piece` | `UNIT` | — | `unidad` |
+
+La horma es el caso que lo muestra: en cuanto alguien le carga el peso deja de exportarse
+como unidad y pasa a kilo. Es correcto para el precio, y deja claro que lo que decide hoy
+no es la denominación sino la convertibilidad a kilos.
+
+**La sincronización no pierde el dato**, porque no hay más dato que perder: pasa
+`internalUnit` a `purchaseUnit` y lo muestra en la vista previa como «Unidad de compra».
+Y cuando el valor no se reconoce, no escribe nada: conserva el `purchaseUnit` que el
+artículo ya tenía en vez de pisarlo con una suposición.
+
+**Conclusión.** Para mostrar «maple» o «tira» hace falta un campo comercial explícito, sea
+en Control de Stock o cargado en Compras. Hasta entonces se mantiene `unidad`, que es
+cierto para los cinco. Deducirlo del nombre no es una opción: un «Maple queso cremoso» se
+vende por kilo, y llamarlo maple porque el nombre dice maple sería inventar una
+denominación que nadie configuró.
+
 ### Fijarle precio a un artículo que se vende entero
 
 Un maple, una lata, un pack: se compran por unidad, se venden por unidad y no tienen

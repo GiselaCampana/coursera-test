@@ -11,8 +11,24 @@ export interface PriceExportFilters {
   supplier?: string | null;
 }
 
+/**
+ * Una fila de la exportación, con el precio de venta en la unidad que le toca.
+ *
+ * `salePricePerKg` y `salePricePerUnit` son excluyentes: cada artículo tiene
+ * uno y el otro en null. Van separados porque una planilla rotula por columna y
+ * no por fila: si el mismo campo llevara a veces pesos por kilo y a veces pesos
+ * por unidad, la columna que dice «Precio por kilo» estaría mintiendo en cada
+ * maple, y quien la lea va a fijar precios con eso.
+ *
+ * Los dos son el precio **efectivo**: el aprobado si alguien lo aprobó, y el
+ * sugerido mientras tanto. Mostrar el sugerido sobre un artículo que ya tiene
+ * precio aprobado sería peor que una etiqueta equivocada.
+ */
 export interface PriceExportRow extends PriceBoardRow {
+  /** Precio de venta por kilo. Null en los que se venden enteros. */
   salePricePerKg: string | null;
+  /** Precio de venta por unidad. Null en los que se venden por kilo. */
+  salePricePerUnit: string | null;
 }
 
 export async function getPriceExportRows(
@@ -26,7 +42,9 @@ export async function getPriceExportRows(
     .filter((r) => !filters.supplier || r.supplierName === filters.supplier)
     .map((r) => ({
       ...r,
-      salePricePerKg: r.approvedPricePerKg ?? r.suggestedPricePerKg,
+      // El que se vende entero no tiene precio por kilo: no hay kilos.
+      salePricePerKg: r.soldByUnit ? null : r.approvedPricePerKg ?? r.suggestedPricePerKg,
+      salePricePerUnit: r.soldByUnit ? r.approvedPricePerKg ?? r.wholeUnitTotal : null,
     }));
 }
 
@@ -131,9 +149,14 @@ export async function priceRowsToXlsx(rows: PriceExportRow[]): Promise<Buffer> {
       n(r.feteadoQuarterKg),
       n(r.feteadoPieceDigitalKg),
       n(r.feteadoPieceCashKg),
-      r.soldByUnit ? n(r.wholeUnitTotal) : null,
+      // «Precio por unidad»: el efectivo, aprobado si lo hay.
+      n(r.salePricePerUnit),
+      // «Unidad/lata/cajón entero»: el de los que se venden por kilo y además
+      // se pueden llevar enteros. No es lo mismo que el anterior.
       !r.soldByUnit ? n(r.wholeUnitTotal) : null,
-      n(r.approvedPricePerKg),
+      // «Precio base aprobado/kg»: sólo de los que tienen precio por kilo. El
+      // aprobado de un maple ya está en la columna de arriba, con su rótulo.
+      r.soldByUnit ? null : n(r.approvedPricePerKg),
       r.lastCostDate ? formatDateAr(r.lastCostDate) : '',
     ]),
   ];
@@ -354,28 +377,6 @@ function filtersLabel(filters: PriceExportFilters): string {
   ].filter(Boolean).join('   |   ');
 }
 
-function employeePriceText(r: PriceExportRow): string[] {
-  if (r.soldByUnit) {
-    return [`Unidad: ${r.wholeUnitTotal ? formatARS(r.wholeUnitTotal) : '-'}`];
-  }
-  if (r.saleMode === 'AL_CORTE') {
-    return [
-      `Kilo: ${r.salePricePerKg ? formatARS(r.salePricePerKg) : '-'}`,
-      `Horma digital: ${r.alCorteHormaDigitalKg ? formatARS(r.alCorteHormaDigitalKg) + '/kg' : '-'}`,
-      `Horma efectivo: ${r.alCorteHormaCashKg ? formatARS(r.alCorteHormaCashKg) + '/kg' : '-'}`,
-      `Caja efectivo: ${r.alCorteCajaCashKg ? formatARS(r.alCorteCajaCashKg) + '/kg' : '-'}`,
-      ...(r.wholeUnitTotal ? [`Unidad entera: ${formatARS(r.wholeUnitTotal)}`] : []),
-    ];
-  }
-  return [
-    `100 g: ${r.feteado100gKg ? formatARS(r.feteado100gKg) + '/kg' : '-'}`,
-    `1/4 kg: ${r.feteadoQuarterKg ? formatARS(r.feteadoQuarterKg) + '/kg' : '-'}`,
-    `Pieza digital: ${r.feteadoPieceDigitalKg ? formatARS(r.feteadoPieceDigitalKg) + '/kg' : '-'}`,
-    `Pieza efectivo: ${r.feteadoPieceCashKg ? formatARS(r.feteadoPieceCashKg) + '/kg' : '-'}`,
-    ...(r.wholeUnitTotal ? [`Unidad entera: ${formatARS(r.wholeUnitTotal)}`] : []),
-  ];
-}
-
 export function priceRowsToEmployeePdf(
   rows: PriceExportRow[],
   filters: PriceExportFilters = {},
@@ -520,7 +521,14 @@ export function priceRowsToEmployeePdf(
       const xs = [360, 475, 595, 710];
       values.forEach((v, i) => parts.push(pdfText(xs[i]!, y, 7.2, v ? formatARS(v) : '-')));
     } else {
-      parts.push(pdfText(650, y, 8, r.wholeUnitTotal ? formatARS(r.wholeUnitTotal) : '-', true));
+      /*
+       * El precio aprobado si alguien lo aprobó, y el sugerido mientras tanto.
+       *
+       * Antes salía siempre el sugerido, que se recalcula con cada compra. Esta
+       * lista se imprime y se cuelga en el mostrador: lo que dice acá es lo que
+       * se cobra, y ahí no puede figurar un número que nadie confirmó.
+       */
+      parts.push(pdfText(650, y, 8, r.salePricePerUnit ? formatARS(r.salePricePerUnit) : '-', true));
     }
 
     y -= 17;
@@ -570,7 +578,7 @@ export function priceRowsToManagementPdf(
           ? r.alCorteHormaCashKg
           : r.feteadoPieceCashKg;
       const costo = r.soldByUnit ? r.purchaseUnitCost : r.lastUnitCost;
-      const ventaBase = r.soldByUnit ? r.wholeUnitTotal : r.salePricePerKg;
+      const ventaBase = r.soldByUnit ? r.salePricePerUnit : r.salePricePerKg;
       const vals = [
         ident,
         nombre,
