@@ -184,8 +184,15 @@ export function variantesDeNumero(texto: string): Decimal[] {
   return salida;
 }
 
-/** Los números sueltos que hay en un texto, con todas sus lecturas. */
-function numerosDelTexto(texto: string): Decimal[] {
+/**
+ * Los números sueltos que hay en un texto, con todas sus lecturas.
+ *
+ * Se exporta para poder fijarle la regla directamente: que una letra suelta no
+ * se convierta en una cifra es una garantía de esta función, y probarla sólo a
+ * través de la factura entera la deja sin red en cuanto otro cambio tape el
+ * síntoma. Ver la regresión de SUB-TOTAL en `numeros-canonicos.test.ts`.
+ */
+export function numerosDelTexto(texto: string): Decimal[] {
   const encontrados = [
     ...texto.matchAll(new RegExp(`[${CLASE_DIGITOS_OCR}][${CLASE_DIGITOS_OCR}.,]*`, 'g')),
   ].map((m) => m[0]);

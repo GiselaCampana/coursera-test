@@ -263,13 +263,17 @@ describe('2. la deuda se genera sólo con Ezra', () => {
   });
 });
 
-describe('3. la mercadería entra en la sucursal elegida', () => {
+describe('3. se registra el movimiento de compra en la sucursal elegida', () => {
   it('cada PLU asociado recibe su movimiento de compra en Devoto, con su cantidad', async () => {
     /*
-     * Compras no lleva saldo de stock: el maestro de existencias es Control de
-     * Stock. Lo que Compras registra —y lo que se comprueba acá— es el
-     * movimiento de entrada de cada artículo, con su cantidad, su unidad y su
-     * sucursal, que es el dato con el que se aumenta el stock.
+     * Se dice «se registró el movimiento de compra», no «aumentó el saldo de
+     * stock», y la diferencia es real: Compras **no lleva saldo de
+     * existencias**. El maestro es Control de Stock, y registrar este
+     * movimiento hoy no modifica nada allá.
+     *
+     * Lo que se comprueba es lo que Compras sí hace y lo que hará falta el día
+     * que esos movimientos se envíen: producto, cantidad, unidad, sucursal,
+     * proveedor y comprobante, cada uno en su lugar.
      */
     const id = await validarFacturaDeEzra();
     const movimientos = await prisma.purchaseMovement.findMany({
@@ -292,7 +296,7 @@ describe('3. la mercadería entra en la sucursal elegida', () => {
     expect(new Decimal(porPlu.get('3105')!.quantity.toString()).toFixed(3)).toBe('7.665');
   });
 
-  it('no entra en otra sucursal', async () => {
+  it('no se registra en otra sucursal', async () => {
     const id = await validarFacturaDeEzra();
     const enOtras = await prisma.purchaseMovement.count({
       where: { documentId: id, branchId: { not: escenario.sucursales.devoto } },
@@ -623,5 +627,173 @@ describe('BOLSA GRANDE, que no es del catálogo comercial', () => {
       where: { normalizedName: { contains: 'olsa' } },
     });
     expect(parecidos).toEqual([]);
+  });
+});
+
+/**
+ * BOLSA GRANDE entra a la factura como insumo no comercial.
+ *
+ * La decisión: el renglón se carga, su importe integra el neto, el IVA, el
+ * total y la deuda con Ezra —se compró y hay que pagarlo— pero no se le inventa
+ * un PLU, no entra al catálogo comercial y no genera costo de ningún producto.
+ * No hay modelo de insumos y no se agrega uno: si algún día hay que controlar
+ * bolsas y descartables, será un módulo aparte.
+ */
+describe('BOLSA GRANDE como insumo no comercial', () => {
+  /** Los seis renglones del papel, con la bolsa incluida. */
+  const SEIS = [
+    ...RENGLONES,
+    {
+      supplierCode: '4249',
+      description: 'BOLSA GRANDE',
+      quantity: '3',
+      unitNetPrice: '74.380',
+      grossSubtotal: '223.140',
+    },
+  ];
+  /** El pie completo del papel, con los seis renglones. */
+  const PIE_COMPLETO = {
+    netTotal: '221388.84',
+    ivaTotal: '46491.66',
+    perceptionsTotal: '0',
+    total: '267880.50',
+    lineCount: 6,
+  };
+
+  async function validarConLaBolsa(numero = '00000185') {
+    const doc = await createDocument(escenario.admin, escenario.sucursales.devoto);
+    await confirmDocument(escenario.admin, {
+      documentId: doc.id,
+      supplierId: ezraId,
+      docType: 'FACTURA',
+      letter: 'A',
+      pointOfSale: '0002',
+      number: numero,
+      issueDate: FECHA,
+      printed: PIE_COMPLETO,
+      items: SEIS.map((r, i) => ({
+        ...r,
+        lineNumber: i + 1,
+        unit: 'KG' as const,
+        discountPct: '0',
+        ivaRate: '0.21',
+        // La bolsa no tiene PLU y no se le inventa uno.
+        productId: r.supplierCode === '4249' ? null : pluElegido(r.supplierCode),
+        learnAlias: r.supplierCode !== '4249',
+      })),
+      payment: { dueDate: '2026-10-09', paymentMethod: 'TRANSFERENCIA', notes: null },
+    });
+    return doc.id;
+  }
+
+  it('queda visible en el comprobante, con su importe', async () => {
+    const id = await validarConLaBolsa();
+    const renglones = await prisma.documentItem.findMany({
+      where: { documentId: id },
+      orderBy: { lineNumber: 'asc' },
+    });
+
+    expect(renglones).toHaveLength(6);
+    const bolsa = renglones.find((r) => r.supplierCode === '4249')!;
+    expect(bolsa.description).toBe('BOLSA GRANDE');
+    expect(new Decimal(bolsa.grossSubtotal.toString()).toFixed(2)).toBe('223.14');
+    // Sin producto, y sin que nadie le haya inventado uno.
+    expect(bolsa.productId).toBeNull();
+    expect(bolsa.matchMethod).toBe('NONE');
+  });
+
+  it('su importe integra el neto, el IVA, el total y la deuda', async () => {
+    const id = await validarConLaBolsa();
+    const doc = await prisma.document.findUnique({
+      where: { id },
+      include: { paymentSchedule: true },
+    });
+
+    // El comprobante cierra con los seis renglones, no con cinco.
+    expect(new Decimal(doc!.netTotal!.toString()).toFixed(2)).toBe('221388.84');
+    expect(new Decimal(doc!.total!.toString()).toFixed(2)).toBe('267880.50');
+    // Y la deuda con Ezra es la del papel entero.
+    expect(new Decimal(doc!.paymentSchedule!.plannedAmount.toString()).toFixed(2)).toBe(
+      '267880.50',
+    );
+
+    /*
+     * La prueba de que la bolsa está adentro: sacándola, el neto es otro. Sin
+     * esto, un comprobante al que se le perdiera el renglón pasaría igual.
+     */
+    const sinLaBolsa = new Decimal('221388.84').minus('223.14');
+    expect(new Decimal(doc!.netTotal!.toString()).eq(sinLaBolsa)).toBe(false);
+  });
+
+  it('no genera costo histórico de ningún producto', async () => {
+    const id = await validarConLaBolsa();
+
+    // Cinco costos, uno por cada PLU comercial. La bolsa no suma ninguno.
+    const costos = await prisma.costHistory.findMany({ where: { documentId: id } });
+    expect(costos).toHaveLength(5);
+    expect(costos.every((c) => c.productId !== null)).toBe(true);
+  });
+
+  it('deja su movimiento de compra, pero sin producto', async () => {
+    /*
+     * El movimiento se registra igual: la mercadería entró y el comprobante la
+     * documenta. Lo que no tiene es producto, así que no aparece en ningún
+     * reporte por artículo ni afecta el costo de ninguno.
+     *
+     * Se dice «se registró el movimiento de compra» y no «aumentó el stock»:
+     * Compras no lleva saldo de existencias, y el maestro es Control de Stock.
+     */
+    const id = await validarConLaBolsa();
+    const movimientos = await prisma.purchaseMovement.findMany({ where: { documentId: id } });
+
+    expect(movimientos).toHaveLength(6);
+    const bolsa = movimientos.find((m) => m.description === 'BOLSA GRANDE')!;
+    expect(bolsa.productId).toBeNull();
+    expect(bolsa.supplierId).toBe(ezraId);
+    expect(bolsa.branchId).toBe(escenario.sucursales.devoto);
+    expect(new Decimal(bolsa.quantity.toString()).toFixed(0)).toBe('3');
+  });
+
+  it('no entra al catálogo comercial', async () => {
+    const antes = await prisma.product.count();
+    await validarConLaBolsa();
+
+    expect(await prisma.product.count()).toBe(antes);
+    expect(await prisma.product.findMany({ where: { normalizedName: { contains: 'olsa' } } })).toEqual(
+      [],
+    );
+    // Ni se le aprende un alias: no hay producto al que asociarlo.
+    const alias = await prisma.productAlias.findMany({ where: { supplierCode: '4249' } });
+    expect(alias).toEqual([]);
+  });
+
+  it('el movimiento conserva lo que hará falta para enviarlo una sola vez', async () => {
+    /*
+     * Todavía no se le escribe nada a Control de Stock, y no se va a hacer en
+     * este commit. Lo que sí tiene que quedar guardado es todo lo necesario
+     * para poder hacerlo después **exactamente una vez**: qué producto, cuánto,
+     * en qué unidad, en qué sucursal, de qué proveedor, por qué comprobante, y
+     * un identificador propio del movimiento que sirva de clave de
+     * idempotencia.
+     */
+    const id = await validarConLaBolsa();
+    const movimientos = await prisma.purchaseMovement.findMany({
+      where: { documentId: id },
+    });
+
+    for (const m of movimientos) {
+      expect(m.id).toBeTruthy();
+      expect(m.documentItemId).toBeTruthy();
+      expect(m.documentId).toBe(id);
+      expect(m.supplierId).toBe(ezraId);
+      expect(m.branchId).toBe(escenario.sucursales.devoto);
+      expect(m.unit).toBeTruthy();
+      expect(m.date).toBeInstanceOf(Date);
+      expect(new Decimal(m.quantity.toString()).gt(0)).toBe(true);
+    }
+
+    // `documentItemId` es único: un renglón produce un movimiento y no dos.
+    const ids = movimientos.map((m) => m.documentItemId);
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

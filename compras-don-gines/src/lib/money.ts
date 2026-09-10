@@ -185,6 +185,35 @@ export function parseRate(raw: unknown): Decimal | null {
 }
 
 /**
+ * Pasa a canónico lo que escribió una persona en la pantalla.
+ *
+ * Éste es **el límite**: de acá para adentro todo número es canónico, y por eso
+ * `toDecimal` puede leerlo tal cual. De acá para afuera puede venir cualquiera
+ * de las dos convenciones, porque la pantalla mezcla las dos a propósito: el
+ * lector completa los campos y la persona los corrige encima.
+ *
+ * La regla para desambiguar la pone `parseCanonicalNumber`, que es donde ya
+ * estaba escrita: lo que encaja en canónico —dígitos, a lo sumo un punto
+ * decimal, nada más— se lee así, y todo lo demás cae al parser argentino. Por
+ * eso «7.345» son siete kilos y pico y «7.345,00» son siete mil trescientos
+ * cuarenta y cinco: a la segunda la coma la saca de canónico.
+ *
+ * Esta función no agrega esa decisión, la **aplica en un lugar concreto**. Su
+ * razón de existir es el lugar: sin ella, la misma cadena entraba al circuito
+ * por distintas puertas y significaba una cosa o la otra según cuál.
+ *
+ * Devuelve el string canónico, no el Decimal, porque lo que viaja por el resto
+ * del circuito son strings y convertir de más pierde la distinción entre «no se
+ * pudo leer» y «cero».
+ */
+export function aCanonico(valor: unknown): string | null {
+  if (valor === null || valor === undefined) return null;
+  if (typeof valor === 'string' && valor.trim() === '') return null;
+  const numero = parseCanonicalNumber(valor);
+  return numero ? numero.toString() : null;
+}
+
+/**
  * Un número que puede venir de cualquiera de las dos convenciones.
  *
  * Lo canónico manda, y hay una razón concreta: los renglones que produce la

@@ -1440,6 +1440,30 @@ export function PasoRevision({
                 </div>
 
                 {/*
+                  Un renglón sin producto asociado se carga igual, y hay que
+                  decir exactamente hasta dónde llega.
+
+                  Es el caso de la BOLSA GRANDE de Distribuidora Ezra: un insumo
+                  que no está en el catálogo comercial. Su importe integra el
+                  neto, el IVA, el total y la deuda con el proveedor —se compró
+                  y se paga— pero no hay ningún producto al que cargarle el
+                  costo ni cuyo stock mover.
+
+                  Sin este aviso las dos cosas se confunden: el renglón aparece
+                  en la lista como cualquier otro y quien revisa no tiene forma
+                  de saber que ese artículo no va a figurar después en ningún
+                  reporte por producto. Y peor, podría creer que hace falta
+                  inventarle un PLU para "arreglarlo", que es justo lo que no
+                  hay que hacer.
+                */}
+                {!articulo.productoId ? (
+                  <p className="aviso-sin-producto">
+                    Línea sin producto asociado: integra el comprobante, pero no
+                    actualiza stock ni costo de producto.
+                  </p>
+                ) : null}
+
+                {/*
                   Sólo se ofrece recordar cuando hay algo nuevo que recordar: si
                   el renglón ya vino asociado por código, la asociación existe.
                 */}

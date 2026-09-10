@@ -1447,3 +1447,22 @@ tbody tr:last-child td {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }
+
+/*
+ * El renglón que no tiene producto asociado.
+ *
+ * Se carga igual y su importe integra el comprobante y la deuda, pero no hay
+ * producto al que cargarle el costo ni cuyo stock mover. Es un aviso y no un
+ * error: BOLSA GRANDE, en la factura de Ezra, es un insumo que no está en el
+ * catálogo comercial y está bien que entre así.
+ */
+.aviso-sin-producto {
+  margin: 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--aviso-borde);
+  background: var(--aviso-fondo);
+  color: var(--aviso);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}

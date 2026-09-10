@@ -3,7 +3,7 @@ import { prisma, type Prisma } from '@/lib/db';
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@/lib/errors';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
-import { Decimal, money, parseArNumber, toDecimal } from '@/lib/money';
+import { Decimal, aCanonico, money, parseArNumber, toDecimal } from '@/lib/money';
 import { arToday, dateOnlyFromISO, parseArDate, toDateOnly, toISODate } from '@/lib/datetime';
 import {
   consistentPerceptionLines,
@@ -514,10 +514,34 @@ export async function confirmDocument(
       }))
     : null;
 
-  const costed = costItems(input.items, {
-    netTotal: input.printed.netTotal ?? '0',
-    ivaTotal: input.printed.ivaTotal ?? '0',
-    perceptionsTotal: input.printed.perceptionsTotal ?? '0',
+  /*
+   * --- El límite: de acá para adentro, todo número es canónico -------------
+   *
+   * La pantalla de revisión manda lo que tiene en los campos **tal como está
+   * escrito**, y ahí conviven las dos convenciones a propósito: el lector los
+   * completa en canónico y la persona los corrige encima en argentino. Sin
+   * normalizar, la misma cadena «7.345» significaba siete kilos y pico o siete
+   * mil trescientos cuarenta y cinco según por dónde entrara.
+   *
+   * `aCanonico` resuelve eso una sola vez, acá, con la única regla que no
+   * depende de adivinar: la coma decide. De este punto en adelante `toDecimal`
+   * sólo ve canónico, que es lo que su contrato dice.
+   */
+  const renglonesNormalizados = input.items.map((item) => ({
+    ...item,
+    quantity: aCanonico(item.quantity) ?? item.quantity,
+    unitNetPrice: aCanonico(item.unitNetPrice) ?? item.unitNetPrice,
+    grossSubtotal: item.grossSubtotal === undefined || item.grossSubtotal === null
+      ? item.grossSubtotal
+      : aCanonico(item.grossSubtotal) ?? item.grossSubtotal,
+    discountPct: aCanonico(item.discountPct) ?? item.discountPct,
+    ivaRate: aCanonico(item.ivaRate) ?? item.ivaRate,
+  }));
+
+  const costed = costItems(renglonesNormalizados, {
+    netTotal: aCanonico(input.printed.netTotal) ?? '0',
+    ivaTotal: aCanonico(input.printed.ivaTotal) ?? '0',
+    perceptionsTotal: aCanonico(input.printed.perceptionsTotal) ?? '0',
     perceptionLines: percepcionesDiscriminadas,
   });
   const report = validateDocument({
@@ -595,12 +619,12 @@ export async function confirmDocument(
    * renglón queda sin asociar para que lo resuelva una persona.
    */
   const reconocidos = await matchItemsToProducts(costed, supplier.id);
-  const productoDeCadaRenglon = input.items.map((source, i) => {
+  const productoDeCadaRenglon = renglonesNormalizados.map((source, i) => {
     if (source.productId) return source.productId;
     const reconocido = reconocidos[i];
     return reconocido && reconocido.productId ? reconocido.productId : null;
   });
-  const metodoDeCadaRenglon = input.items.map((source, i) => {
+  const metodoDeCadaRenglon = renglonesNormalizados.map((source, i) => {
     if (source.productId) {
       if (source.learnAlias) return 'MANUAL';
       // El método con el que ya venía, si lo trae: no se degrada a "ALIAS" por
@@ -727,7 +751,7 @@ export async function confirmDocument(
           unitCost: item.unitCost,
         });
 
-        if (input.items[i].learnAlias) {
+        if (renglonesNormalizados[i].learnAlias) {
           await learnProductAlias(tx, {
             productId,
             supplierId: supplier.id,
