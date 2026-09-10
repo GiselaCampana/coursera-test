@@ -185,14 +185,26 @@ export function limitesDeColumnas(celdas: Celda[], lineas: string[] = []): Limit
     territorios[columnaMasCercana(celdas, bloque)].push(bloque);
   }
 
-  const salida = celdas.map((_, i) => {
-    const mios = territorios[i];
-    if (mios.length === 0) return porElTitulo[i];
-    return {
-      desde: Math.min(...mios.map((b) => b.desde)),
-      hasta: Math.max(...mios.map((b) => b.hasta)),
-    };
-  });
+  /*
+   * Los datos sólo mandan cuando de verdad están en columnas.
+   *
+   * Sobre una foto torcida las líneas no se alinean entre sí y no queda ningún
+   * canal en blanco de punta a punta: los tramos se funden en uno solo, que
+   * abarca la línea entera. Repartir por ese bloque único mete la fila completa
+   * en una sola columna y el renglón se pierde —sobre la foto de Distribuidora
+   * Ezra eso dejaba la tabla en cero renglones interpretados—.
+   *
+   * Así que se exige que **cada columna reciba al menos un tramo**. Si alguna
+   * queda vacía, los tramos no están describiendo esta tabla y se vuelve a la
+   * regla del título, que es peor pero no se derrumba. Es todo o nada a
+   * propósito: mezclar límites de las dos fuentes deja columnas superpuestas.
+   */
+  if (territorios.some((t) => t.length === 0)) return porElTitulo;
+
+  const salida = celdas.map((_, i) => ({
+    desde: Math.min(...territorios[i].map((b) => b.desde)),
+    hasta: Math.max(...territorios[i].map((b) => b.hasta)),
+  }));
 
   // Los bordes se abren: lo que quede a la izquierda de la primera columna o a
   // la derecha de la última es de ellas, no un sobrante.
