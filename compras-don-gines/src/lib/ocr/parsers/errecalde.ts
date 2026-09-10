@@ -1,4 +1,5 @@
 import { esNotaDeCredito } from '@/lib/ocr/text-parser';
+import { emisorNormalizado } from '@/lib/ocr/zona-emisor';
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
@@ -68,8 +69,13 @@ export const analizadorErrecalde: AnalizadorComprobante = {
     // alguna forma: los códigos "ART-0000" y el rótulo "Factura-Remito" los usa
     // más de un sistema de facturación. Sin el nombre ni el CUIT, esto no es
     // una factura de Errecalde y la agarra el analizador general.
-    const porNombre = /ERRE\s?CALDE/.test(normalizado);
-    const porCuit = /30-?71780890-?4/.test(normalizado.replace(/\s/g, ''));
+    //
+    // Y se busca sólo arriba de la tabla: un nombre propio dentro de los
+    // renglones es la marca de un artículo, no quién emitió el comprobante.
+    // Ver `@/lib/ocr/zona-emisor`.
+    const emisor = emisorNormalizado(textos);
+    const porNombre = /ERRE\s?CALDE/.test(emisor);
+    const porCuit = /30-?71780890-?4/.test(emisor.replace(/\s/g, ''));
     if (!porNombre && !porCuit) return 0;
 
     let puntaje = 0;

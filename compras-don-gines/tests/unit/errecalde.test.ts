@@ -236,6 +236,82 @@ describe('una lectura rota no se acepta', () => {
     expect(informe.canSave).toBe(false);
   });
 
+  it('con el pie confirmándose solo, un descalce grande del detector no traba el comprobante', () => {
+    /*
+     * El caso de Distribuidora Ezra. El detector cuenta diez filas donde hay
+     * seis —el recorte de la tabla repite tres renglones— y el tope de dos no
+     * alcanza. Pero el pie se confirma contra sí mismo: neto + IVA = total, tres
+     * lecturas independientes del papel, y el detalle suma exacto contra ese
+     * neto.
+     *
+     * Ahí el modo de fallar que justifica el tope no existe: un neto sacado de
+     * un renglón suelto no cuadra con un IVA y un total leídos aparte.
+     */
+    const seisRenglones = costItems(
+      toRawItems([
+        { lineNumber: 1, supplierCode: '47', description: 'Cremoso LA PAULINA', quantity: '4.24', unit: 'KG', unitNetPrice: '6387.115', grossSubtotal: '27081.371', ivaRate: '0.21' },
+        { lineNumber: 2, supplierCode: '49', description: 'PERNIL PATA CELESTE', quantity: '3.985', unit: 'KG', unitNetPrice: '3838.18', grossSubtotal: '15295.149', ivaRate: '0.21' },
+        { lineNumber: 3, supplierCode: '48', description: 'QUESO DE MAQUINA DAMBO', quantity: '7.345', unit: 'KG', unitNetPrice: '8267.697', grossSubtotal: '60726.232', ivaRate: '0.21' },
+        { lineNumber: 4, supplierCode: '10', description: 'JAMON COCIDO MINI TRADICIONAL', quantity: '4.04', unit: 'KG', unitNetPrice: '12258.78', grossSubtotal: '49525.474', ivaRate: '0.21' },
+        { lineNumber: 5, supplierCode: '2514', description: 'JAMON COCIDO MINI IL MOLISE', quantity: '7.665', unit: 'KG', unitNetPrice: '8941.615', grossSubtotal: '68537.481', ivaRate: '0.21' },
+        { lineNumber: 6, supplierCode: '4249', description: 'BOLSA GRANDE', quantity: '3', unit: 'KG', unitNetPrice: '74.38', grossSubtotal: '223.14', ivaRate: '0.21' },
+      ]),
+      { netTotal: '221388.84', ivaTotal: '46491.66', perceptionsTotal: '0' },
+    );
+
+    const informe = validateDocument({
+      items: seisRenglones,
+      printed: {
+        netTotal: '221388.84',
+        ivaTotal: '46491.66',
+        perceptionsTotal: '0',
+        total: '267880.50',
+      },
+      attempts: 1,
+      filasEnLaImagen: 10,
+    });
+
+    const control = informe.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS');
+    expect(control?.severity).toBe('WARN');
+    expect(informe.canSave).toBe(true);
+  });
+
+  it('pero si el pie no cuadra consigo mismo, el descalce grande vuelve a trabar', () => {
+    /*
+     * La otra mitad, y es la que hace que la anterior signifique algo. Mismos
+     * renglones, mismo descalce de filas, pero con un total impreso que no es
+     * neto + IVA: el pie no se confirma, así que el tope de dos vuelve a regir y
+     * el comprobante queda trabado.
+     */
+    const seisRenglones = costItems(
+      toRawItems([
+        { lineNumber: 1, supplierCode: '47', description: 'Cremoso LA PAULINA', quantity: '4.24', unit: 'KG', unitNetPrice: '6387.115', grossSubtotal: '27081.371', ivaRate: '0.21' },
+        { lineNumber: 2, supplierCode: '49', description: 'PERNIL PATA CELESTE', quantity: '3.985', unit: 'KG', unitNetPrice: '3838.18', grossSubtotal: '15295.149', ivaRate: '0.21' },
+        { lineNumber: 3, supplierCode: '48', description: 'QUESO DE MAQUINA DAMBO', quantity: '7.345', unit: 'KG', unitNetPrice: '8267.697', grossSubtotal: '60726.232', ivaRate: '0.21' },
+        { lineNumber: 4, supplierCode: '10', description: 'JAMON COCIDO MINI TRADICIONAL', quantity: '4.04', unit: 'KG', unitNetPrice: '12258.78', grossSubtotal: '49525.474', ivaRate: '0.21' },
+        { lineNumber: 5, supplierCode: '2514', description: 'JAMON COCIDO MINI IL MOLISE', quantity: '7.665', unit: 'KG', unitNetPrice: '8941.615', grossSubtotal: '68537.481', ivaRate: '0.21' },
+        { lineNumber: 6, supplierCode: '4249', description: 'BOLSA GRANDE', quantity: '3', unit: 'KG', unitNetPrice: '74.38', grossSubtotal: '223.14', ivaRate: '0.21' },
+      ]),
+      { netTotal: '221388.84', ivaTotal: '46491.66', perceptionsTotal: '0' },
+    );
+
+    const informe = validateDocument({
+      items: seisRenglones,
+      printed: {
+        netTotal: '221388.84',
+        ivaTotal: '46491.66',
+        perceptionsTotal: '0',
+        // Un total que no es neto + IVA: el pie no se confirma.
+        total: '310000.00',
+      },
+      attempts: 1,
+      filasEnLaImagen: 10,
+    });
+
+    expect(informe.checks.find((c) => c.code === 'ART_RENGLONES_COMPLETOS')?.severity).toBe('ERROR');
+    expect(informe.canSave).toBe(false);
+  });
+
   it('no molesta cuando la factura tiene pocos renglones de verdad', () => {
     const dos = costItems(
       toRawItems([

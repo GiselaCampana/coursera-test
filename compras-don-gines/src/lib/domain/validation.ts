@@ -336,7 +336,44 @@ export function validateDocument(input: ValidationInput): ValidationReport {
     const elDetalleCierra =
       present(printed.netTotal) &&
       sums.netAmount.minus(money(printed.netTotal)).abs().lte(roundingTolerance(money(printed.netTotal)));
-    const esFalsoPositivoDelDetector = elDetalleCierra && faltan <= TOLERADAS_POR_EL_DETECTOR;
+
+    /*
+     * O que el pie se confirme solo, y entonces el tope no hace falta.
+     *
+     * El tope de dos existe por un modo de fallar concreto: que de veintitrés
+     * filas se lea una, que esa lectura cierre consigo misma, y que el neto
+     * impreso **salga de ella** porque el pie tampoco se leyó bien. Ahí la
+     * aritmética no prueba nada, porque las dos cifras que se comparan son la
+     * misma.
+     *
+     * Ese modo de fallar desaparece cuando el pie se confirma contra sí mismo:
+     * neto + IVA + percepciones = total son tres lecturas independientes del
+     * papel, y un neto inventado a partir de un renglón no cuadra con un IVA y
+     * un total que se leyeron aparte. Con el pie confirmado, la suma del detalle
+     * contra el neto vuelve a ser evidencia de verdad, y el conteo de filas
+     * —que es lo más frágil que tiene esta cadena— deja de poder trabar un
+     * comprobante que cierra exacto.
+     *
+     * Hace falta para la factura de Distribuidora Ezra: el detector cuenta diez
+     * filas donde hay seis, porque el recorte de la tabla repite tres renglones,
+     * y los seis suman 221.388,84 contra los 221.388,84 del pie, con IVA
+     * 46.491,66 y total 267.880,50, los tres impresos y los tres coincidiendo.
+     * Cuatro filas de descalce pasan el tope, y el comprobante quedaba trabado
+     * por una fila que no existe.
+     */
+    const elPieSeConfirmaSolo =
+      present(printed.netTotal) &&
+      present(printed.total) &&
+      present(printed.ivaTotal) &&
+      money(printed.netTotal)
+        .plus(money(printed.ivaTotal))
+        .plus(present(printed.perceptionsTotal) ? money(printed.perceptionsTotal) : ZERO)
+        .minus(money(printed.total))
+        .abs()
+        .lte(roundingTolerance(money(printed.total)));
+
+    const esFalsoPositivoDelDetector =
+      elDetalleCierra && (faltan <= TOLERADAS_POR_EL_DETECTOR || elPieSeConfirmaSolo);
 
     checks.push({
       code: 'ART_RENGLONES_COMPLETOS',

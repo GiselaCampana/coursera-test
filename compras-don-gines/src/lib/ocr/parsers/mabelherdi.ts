@@ -1,4 +1,5 @@
 import { esNotaDeCredito } from '@/lib/ocr/text-parser';
+import { emisorNormalizado } from '@/lib/ocr/zona-emisor';
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
@@ -88,8 +89,14 @@ export const analizadorMabelherdi: AnalizadorComprobante = {
      * general: un formato ajeno interpretado con las reglas de otro proveedor
      * es peor que uno interpretado con reglas generales.
      */
-    const porCuit = new RegExp(CUIT).test(normalizado.replace(/[\s-]/g, ''));
-    const porNombre = /M[A4]BELHERD[I1]|M[A4]BELHERO[I1]/.test(normalizado);
+    /*
+     * Y se busca sólo arriba de la tabla: un nombre propio dentro de los
+     * renglones es la marca de un artículo, no quién emitió el comprobante.
+     * Ver `@/lib/ocr/zona-emisor`.
+     */
+    const emisor = emisorNormalizado(textos);
+    const porCuit = new RegExp(CUIT).test(emisor.replace(/[\s-]/g, ''));
+    const porNombre = /M[A4]BELHERD[I1]|M[A4]BELHERO[I1]/.test(emisor);
     if (!porCuit && !porNombre) return 0;
 
     let puntaje = 0;

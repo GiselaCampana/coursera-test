@@ -1,6 +1,7 @@
 import { Decimal, parseArNumber, parseRate } from '@/lib/money';
 import { parseArDate, toISODate } from '@/lib/datetime';
 import { esNotaDeCredito, splitColumns } from '@/lib/ocr/text-parser';
+import { emisorNormalizado } from '@/lib/ocr/zona-emisor';
 import type { OcrHeader, OcrItem, OcrSummary, OcrTaxLine } from '@/lib/ocr/types';
 import {
   CLASE_DIGITOS_OCR,
@@ -52,8 +53,7 @@ export const analizadorLosCalvos: AnalizadorComprobante = {
   nombre: 'Los Calvos',
 
   reconoce(textos: TextosComprobante): number {
-    const texto = `${textos.encabezado ?? ''}\n${textos.completo}`;
-    const normalizado = texto
+    const normalizado = `${textos.encabezado ?? ''}\n${textos.completo}`
       .normalize('NFD')
       .replace(/[̀-ͯ]/g, '')
       .toUpperCase();
@@ -71,9 +71,16 @@ export const analizadorLosCalvos: AnalizadorComprobante = {
      *
      * Un formato ajeno interpretado con las reglas de otro proveedor es peor
      * que uno interpretado con reglas generales.
+     *
+     * Y el nombre se busca **sólo arriba de la tabla**. Exigir el nombre no
+     * alcanzaba: la factura de Distribuidora Ezra la agarraba este analizador
+     * con 0,60 porque «LOS CALVOS» es la marca de uno de sus artículos, el
+     * JAMON COCIDO MINI TRADICIONAL. Un nombre propio dentro de la tabla es un
+     * dato del renglón, no quién factura. Ver `@/lib/ocr/zona-emisor`.
      */
-    const porNombre = /L[O0]S\s+C[A4]LV[O0]S/.test(normalizado);
-    const porCuit = /30-?61234567-?9/.test(normalizado.replace(/\s/g, ''));
+    const emisor = emisorNormalizado(textos);
+    const porNombre = /L[O0]S\s+C[A4]LV[O0]S/.test(emisor);
+    const porCuit = /30-?61234567-?9/.test(emisor.replace(/\s/g, ''));
     if (!porNombre && !porCuit) return 0;
 
     let puntaje = 0;

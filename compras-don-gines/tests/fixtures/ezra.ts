@@ -99,8 +99,8 @@ export const EZRA_ARTICULOS_IMPRESOS: ArticuloImpresoEzra[] = [
 
 /** El encabezado impreso. */
 export const EZRA_ENCABEZADO = {
-  supplierName: 'DISTRIBUIDORA EZRA',
-  legalName: 'COOPERATIVA DE TRABAJO EZRA ALIMENTOS',
+  supplierName: 'Distribuidora Ezra',
+  legalName: 'Cooperativa de Trabajo Ezra Alimentos',
   cuit: '30-71951960-8',
   docType: 'FACTURA' as const,
   letter: 'A',

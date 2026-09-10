@@ -184,11 +184,30 @@ export function parseRate(raw: unknown): Decimal | null {
   return value.gt(1) ? value.div(100) : value;
 }
 
+/**
+ * Un número que puede venir de cualquiera de las dos convenciones.
+ *
+ * Lo canónico manda, y hay una razón concreta: los renglones que produce la
+ * lectura viajan en formato canónico —punto decimal, sin separadores de miles,
+ * como dice el contrato de `OcrItem`— y acá se pasaban por `parseArNumber`, que
+ * lee «7.345» como siete mil trescientos cuarenta y cinco.
+ *
+ * O sea que **toda cantidad de uno a tres dígitos enteros con exactamente tres
+ * decimales se multiplicaba por mil**. En la factura de Distribuidora Ezra son
+ * tres de los seis renglones: 7,345 kg de queso de máquina entraban como 7.345
+ * kg, y con ellos el costo por kilo se dividía por mil.
+ *
+ * No es ambiguo resolverlo: un número escrito con **punto** decimal y sin comas
+ * es canónico y se lee tal cual; en cuanto aparece una coma —«7,345», que es
+ * como lo escribe una persona en la pantalla de revisión— vale la convención
+ * argentina. `parseCanonicalNumber` ya hacía exactamente esa distinción, y era
+ * la que había que usar.
+ */
 export function toDecimal(value: MoneyInput, fallback: Decimal = ZERO): Decimal {
   if (value === null || value === undefined) return fallback;
   if (value instanceof Decimal) return value;
   if (typeof value === 'number') return new Decimal(value);
-  const parsed = parseArNumber(value);
+  const parsed = parseCanonicalNumber(value);
   return parsed ?? fallback;
 }
 

@@ -58,7 +58,7 @@ export const PROVEEDOR_DESCONOCIDO: Emisor = {
   cuit: '30-59876543-2',
 };
 
-interface Renglon {
+export interface Renglon {
   codigo: string;
   descripcion: string;
   kg: string;
@@ -147,6 +147,14 @@ export function svgFactura(
   numero = '00212356',
   emisor: Emisor = LOS_CALVOS,
   /**
+   * Los renglones de la tabla.
+   *
+   * Se puede cambiar porque hace falta poder dibujar una factura cuyos
+   * artículos mencionen a **otro** proveedor: es el caso de la marca leída como
+   * emisor, y con la tabla fija no había forma de llegar a él.
+   */
+  renglones: Renglon[] = RENGLONES,
+  /**
    * Qué comprobante se dibuja.
    *
    * Una nota de crédito se imprime igual que una factura salvo por el título, y
@@ -202,7 +210,7 @@ export function svgFactura(
   partes.push(`<line x1="${IZQUIERDA}" y1="${y + 16}" x2="${DERECHA}" y2="${y + 16}" stroke="#111111" stroke-width="2"/>`);
 
   y += alturaRenglon + 12;
-  for (const renglon of RENGLONES) {
+  for (const renglon of renglones) {
     partes.push(texto(renglon.codigo, { x: COLUMNAS.codigo, y, tamano: tamanoTabla }));
     partes.push(texto(renglon.descripcion, { x: COLUMNAS.descripcion, y, tamano: tamanoTabla }));
     partes.push(texto(renglon.kg, { x: COLUMNAS.kg, y, tamano: tamanoTabla, anclaje: 'end' }));
@@ -268,6 +276,8 @@ export async function facturaLosCalvosJpeg(
     emisor?: Emisor;
     /** Factura o nota de crédito. Por omisión, factura. */
     tipoComprobante?: 'FACTURA' | 'NOTA_CREDITO';
+    /** Los renglones de la tabla. Por omisión, los de Los Calvos. */
+    renglones?: Renglon[];
   } = {},
 ): Promise<Buffer> {
   let imagen = sharp(
@@ -277,6 +287,7 @@ export async function facturaLosCalvosJpeg(
         opciones.totalAlterado ?? false,
         opciones.numero ?? '00212356',
         opciones.emisor ?? LOS_CALVOS,
+        opciones.renglones ?? RENGLONES,
         opciones.tipoComprobante ?? 'FACTURA',
       ),
     ),
