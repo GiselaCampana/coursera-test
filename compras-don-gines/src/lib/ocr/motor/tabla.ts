@@ -139,16 +139,74 @@ export function encontrarFilaDeTitulos(texto: string): FilaDeTitulos | null {
   return null;
 }
 
+export interface Limite {
+  desde: number;
+  hasta: number;
+}
+
 /**
- * Los límites de cada columna, deducidos de la fila de títulos.
+ * Los límites de cada columna.
  *
- * Cada columna se queda con el espacio que va desde la mitad del hueco anterior
- * hasta la mitad del hueco siguiente. Repartir el hueco por la mitad —en vez de
- * cortar en el borde del título— tolera que las celdas de datos estén corridas
- * unos caracteres respecto del título, que es lo normal cuando la columna se
- * alinea a la derecha y los números tienen distinta cantidad de dígitos.
+ * Con la fila de títulos sola, cada columna se queda con el espacio que va
+ * desde la mitad del hueco anterior hasta la mitad del hueco siguiente.
+ * Repartir el hueco por la mitad —en vez de cortar en el borde del título—
+ * tolera que las celdas estén corridas unos caracteres respecto del título, que
+ * es lo normal cuando la columna se alinea a la derecha.
+ *
+ * Pero **la fila de títulos no es una buena regla para medir los datos**, y
+ * ésta es una de las cosas que rompió la factura de Distribuidora Ezra: los
+ * cuatro títulos de la derecha van pegados —«P.Unit Desc.% P.U.Desc. Importe»,
+ * con un espacio entre cada uno— mientras las cuatro columnas de números están
+ * bien separadas y más a la derecha. Medido con el título, el precio de lista y
+ * el porcentaje de descuento caen en la misma columna y se leen como un solo
+ * número: «6.000,000 5,000» sale 60000005.
+ *
+ * Cuando se le pasan las líneas de datos, entonces, los límites salen de
+ * **ellas**: los canales verticales que están en blanco en todas las líneas a la
+ * vez son los separadores reales de la tabla, y el título sólo dice cómo se
+ * llama cada uno. Es más confiable porque son varias líneas de acuerdo entre
+ * sí, contra una sola del encabezado.
  */
-export function limitesDeColumnas(celdas: Celda[]): { desde: number; hasta: number }[] {
+export function limitesDeColumnas(celdas: Celda[], lineas: string[] = []): Limite[] {
+  const porElTitulo = limitesPorMitades(celdas);
+  const bloques = bloquesDeDatos(lineas);
+  if (bloques.length === 0 || celdas.length === 0) return porElTitulo;
+
+  /*
+   * Cada bloque de datos se anota en la columna cuyo título tiene más cerca.
+   *
+   * Se reparten los bloques entre las columnas y no al revés para que ninguno
+   * quede afuera: un bloque de más —una descripción que por casualidad dejó un
+   * canal en el medio— se suma al de al lado en vez de perderse, y un bloque de
+   * menos simplemente deja a esa columna con los límites del título.
+   */
+  const territorios: Limite[][] = celdas.map(() => []);
+  for (const bloque of bloques) {
+    territorios[columnaMasCercana(celdas, bloque)].push(bloque);
+  }
+
+  const salida = celdas.map((_, i) => {
+    const mios = territorios[i];
+    if (mios.length === 0) return porElTitulo[i];
+    return {
+      desde: Math.min(...mios.map((b) => b.desde)),
+      hasta: Math.max(...mios.map((b) => b.hasta)),
+    };
+  });
+
+  // Los bordes se abren: lo que quede a la izquierda de la primera columna o a
+  // la derecha de la última es de ellas, no un sobrante.
+  if (salida.length > 0) {
+    salida[0] = { desde: 0, hasta: salida[0].hasta };
+    salida[salida.length - 1] = {
+      desde: salida[salida.length - 1].desde,
+      hasta: Number.MAX_SAFE_INTEGER,
+    };
+  }
+  return salida;
+}
+
+function limitesPorMitades(celdas: Celda[]): Limite[] {
   return celdas.map((celda, i) => {
     const anterior = celdas[i - 1];
     const siguiente = celdas[i + 1];
@@ -158,6 +216,62 @@ export function limitesDeColumnas(celdas: Celda[]): { desde: number; hasta: numb
       : Number.MAX_SAFE_INTEGER;
     return { desde, hasta };
   });
+}
+
+/**
+ * Los tramos de ancho que ocupan los datos, separados por canales verticales.
+ *
+ * Un canal es un desplazamiento que está en blanco en **todas** las líneas de
+ * datos a la vez. Se piden dos caracteres seguidos: con uno solo, el espacio
+ * que separa dos palabras de una descripción cortaría la columna en dos si por
+ * casualidad cae en el mismo lugar en todas las filas.
+ */
+function bloquesDeDatos(lineas: string[]): Limite[] {
+  const utiles = lineas.filter((l) => l.trim() !== '');
+  if (utiles.length === 0) return [];
+
+  const ancho = Math.max(...utiles.map((l) => l.length));
+  const bloques: Limite[] = [];
+  let inicio: number | null = null;
+  let blancosSeguidos = 0;
+
+  for (let x = 0; x <= ancho; x++) {
+    const blanco = x === ancho || utiles.every((l) => (l[x] ?? ' ') === ' ');
+    if (blanco) {
+      blancosSeguidos += 1;
+      if (inicio !== null && (blancosSeguidos >= 2 || x === ancho)) {
+        bloques.push({ desde: inicio, hasta: x - blancosSeguidos + 1 });
+        inicio = null;
+      }
+    } else {
+      if (inicio === null) inicio = x;
+      blancosSeguidos = 0;
+    }
+  }
+
+  return bloques;
+}
+
+/** La columna cuyo título está más cerca de un tramo de datos. */
+function columnaMasCercana(celdas: Celda[], bloque: Limite): number {
+  let mejor = 0;
+  let mejorSolape = -1;
+  let mejorDistancia = Infinity;
+
+  celdas.forEach((celda, i) => {
+    const solape = Math.min(celda.hasta, bloque.hasta) - Math.max(celda.desde, bloque.desde);
+    const distancia = Math.abs(
+      (celda.desde + celda.hasta) / 2 - (bloque.desde + bloque.hasta) / 2,
+    );
+    // Primero el que se solapa más; sin solapamiento, el de centro más cercano.
+    if (solape > mejorSolape || (solape === mejorSolape && distancia < mejorDistancia)) {
+      mejorSolape = solape;
+      mejorDistancia = distancia;
+      mejor = i;
+    }
+  });
+
+  return mejor;
 }
 
 /**
@@ -233,19 +347,28 @@ const EMPIEZA_EL_PIE =
 
 export function filasDeDatos(texto: string, titulos: FilaDeTitulos): FilaDeDatos[] {
   const lineas = texto.split('\n');
-  const limites = limitesDeColumnas(titulos.celdas);
-  const salida: FilaDeDatos[] = [];
 
+  // Primero se juntan las líneas de la tabla, porque los límites de las
+  // columnas salen de ellas y no del encabezado.
+  const candidatas: { linea: number; cruda: string }[] = [];
   for (let i = titulos.linea + 1; i < lineas.length; i++) {
     const linea = lineas[i];
     if (linea.trim() === '') continue;
     if (EMPIEZA_EL_PIE.test(linea)) break;
+    candidatas.push({ linea: i, cruda: linea });
+  }
 
-    const { celdas, sobrantes } = repartirEnColumnas(linea, limites);
+  const limites = limitesDeColumnas(
+    titulos.celdas,
+    candidatas.map((c) => c.cruda),
+  );
+
+  const salida: FilaDeDatos[] = [];
+  for (const { linea, cruda } of candidatas) {
+    const { celdas, sobrantes } = repartirEnColumnas(cruda, limites);
     // Una línea que no llena ni dos columnas no es una fila de la tabla.
     if (celdas.filter((c) => c !== null).length < 2) continue;
-
-    salida.push({ linea: i, cruda: linea, celdas, sobrantes });
+    salida.push({ linea, cruda, celdas, sobrantes });
   }
 
   return salida;
