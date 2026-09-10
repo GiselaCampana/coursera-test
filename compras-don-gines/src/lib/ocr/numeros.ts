@@ -47,6 +47,24 @@ export function variantesDeNumero(texto: string): Decimal[] {
     if (/^\d+$/.test(todoEntero)) agregar(new Decimal(todoEntero));
   }
 
+  /*
+   * El importe al que el OCR le comió todos los separadores.
+   *
+   * En la factura de Barraza el papel dice «238,234.75» y sale «23823475»: los
+   * dígitos están todos y en orden, y lo único que se perdió es el punto. Sin
+   * esta variante ese renglón no tiene importe legible y hay que calcularlo,
+   * cuando en realidad está impreso.
+   *
+   * Se ofrece sólo para enteros largos, de seis dígitos para arriba. Por debajo
+   * de eso un entero es una cantidad, un porcentaje o un código, y dividirlo
+   * por cien inventaría un candidato donde no hay ninguno. Como siempre acá:
+   * es una lectura más de los mismos dígitos, y la acepta o la descarta la
+   * aritmética del renglón.
+   */
+  if (/^\d{6,}$/.test(limpio)) {
+    agregar(new Decimal(limpio).div(100));
+  }
+
   return salida;
 }
 

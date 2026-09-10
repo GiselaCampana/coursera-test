@@ -3,6 +3,7 @@ import { analizadorLosCalvos } from '@/lib/ocr/parsers/los-calvos';
 import { analizadorErrecalde } from '@/lib/ocr/parsers/errecalde';
 import { analizadorMabelherdi } from '@/lib/ocr/parsers/mabelherdi';
 import { analizadorEzra } from '@/lib/ocr/parsers/ezra';
+import { analizadorBarraza } from '@/lib/ocr/parsers/barraza';
 import type { AnalizadorComprobante, TextosComprobante } from '@/lib/ocr/parsers/tipos';
 
 /**
@@ -16,6 +17,7 @@ export const ANALIZADORES: AnalizadorComprobante[] = [
   analizadorErrecalde,
   analizadorMabelherdi,
   analizadorEzra,
+  analizadorBarraza,
   analizadorGenerico,
 ];
 
@@ -40,5 +42,6 @@ export {
   analizadorErrecalde,
   analizadorMabelherdi,
   analizadorEzra,
+  analizadorBarraza,
 };
 export * from '@/lib/ocr/parsers/tipos';

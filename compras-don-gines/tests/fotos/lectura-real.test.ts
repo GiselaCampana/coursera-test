@@ -199,7 +199,16 @@ function volcarSiSePide(sufijo: string, paginas: unknown) {
 async function leerFoto(archivo: string) {
   const { SesionLectura } = await import('@/lib/cliente/ocr/lector');
   const bytes = readFileSync(path.join(FOTOS, archivo));
-  const blob = new Blob([bytes], { type: 'image/jpeg' });
+  /*
+   * El tipo se saca de la extensión, no se da por sentado.
+   *
+   * Estaba fijo en «image/jpeg» y el banco tiene ahora una foto PNG —la de
+   * Barraza, que llegó así y se conserva sin convertir para no agregar pérdida
+   * ni modificar la evidencia—. Mentirle el tipo al blob es exactamente lo que
+   * el teléfono no hace: ahí el tipo lo pone el archivo.
+   */
+  const tipo = archivo.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+  const blob = new Blob([bytes], { type: tipo });
 
   const lector = new SesionLectura();
   const desde = Date.now();
@@ -391,6 +400,62 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 
       expect(plano.length).toBeGreaterThan(100);
+    },
+    600_000,
+  );
+
+  it(
+    'Barraza: los 2 renglones, con kilos y piezas separados',
+    async () => {
+      const { lectura, medidas, total } = await leerFoto('barraza-0041-00196670.png');
+      const pagina = lectura.paginas[0];
+
+      console.log(
+        `[Barraza] página ${medidas[0].ancho}×${medidas[0].alto} · ` +
+          `inclinación ${medidas[0].inclinacion.toFixed(2)}° · ` +
+          `perspectiva ${medidas[0].perspectivaCorregida ? 'sí' : 'no'} · ` +
+          `filas vistas ${pagina.regiones?.filasDetectadas ?? '—'} · ` +
+          `total ${(total / 1000).toFixed(1)}s`,
+      );
+      volcarSiSePide('barraza', lectura.paginas);
+
+      const interpretado = await interpretar(lectura);
+      console.log(
+        `  INTERPRETADO: ${interpretado.articulos} artículos · analizador ${interpretado.analizador} · ` +
+          `estado ${interpretado.estado} · filas detector ${interpretado.filasDelDetector} · ` +
+          `sin resolver ${interpretado.filasSinResolver}`,
+      );
+      console.log(
+        '  controles en error:',
+        JSON.stringify(
+          interpretado.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code),
+        ),
+      );
+      console.log('  calculado:', JSON.stringify(interpretado.calculado));
+
+      const { BARRAZA_ARTICULOS_IMPRESOS } = await import('../fixtures/barraza');
+      informarRenglones(
+        interpretado.renglones,
+        BARRAZA_ARTICULOS_IMPRESOS.map((a) => ({
+          codigo: a.codigo,
+          descripcion: a.descripcion,
+          subtotal: a.neto,
+        })),
+      );
+
+      /*
+       * Dos renglones, no tres, y ni los kilos ni las piezas adentro del nombre.
+       *
+       * Es la marca del defecto que trajo esta factura: la pantalla mostraba
+       * «27.00 9.00 | CIL MUZZA BARRAZA X 3 KG», con las dos cantidades pegadas
+       * al texto, y contaba tres renglones donde el papel tiene dos.
+       */
+      for (const r of interpretado.renglones) {
+        expect(r.descripcion, `el renglón ${r.linea} arrastra cantidades`).not.toMatch(
+          /^\s*\d+[.,]\d{2}\s/,
+        );
+      }
+      expect(interpretado.articulos).toBe(2);
     },
     600_000,
   );
