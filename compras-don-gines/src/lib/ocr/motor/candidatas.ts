@@ -1,7 +1,12 @@
 import { Decimal } from '@/lib/money';
 import { evaluarCierre, type CierreCompatible } from '@/lib/ocr/motor/precision';
 import { variantesDeNumero } from '@/lib/ocr/numeros';
-import { CAMPOS_NUMERICOS, type CampoDeColumna, type ColumnaReconocida } from '@/lib/ocr/motor/columnas';
+import {
+  CAMPOS_NUMERICOS,
+  CAMPOS_SIN_CONFIRMAR,
+  type CampoDeColumna,
+  type ColumnaReconocida,
+} from '@/lib/ocr/motor/columnas';
 import type { FilaDeDatos } from '@/lib/ocr/motor/tabla';
 
 /**
@@ -117,12 +122,52 @@ export function partirNumeroYTexto(texto: string): { numero: string; resto: stri
 /** Las celdas de una fila, indexadas por campo. */
 function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
   const mapa = new Map<CampoDeColumna, string>();
+  const textosSinConfirmar: string[] = [];
+  const montosSinConfirmar: string[] = [];
+
   columnas.forEach((columna, i) => {
     if (!columna || columna.campo === 'ignorada') return;
     const celda = fila.celdas[i];
-    if (celda && celda.texto.trim() !== '') mapa.set(columna.campo, celda.texto.trim());
+    if (!celda || celda.texto.trim() === '') return;
+    if (columna.campo === 'UNKNOWN_TEXT') {
+      textosSinConfirmar.push(celda.texto.trim());
+      return;
+    }
+    if (columna.campo === 'UNKNOWN_MONEY') {
+      montosSinConfirmar.push(celda.texto.trim());
+      return;
+    }
+    if (CAMPOS_SIN_CONFIRMAR.has(columna.campo)) return;
+    mapa.set(columna.campo, celda.texto.trim());
   });
-  return mapa;
+
+  /*
+   * Una columna de texto sin confirmar hace de descripción mientras no haya otra.
+   *
+   * Es el punto donde se decide si el comprobante se puede cargar o hay que
+   * reescribirlo a mano. Sobre la foto de Lácteos Barraza la palabra
+   * «Descripción» del encabezado sale ilegible, así que la columna quedaba sin
+   * campo, el renglón quedaba sin descripción y el filtro de abajo lo tiraba: la
+   * factura mostraba **cero artículos** teniendo los kilos, las piezas, los dos
+   * precios, el descuento y los dos importes perfectamente leídos.
+   *
+   * Usarla como descripción no es adivinar: el renglón se arma completo y la
+   * columna queda con un pedido de confirmación de una palabra. Lo que sí sería
+   * adivinar es darla por confirmada, y eso no pasa acá —pasa en el perfil, que
+   * todavía no existe—.
+   *
+   * Se juntan todas, en el orden de las columnas. Una descripción larga se
+   * parte en dos columnas con facilidad —alcanza con que el OCR deje un hueco
+   * en el medio de «CIL MUZZA BARRAZA X 2 KG»— y quedarse con el pedazo más
+   * largo tira la otra mitad del nombre del artículo. Si además hubiera una
+   * marca, entra en la misma celda; el pedido de confirmación es el mismo y la
+   * persona ve el texto completo en vez de un pedazo.
+   */
+  if (!mapa.has('descripcion') && textosSinConfirmar.length > 0) {
+    mapa.set('descripcion', textosSinConfirmar.join(' ').replace(/\s+/g, ' ').trim());
+  }
+
+  return { mapa, montosSinConfirmar };
 }
 
 /**
@@ -138,7 +183,7 @@ export function candidatasDeRenglon(
   columnas: (ColumnaReconocida | null)[],
   convencion: ConvencionDecimal,
 ): RenglonCandidato[] {
-  const celdas = porCampo(fila, columnas);
+  const { mapa: celdas, montosSinConfirmar } = porCampo(fila, columnas);
 
   /*
    * Una celda invadida por la de al lado se lee de las dos maneras.
@@ -158,6 +203,32 @@ export function candidatasDeRenglon(
     // El texto que sobraba se ofrece como descripción si no había otra.
     if (!alternativa.get('descripcion')) alternativa.set('descripcion', partido.resto);
     variantesDeCeldas.push(alternativa);
+  }
+
+  /*
+   * Una columna de montos sin confirmar se ofrece como cada precio que falta.
+   *
+   * Es el mismo criterio que con los sobrantes, aplicado a una columna entera:
+   * no se decide qué es, se ofrece y decide la cuenta. Sobre la foto de Lácteos
+   * Barraza la columna de precios cae bajo un encabezado que el OCR leyó «Lado»
+   * —no se parece a nada— así que queda como monto sin confirmar. Ofrecerla como
+   * precio unitario hace que el renglón se compruebe solo: 27 × 10.361,45 × 0,84
+   * da 234.997,69, que es el importe impreso. Una coincidencia así no es una
+   * coincidencia, y es mucho mejor evidencia de lo que esa columna significa que
+   * cualquier cosa que se pueda decir de su encabezado.
+   *
+   * Se ofrece únicamente donde **falta** el campo: una columna sin confirmar no
+   * desplaza a una reconocida.
+   */
+  for (const monto of montosSinConfirmar) {
+    for (const destino of ['precioUnitario', 'precioConDescuento', 'importe'] as const) {
+      if (celdas.has(destino)) continue;
+      for (const base of [...variantesDeCeldas]) {
+        const conMonto = new Map(base);
+        conMonto.set(destino, monto);
+        variantesDeCeldas.push(conMonto);
+      }
+    }
   }
 
   const salida: RenglonCandidato[] = [];

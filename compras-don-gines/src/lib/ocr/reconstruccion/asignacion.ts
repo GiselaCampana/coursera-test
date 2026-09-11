@@ -154,7 +154,7 @@ const COSTO_DE_DESCARTE = 1.5;
  * manera de devolvérselo; con uno mucho más grande, un valor del pie entraría
  * como si fuera del último artículo.
  */
-const ALEJAMIENTO_MAXIMO = 2.5;
+export const ALEJAMIENTO_MAXIMO = 2.5;
 
 export function asignarMonotonicamente<T extends ValorPosicionado>(
   valores: T[],
@@ -263,6 +263,21 @@ export function segundaMejorAsignacion<T extends ValorPosicionado>(
     // Sin ese valor, ¿cómo se repartiría el resto?
     const sinEse = valores.filter((v) => v !== elegido);
     const otra = asignarMonotonicamente(sinEse, filas, alturaTipica);
+    /*
+     * PENDIENTE MEDIDO: el valor excluido **no** vuelve como sobrante.
+     *
+     * Debería, porque la regla de toda esta capa es que nada se descarta en
+     * silencio, y acá un valor que el OCR leyó desaparece de la candidata.
+     * Devolverlo se probó y mide peor: sobre la foto de Lácteos Barraza vuelve
+     * esta candidata idéntica a la del esqueleto base —los dos valores en
+     * disputa son el mismo «16,00»— y el comprobante pasa de 0,85 a 0,70,
+     * perdiendo el precio unitario que el renglón había recuperado.
+     *
+     * Que empeore no lo vuelve correcto: lo que muestra es que la elección de
+     * lectura del renglón es sensible a cuántos sobrantes hay, y eso es lo que
+     * hay que arreglar antes. Queda anotado acá y no escondido en un cambio que
+     * degrada el resultado medido.
+     */
     if (!mejor || otra.costo < mejor.costo) mejor = otra;
   }
 

@@ -1,4 +1,7 @@
-import { CAMPOS_NUMERICOS } from '@/lib/ocr/motor/columnas';
+import type { Decimal } from '@/lib/money';
+import { llevaNumeros, type CampoDeColumna } from '@/lib/ocr/motor/columnas';
+import { leerPie } from '@/lib/ocr/motor/motor';
+import { textoDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
 import { alto, centroY, unir, type Caja, type EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import {
   mejorLectura,
@@ -7,6 +10,7 @@ import {
   type Observacion,
 } from '@/lib/ocr/reconstruccion/agrupar';
 import {
+  ALEJAMIENTO_MAXIMO,
   agruparPedazos,
   asignarMonotonicamente,
   segundaMejorAsignacion,
@@ -18,7 +22,10 @@ import {
   referenciaRobusta,
   type Esqueleto,
 } from '@/lib/ocr/reconstruccion/esqueleto';
+import { aplicarSemantica } from '@/lib/ocr/reconstruccion/columnas-espaciales';
+import type { ContenidoDeColumna } from '@/lib/ocr/motor/semantica-de-columnas';
 import {
+  armarCelda,
   reconstruirConContexto,
   type CeldaReconstruida,
   type LecturaDeCelda,
@@ -65,7 +72,22 @@ export interface CandidataDeReconstruccion {
 export function candidatasDeTabla(
   evidencia: EvidenciaDeLectura,
 ): CandidataDeReconstruccion[] {
-  const { tabla, contexto } = reconstruirConContexto(evidencia);
+  /*
+   * El pie se lee **antes** de delimitar las columnas, porque el neto impreso es
+   * una evidencia sobre qué es cada columna: la de montos cuya suma da ese neto
+   * es el importe del renglón, y eso lo dice el comprobante entero sin depender
+   * de ningún encabezado.
+   *
+   * Se leen los dos netos posibles —uno por convención decimal— y se ofrecen los
+   * dos. Cuál es el bueno lo decide después la interpretación completa; acá
+   * alcanza con que alguno coincida, que es lo que ya sería demasiada casualidad.
+   */
+  const completo = textoDeLaEvidencia(evidencia).completo;
+  const netosPosibles = (['ar', 'us'] as const)
+    .map((convencion) => leerPie(completo, convencion).netTotal)
+    .filter((neto): neto is Decimal => neto !== null && neto.gt(0));
+
+  const { tabla, contexto } = reconstruirConContexto(evidencia, { netosPosibles });
 
   const esqueletos = hipotesisDeEsqueleto(
     contexto.cuerpo,
@@ -77,7 +99,7 @@ export function candidatasDeTabla(
   const candidatas: CandidataDeReconstruccion[] = [
     {
       origen: 'cercanía',
-      tabla,
+      tabla: resemantizada(tabla, netosPosibles),
       filasEsperadas: consenso.esperadas,
       notas: [
         'Cada valor fue al renglón que tenía más cerca.',
@@ -102,7 +124,7 @@ export function candidatasDeTabla(
     if (!armada) continue;
     candidatas.push({
       origen: `esqueleto de ${esqueleto.origen}`,
-      tabla: armada.tabla,
+      tabla: resemantizada(armada.tabla, netosPosibles),
       filasEsperadas: consenso.esperadas,
       notas: [esqueleto.nota, ...armada.notas, ...consenso.discrepancias],
     });
@@ -119,7 +141,7 @@ export function candidatasDeTabla(
       const nombre = contexto.columnas[columna]?.titulo ?? `columna ${columna + 1}`;
       candidatas.push({
         origen: `esqueleto de ${esqueleto.origen}, otro reparto de «${nombre}»`,
-        tabla: otra.tabla,
+        tabla: resemantizada(otra.tabla, netosPosibles),
         filasEsperadas: consenso.esperadas,
         notas: [esqueleto.nota, ...otra.notas, ...consenso.discrepancias],
       });
@@ -169,7 +191,48 @@ function armarConEsqueleto(
     if (observaciones.length === 0) return;
 
     const campo = columna.campo?.campo;
-    const esNumerica = campo !== undefined && CAMPOS_NUMERICOS.has(campo);
+    /*
+     * Vale el reparto global para toda columna **de números**, tenga o no
+     * semántica confirmada. Es lo que necesita Lácteos Barraza: sus dos importes
+     * se cruzan de renglón, y si hubiera que esperar a saber que esa columna se
+     * llama «Importe» para repartirlos bien, no se repartirían nunca.
+     */
+    const esNumerica = llevaNumeros(campo);
+
+    /*
+     * Una columna de texto **no** se reparte de a un valor por renglón.
+     *
+     * El reparto monótono existe porque una columna de números tiene un valor
+     * por fila: eso es lo que permite decir que el segundo importe no puede ir
+     * arriba del primero. Una descripción no cumple nada de eso —son cinco
+     * palabras de un mismo renglón— y aplicarle la misma regla deja una palabra
+     * por fila y las otras cuatro como sobrantes. Sobre la foto de Barraza, las
+     * dos descripciones quedaban en «CIL» y «PLAN», con «MUZZA», «BARRAZA» y el
+     * resto tirados afuera: la candidata del esqueleto reconstruía bien los
+     * números y perdía los nombres de los artículos, así que no ganaba nunca.
+     *
+     * Para el texto vale lo de siempre: cada palabra al renglón que tiene más
+     * cerca, y la celda se arma con todas las que le tocaron.
+     */
+    if (!esNumerica) {
+      const porFila: Observacion[][] = filas.map(() => []);
+      for (const observacion of observaciones) {
+        const fila = filaMasCercana(centroY(observacion.caja), filas);
+        const lejania = Math.abs(filas[fila].y - centroY(observacion.caja)) / (alturaTipica || 1);
+        if (lejania > ALEJAMIENTO_MAXIMO) {
+          sobrantes[fila].push({
+            texto: textoPreferido(observacion),
+            caja: observacion.caja,
+          });
+          continue;
+        }
+        porFila[fila].push(observacion);
+      }
+      porFila.forEach((grupo, fila) => {
+        if (grupo.length > 0) celdas[fila][indice] = armarCelda(indice, grupo);
+      });
+      return;
+    }
 
     /*
      * Los pedazos de un número se juntan **antes** de repartir.
@@ -204,7 +267,7 @@ function armarConEsqueleto(
     const segunda = segundaMejorAsignacion(valores, filas, alturaTipica, primera);
     const noEsConcluyente = segunda !== null && segunda.costo - primera.costo < MARGEN_DE_REPARTO;
 
-    if (noEsConcluyente && esNumerica) {
+    if (noEsConcluyente) {
       dudosas.push(indice);
       notas.push(
         `El reparto de «${columna.titulo ?? campo ?? indice}» no es concluyente: ` +
@@ -241,7 +304,35 @@ function armarConEsqueleto(
     sobrantes[fila].push({ texto: textoPreferido(observacion), caja: observacion.caja });
   }
 
-  const renglones: RenglonReconstruido[] = filas.map((fila, i) => {
+  /*
+   * Una altura del esqueleto no es todavía un artículo.
+   *
+   * El esqueleto dice **dónde** puede haber un renglón; si ahí hay uno lo dicen
+   * las celdas que quedaron colgadas. Sin este filtro, cada línea que el OCR vio
+   * —el domicilio del emisor, la leyenda del pie, una mancha— se convierte en un
+   * artículo con descripción y sin un solo número. Sobre una de las dos fotos de
+   * Los Calvos eso producía dieciocho «artículos» llamados «Federal», «Aires,» y
+   * «Monotributista», que es peor que no leer nada: una lista de basura larga
+   * parece una lectura y hay que revisarla entera para descubrir que no lo es.
+   *
+   * El criterio es el mismo que usa la reconstrucción por cercanía, y por la
+   * misma razón: dos celdas llenas y **un número en una columna de números**.
+   * Un dígito en cualquier lado no alcanza, porque «956X30X1» está adentro de la
+   * descripción de un artículo legítimo y no vuelve artículo a una línea.
+   */
+  const conDatos = filas
+    .map((fila, i) => ({ fila, i }))
+    .filter(({ i }) => esRenglonDeVerdad(celdas[i], columnas, contexto.hayColumnasNumericas));
+
+  const descartadas = filas.length - conDatos.length;
+  if (descartadas > 0) {
+    notas.push(
+      `${descartadas} de las ${filas.length} alturas del esqueleto no tienen datos de artículo ` +
+        'y no se tomaron como renglones.',
+    );
+  }
+
+  const renglones: RenglonReconstruido[] = conDatos.map(({ fila, i }) => {
     const delRenglon = celdas[i].filter((c): c is CeldaReconstruida => c !== null);
     const caja = delRenglon.length
       ? delRenglon.map((c) => c.procedencia!.caja).reduce(unir)
@@ -286,6 +377,53 @@ function armarConEsqueleto(
       ms: Date.now() - comienzo,
     },
   };
+}
+
+/**
+ * La misma tabla, con las columnas releídas sobre **sus propias celdas**.
+ *
+ * Cada candidata es una hipótesis completa e independiente, y eso incluye qué
+ * significa cada columna. Con las celdas repartidas de otra manera, la columna
+ * se ve distinta: sobre la foto de Lácteos Barraza los dos importes caen en la
+ * misma línea visual, así que en la tabla base la columna «Importe» es una sola
+ * celda que dice «234.997238,234.2346975» —ni monto ni nada— y en la del
+ * esqueleto son dos montos limpios. La segunda merece que se le crea al
+ * encabezado; la primera, no.
+ *
+ * Los límites no se tocan y la tabla original tampoco: sale una copia.
+ */
+function resemantizada(tabla: TablaReconstruida, netosPosibles: Decimal[]): TablaReconstruida {
+  if (tabla.columnas.length === 0) return tabla;
+
+  const contenidos: ContenidoDeColumna[] = tabla.columnas.map((columna, i) => ({
+    titulo: columna.titulo,
+    desde: columna.desde,
+    hasta: columna.hasta,
+    celdas: tabla.renglones.map((renglon) => renglon.celdas[i]?.texto ?? ''),
+  }));
+
+  const notas = [...tabla.notas];
+  return {
+    ...tabla,
+    columnas: aplicarSemantica(tabla.columnas, contenidos, netosPosibles, notas),
+    notas,
+  };
+}
+
+/** ¿Estas celdas son un artículo, o una línea suelta que cayó a esa altura? */
+function esRenglonDeVerdad(
+  celdas: (CeldaReconstruida | null)[],
+  columnas: { campo: { campo: CampoDeColumna } | null }[],
+  hayColumnasNumericas: boolean,
+): boolean {
+  const llenas = celdas.filter((c) => c !== null && (c.texto ?? '').trim() !== '');
+  if (llenas.length < 2) return false;
+
+  return celdas.some((celda, i) => {
+    if (celda === null || !/\d/.test(celda.texto ?? '')) return false;
+    if (!hayColumnasNumericas) return true;
+    return llevaNumeros(columnas[i]?.campo?.campo);
+  });
 }
 
 /** Cuánta ventaja tiene que sacar un reparto para creerle, en alturas de renglón. */

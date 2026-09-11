@@ -98,15 +98,22 @@ describe('la reconstrucción de la tabla', () => {
     expect(ganadora.cierre?.compatible).toBe(true);
   });
 
-  it('Mabelherdi: sólo dos decisiones reales, y el resto son anotaciones', () => {
+  it('Mabelherdi: unas pocas decisiones reales, y el resto son anotaciones', () => {
     /*
      * El criterio del hito: con los nueve artículos bien y la suma exacta
      * contra el neto, los fragmentos que el OCR descartó no pueden obligar a
-     * corregir la factura. Quedan las dos columnas que hay que configurar una
-     * vez para este formato.
+     * corregir la factura. Lo que queda son columnas que se configuran una vez
+     * para este formato, y todas son preguntas contestables.
+     *
+     * Eran dos y ahora son cinco, y eso **no** es un retroceso: son las
+     * columnas que antes desaparecían sin decir nada. «Sugerido», «Unit» y la
+     * columna de texto sin encabezado ahora se conservan y se preguntan en vez
+     * de evaporarse, y a cambio el comprobante recuperó los nueve precios
+     * unitarios y los nueve códigos de artículo que antes venían en blanco.
+     * El puntaje pasó de 0,63 a 0,93 por eso mismo.
      */
-    expect(MABELHERDI.resumen.bloqueosUnicos).toBe(2);
-    expect(MABELHERDI.resumen.desglose.columnasSinReconocer).toBe(2);
+    expect(MABELHERDI.resumen.bloqueosUnicos).toBe(5);
+    expect(MABELHERDI.resumen.desglose.columnasSinReconocer).toBe(5);
     expect(MABELHERDI.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
     expect(MABELHERDI.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
     expect(MABELHERDI.resumen.advertenciasNoBloqueantes).toBeGreaterThan(10);
@@ -114,6 +121,23 @@ describe('la reconstrucción de la tabla', () => {
     // El total y el desglose son la misma cosa contada de dos maneras.
     const suma = Object.values(MABELHERDI.resumen.desglose).reduce((a, b) => a + b, 0);
     expect(suma).toBe(MABELHERDI.resumen.bloqueosUnicos);
+  });
+
+  it('Mabelherdi: los precios unitarios y los códigos ya no vienen vacíos', () => {
+    /*
+     * Antes de conservar las columnas sin confirmar, «Unit» no coincidía con
+     * ningún sinónimo —le falta la P de «P.Unit»— y quedaba en nada: sus nueve
+     * valores se perdían y la factura se cargaba sin un solo precio unitario.
+     *
+     * Sigue sin resolverse por su nombre, y está bien que así sea: «Unit» solo
+     * es una conjetura. Lo que cambió es que ahora se conserva como monto sin
+     * confirmar y se ofrece a la aritmética, que la ubica. El dato entra y la
+     * pregunta queda.
+     */
+    const renglones = MABELHERDI.veredicto.ganadora!.renglones;
+    expect(renglones.filter((r) => r.precioUnitario !== null)).toHaveLength(9);
+    expect(renglones.filter((r) => r.codigo !== null)).toHaveLength(9);
+    expect(renglones[0].precioUnitario?.toString()).toBe('2066.12');
   });
 
   it('Errecalde: los códigos de artículo salen enteros', () => {
@@ -262,13 +286,87 @@ describe('qué le queda por resolver a una persona', () => {
     }
   });
 
-  it('Barraza todavía no llega, y no lo disimula', () => {
+  it('Barraza: los dos renglones se arman aunque «Descripción» sea ilegible', () => {
     /*
-     * La tabla de Barraza tiene dos renglones y el OCR los entrega por columnas.
-     * Hoy el motor general no los arma: lo que hace es rechazar, que es lo
-     * correcto mientras no pueda. La resuelve su analizador específico.
+     * Éste es el hito que el reconocimiento tolerante vino a resolver, y el
+     * cambio es de fondo: **antes se rechazaba**.
+     *
+     * La palabra «Descripción» del encabezado de esta foto sale como manchas,
+     * así que la columna de texto quedaba sin campo, los dos renglones se
+     * descartaban por «falta de descripción» y el comprobante mostraba cero
+     * artículos. Teniendo, al lado, los kilos, las piezas, los códigos y los dos
+     * importes perfectamente leídos.
+     *
+     * Ahora la columna se conserva como texto sin confirmar, los dos renglones
+     * se reconstruyen enteros y lo que queda es una pregunta de un segundo.
      */
-    expect(BARRAZA.veredicto.decision).toBe('rechazo');
+    expect(BARRAZA.veredicto.decision).toBe('revision-de-estructura');
+
+    const renglones = BARRAZA.veredicto.ganadora!.renglones;
+    expect(renglones).toHaveLength(2);
+
+    // Los dos códigos, incluido el «30» del segundo renglón, que está impreso
+    // en la tabla y no es el 30 del CUIT del emisor.
+    expect(renglones.map((r) => r.codigo)).toEqual(['03', '30']);
+    expect(renglones.map((r) => r.cantidad?.toString())).toEqual(['27', '30']);
+    expect(renglones.map((r) => r.piezas)).toEqual([9, 3]);
+
+    // Dos descripciones distintas, cada una con el nombre de su artículo.
+    expect(renglones[0].descripcion).toContain('RAZA');
+    expect(renglones[1].descripcion).toContain('MUZZA');
+    expect(renglones[0].descripcion).not.toBe(renglones[1].descripcion);
+
+    // Y los dos importes tal como están impresos.
+    expect(renglones.map((r) => r.importe?.toString())).toEqual(['234997.69', '238234.75']);
+  });
+
+  it('Barraza: la suma de los dos renglones da exactamente el neto impreso', () => {
+    /*
+     * 234.997,69 + 238.234,75 = 473.232,44, que es el neto del pie al centavo.
+     * Es el control más fuerte que hay sobre esta lectura y no depende de
+     * ningún encabezado: si los importes estuvieran cruzados de renglón o mal
+     * leídos, no daría.
+     */
+    const ganadora = BARRAZA.veredicto.ganadora!;
+    expect(ganadora.sumaDeRenglones.toFixed(2)).toBe('473232.44');
+    expect(BARRAZA.pie.netTotal?.toFixed(2)).toBe('473232.44');
+    expect(ganadora.cierre?.compatible).toBe(true);
+    expect(BARRAZA.pie.ivaTotal?.toFixed(2)).toBe('99378.81');
+    expect(BARRAZA.pie.percepciones?.toFixed(2)).toBe('7098.49');
+    expect(BARRAZA.pie.total?.toFixed(2)).toBe('579709.74');
+  });
+
+  it('Barraza: el primer renglón se comprueba contra su propia aritmética', () => {
+    /*
+     * 27 × 10.361,45 × 0,84 = 234.997,69. El precio viene de una columna cuyo
+     * encabezado el OCR leyó «Lado» —no se parece a ningún sinónimo— así que
+     * quedó como monto sin confirmar y se ofreció como precio posible. Que la
+     * cuenta dé exacta es mejor evidencia de lo que esa columna significa que
+     * cualquier cosa que se pueda decir de su encabezado.
+     */
+    const primero = BARRAZA.veredicto.ganadora!.renglones[0];
+    expect(primero.precioUnitario?.toString()).toBe('10361.45');
+    expect(primero.descuentoPct?.toString()).toBe('0.16');
+    expect(primero.controles.filter((c) => c.paso).length).toBeGreaterThan(0);
+  });
+
+  it('Barraza: lo que falta se pide como confirmación, no como recarga', () => {
+    /*
+     * La diferencia que importa para quien carga la factura. Los bloqueos son
+     * columnas —se contestan una vez— y ninguno es una celda obligatoria
+     * faltante ni una ambigüedad sin resolver, que serían volver a tipear.
+     */
+    expect(BARRAZA.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
+    expect(BARRAZA.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
+    expect(BARRAZA.resumen.desglose.columnasSinReconocer).toBe(
+      BARRAZA.resumen.bloqueosUnicos,
+    );
+
+    // Y la pregunta por la columna de texto está redactada como corresponde.
+    const textual = BARRAZA.pendientes.find((p) =>
+      p.motivo.startsWith('Confirmar que la columna textual corresponde a Descripción'),
+    );
+    expect(textual?.categoria).toBe('BLOCKING_UNKNOWN_COLUMN');
   });
 
   it('las dos fotos de Los Calvos se siguen rechazando por calidad', () => {

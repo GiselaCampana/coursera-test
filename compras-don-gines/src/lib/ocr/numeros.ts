@@ -33,6 +33,39 @@ export function variantesDeNumero(texto: string): Decimal[] {
 
   agregar(parseArNumber(limpio));
 
+  /*
+   * Cuando los separadores no pueden ser los que el OCR escribió, los dígitos
+   * siguen siendo los que están impresos.
+   *
+   * «234.99769» no es un número en ninguna de las dos convenciones: con la coma
+   * decimal argentina el punto es de miles y tiene que venir seguido de tres
+   * cifras, y acá vienen cinco; con la norteamericana el punto es decimal y no
+   * hay importes de cinco decimales. Lo que pasó es que el OCR leyó de más o
+   * corrió el separador de «234.997,69». Los ocho dígitos, en cambio, están
+   * todos y en orden.
+   *
+   * Así que se ofrece la lectura en la que **ningún** separador es decimal, y
+   * con ella la de dos decimales que ya existía para los enteros largos. Sobre
+   * la factura de Lácteos Barraza es la diferencia entre tener el importe del
+   * primer renglón y no tenerlo: con 234.997,69 y 238.234,75 la suma da
+   * 473.232,44, que es exactamente el neto impreso.
+   *
+   * Sólo se hace cuando la escritura es imposible. Un «27.00» bien formado no
+   * se convierte en 2700, porque ahí no hay nada que explicar.
+   */
+  const bienFormado =
+    /^\d+$/.test(limpio) ||
+    /^\d+[.,]\d{1,3}$/.test(limpio) ||
+    /^\d{1,3}([.,]\d{3})+([.,]\d{1,3})?$/.test(limpio);
+
+  if (!bienFormado) {
+    const soloDigitos = limpio.replace(/[.,]/g, '');
+    if (/^\d+$/.test(soloDigitos)) {
+      agregar(new Decimal(soloDigitos));
+      if (soloDigitos.length >= 6) agregar(new Decimal(soloDigitos).div(100));
+    }
+  }
+
   const separadores = [...limpio.matchAll(/[.,]/g)].map((m) => m.index!);
   if (separadores.length >= 2) {
     // El último separador es la coma decimal y los otros son de miles.

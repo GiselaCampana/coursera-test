@@ -1,4 +1,5 @@
-import { CAMPOS_NUMERICOS, esFilaDeEncabezados } from '@/lib/ocr/motor/columnas';
+import type { Decimal } from '@/lib/money';
+import { esFilaDeEncabezados, llevaNumeros } from '@/lib/ocr/motor/columnas';
 import {
   alto,
   centroY,
@@ -113,6 +114,15 @@ export interface OpcionesDeReconstruccion {
   /** Sólo se reconstruye lo que esté entre estas alturas de la página. */
   desdeY?: number;
   hastaY?: number;
+  /**
+   * Los netos que se leyeron en el pie, con cualquiera de las dos convenciones.
+   *
+   * Es una evidencia más para saber qué es cada columna: la columna de montos
+   * cuya suma da el neto impreso es el importe del renglón, y eso lo dice el
+   * comprobante entero sin depender de ningún encabezado. Es opcional porque la
+   * reconstrucción tiene que funcionar igual sin el pie.
+   */
+  netosPosibles?: Decimal[];
 }
 
 /**
@@ -198,13 +208,11 @@ export function reconstruirConContexto(
   );
 
   // --- Columnas ------------------------------------------------------------
-  const limites = detectarColumnas(cuerpo, titulos, alturaTipica);
+  const limites = detectarColumnas(cuerpo, titulos, alturaTipica, opciones.netosPosibles ?? []);
   notas.push(...limites.notas);
 
   // --- Celdas --------------------------------------------------------------
-  const hayColumnasNumericas = limites.columnas.some(
-    (c) => c.campo && CAMPOS_NUMERICOS.has(c.campo.campo),
-  );
+  const hayColumnasNumericas = limites.columnas.some((c) => llevaNumeros(c.campo?.campo));
   const renglones: RenglonReconstruido[] = [];
   let valoresDeOtraPasada = 0;
 
@@ -253,11 +261,14 @@ export function reconstruirConContexto(
       if (celda === null || !/\d/.test(celda.texto ?? '')) return false;
       // Cuando ninguna columna se reconoció no hay dónde mirar, así que sirve
       // un número en cualquier celda. Con columnas reconocidas, en cambio, se
-      // exige que el número esté en una que entre en las cuentas: «956X30X1»
-      // está en la descripción de un artículo y no vuelve renglón a una línea.
+      // exige que el número esté en una **columna de números**: «956X30X1» está
+      // en la descripción de un artículo y no vuelve renglón a una línea.
+      //
+      // Que la columna todavía no tenga semántica confirmada no importa acá: la
+      // pregunta es si ahí van números, no cuáles. Una columna de montos sin
+      // encabezado legible sigue siendo la prueba de que la línea es un artículo.
       if (!hayColumnasNumericas) return true;
-      const campo = limites.columnas[i]?.campo?.campo;
-      return campo !== undefined && CAMPOS_NUMERICOS.has(campo);
+      return llevaNumeros(limites.columnas[i]?.campo?.campo);
     });
     if (!tieneAlgunNumero) continue;
 
@@ -314,7 +325,7 @@ export function reconstruirConContexto(
  * y la cuenta es lo único que puede distinguir un importe real de uno que el
  * OCR partió al medio.
  */
-function armarCelda(columna: number, competidoras: Observacion[]): CeldaReconstruida {
+export function armarCelda(columna: number, competidoras: Observacion[]): CeldaReconstruida {
   if (competidoras.length === 1) {
     const observacion = competidoras[0];
     const alternativas = lecturasAlternativas(observacion);
