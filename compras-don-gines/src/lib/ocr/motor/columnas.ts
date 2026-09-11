@@ -48,7 +48,32 @@ export type CampoDeColumna =
   /** La tasa de IVA por renglón, cuando el formato la imprime. */
   | 'ivaPct'
   /** Una columna que se reconoce y se descarta a propósito. */
-  | 'ignorada';
+  | 'ignorada'
+  /*
+   * Y los cuatro marcadores de «hay una columna acá y todavía no sé qué es».
+   *
+   * Existen porque la alternativa era peor. Hasta ahora una columna que no se
+   * reconocía quedaba en `null`, y `null` no es «no sé»: es **no está**. Sus
+   * celdas dejaban de existir, y con ellas el renglón entero: sobre la foto de
+   * Lácteos Barraza el encabezado «Descripción» sale ilegible, así que la
+   * columna de texto quedaba en null, y el filtro de «un renglón necesita
+   * descripción» tiraba los dos artículos. El resultado era cero artículos y una
+   * persona reescribiendo la factura a mano, teniendo los kilos, las piezas, los
+   * precios, el descuento y los importes perfectamente leídos al lado.
+   *
+   * Conservar la columna con un marcador cambia el pedido de «volvé a cargar
+   * todo» a «confirmá que esta columna es la descripción», que es una pregunta
+   * de un segundo. El tipo del marcador dice qué hay debajo, que es lo que se
+   * pudo determinar sin el encabezado.
+   */
+  /** Texto sin semántica confirmada: casi siempre la descripción. */
+  | 'UNKNOWN_TEXT'
+  /** Números que no son ni montos ni porcentajes: cantidades, piezas, códigos. */
+  | 'UNKNOWN_NUMERIC'
+  /** Montos: entran en las cuentas y no se puede adivinar cuál es cuál. */
+  | 'UNKNOWN_MONEY'
+  /** Porcentajes: descuento, IVA, o una alícuota que no se sabe de qué. */
+  | 'UNKNOWN_PERCENT';
 
 /** ¿El campo lleva un número o un texto? */
 export const CAMPOS_NUMERICOS: ReadonlySet<CampoDeColumna> = new Set([
@@ -61,6 +86,43 @@ export const CAMPOS_NUMERICOS: ReadonlySet<CampoDeColumna> = new Set([
   'importe',
   'ivaPct',
 ]);
+
+/**
+ * Las columnas todavía sin semántica confirmada.
+ *
+ * Se preguntan aparte de los campos de verdad **en todos lados**: un marcador
+ * nunca entra en una igualdad aritmética, porque no se sabe qué multiplica a
+ * qué. Lo único que se sabe de él es dónde está y qué forma tiene lo que hay
+ * debajo.
+ */
+export const CAMPOS_SIN_CONFIRMAR: ReadonlySet<CampoDeColumna> = new Set([
+  'UNKNOWN_TEXT',
+  'UNKNOWN_NUMERIC',
+  'UNKNOWN_MONEY',
+  'UNKNOWN_PERCENT',
+]);
+
+export function esSinConfirmar(campo: CampoDeColumna | undefined | null): boolean {
+  return campo !== undefined && campo !== null && CAMPOS_SIN_CONFIRMAR.has(campo);
+}
+
+/**
+ * ¿La columna lleva números, aunque todavía no se sepa de qué?
+ *
+ * Es la pregunta **geométrica**, y es distinta de `CAMPOS_NUMERICOS`, que es la
+ * pregunta aritmética. Para repartir una columna entre los renglones o para
+ * decidir si una línea es un artículo alcanza con saber que ahí van números;
+ * para multiplicar hace falta saber cuáles.
+ */
+export function llevaNumeros(campo: CampoDeColumna | undefined | null): boolean {
+  if (campo === undefined || campo === null) return false;
+  return (
+    CAMPOS_NUMERICOS.has(campo) ||
+    campo === 'UNKNOWN_NUMERIC' ||
+    campo === 'UNKNOWN_MONEY' ||
+    campo === 'UNKNOWN_PERCENT'
+  );
+}
 
 /**
  * Cómo escribe cada proveedor el encabezado de cada columna.
@@ -134,12 +196,50 @@ export function normalizarEncabezado(texto: string): string {
     .trim();
 }
 
+/**
+ * Cómo se supo qué es una columna.
+ *
+ * Se guarda junto con el campo porque **no vale lo mismo**. Un encabezado que
+ * dice «Importe» y una columna de montos que resultó ser la única que hace
+ * cerrar las cuentas llevan al mismo campo por caminos que merecen distinta
+ * confianza, y la diferencia tiene que sobrevivir hasta la pantalla: lo primero
+ * se usa y listo, lo segundo se muestra y se pregunta.
+ */
+export type OrigenDeAsignacion =
+  /** El encabezado impreso coincide con un sinónimo conocido. */
+  | 'EXACT_HEADER'
+  /** El encabezado está degradado pero se parece a uno conocido, y algo más lo apoya. */
+  | 'FUZZY_HEADER'
+  /** No hay encabezado utilizable: lo dice la forma de lo que hay debajo y dónde está. */
+  | 'INFERRED_FROM_CONTENT'
+  /** No hay encabezado utilizable: lo dicen las igualdades que la columna hace cerrar. */
+  | 'INFERRED_FROM_ARITHMETIC'
+  /** Lo confirmó la administradora para este formato. */
+  | 'USER_PROFILE'
+  /** No se pudo decidir: la evidencia se contradice o admite dos lecturas. */
+  | 'UNRESOLVED';
+
 export interface ColumnaReconocida {
   campo: CampoDeColumna;
   /** El encabezado tal como estaba impreso. */
   encabezado: string;
   /** Cuán seguro es el reconocimiento, de 0 a 1. */
   confianza: number;
+  /** Por qué camino se llegó a este campo. */
+  origen: OrigenDeAsignacion;
+  /**
+   * ¿Hay que preguntarle a una persona antes de darlo por bueno?
+   *
+   * Una columna inferida **no se convierte en verdad permanente**. Se usa para
+   * reconstruir los renglones —que es lo caro y lo que nadie puede rehacer a
+   * mano— y queda con un pedido puntual de confirmación. Recién el perfil
+   * confirmado por la administradora, cuando exista, la vuelve definitiva.
+   */
+  requiereConfirmacion?: boolean;
+  /** Ventaja sobre el segundo campo posible, de 0 a 1. */
+  margen?: number;
+  /** Qué sostuvo la decisión, para poder explicarla. */
+  porQue?: string[];
 }
 
 /**
@@ -164,8 +264,34 @@ export function reconocerColumna(encabezado: string): ColumnaReconocida | null {
     campo: mejor.campo,
     encabezado: encabezado.trim(),
     confianza: mejor.especificidad,
+    origen: 'EXACT_HEADER',
   };
 }
+
+/**
+ * Cómo se escribe cada campo cuando está bien impreso.
+ *
+ * Es la misma información que los alias, en la forma que hace falta para
+ * comparar **parecidos** en vez de coincidencias: una expresión regular contesta
+ * sí o no, y un encabezado degradado necesita un «cuánto». Sobre la factura de
+ * Errecalde el OCR lee «UBTOTA» donde dice SUBTOTAL; ninguna expresión regular
+ * lo va a aceptar, y una distancia de edición sí.
+ *
+ * Las palabras salen de los mismos alias de arriba, no de inventar sinónimos.
+ */
+export const PALABRAS_DE_CAMPO: ReadonlyMap<CampoDeColumna, readonly string[]> = new Map([
+  ['codigo', ['codigo', 'cod', 'articulo', 'art', 'sku', 'referencia']],
+  ['descripcion', ['descripcion', 'descrip', 'detalle', 'articulo', 'producto', 'concepto']],
+  ['marca', ['marca']],
+  ['cantidad', ['cantidad', 'cant', 'ctd']],
+  ['kilos', ['kilos', 'kilo', 'kgs', 'peso']],
+  ['piezas', ['piezas', 'unidades', 'unid', 'bultos', 'cajas']],
+  ['precioUnitario', ['precio', 'preciounitario', 'prunit', 'punit', 'preciolista']],
+  ['precioConDescuento', ['preciocondescuento', 'pudesc', 'precioneto', 'prunitdesc']],
+  ['descuentoPct', ['descuento', 'bonificacion', 'bonif', 'dto', 'dcto']],
+  ['importe', ['importe', 'subtotal', 'monto', 'totallinea']],
+  ['ivaPct', ['iva', 'alicuota']],
+] as [CampoDeColumna, readonly string[]][]);
 
 /**
  * Reconoce toda una fila de encabezados.
@@ -232,7 +358,17 @@ export function faltanCamposEsenciales(
   const presentes = new Set(columnas.filter((c) => c).map((c) => c!.campo));
   const faltan: CampoDeColumna[] = [];
 
-  if (!presentes.has('descripcion')) faltan.push('descripcion');
+  /*
+   * Una columna de texto sin confirmar **cuenta como descripción** a estos
+   * efectos, y por eso este control no la reclama.
+   *
+   * Que no se sepa si esa columna se llama «Descripción» o «Detalle» no cambia
+   * que haya un texto por renglón con el que identificar el artículo. Reclamarla
+   * acá terminaría en «faltan campos esenciales» y en cero renglones, que es
+   * exactamente lo contrario de lo que hace falta: los renglones están, lo que
+   * falta es una confirmación de una palabra.
+   */
+  if (!presentes.has('descripcion') && !presentes.has('UNKNOWN_TEXT')) faltan.push('descripcion');
   if (!presentes.has('cantidad') && !presentes.has('kilos') && !presentes.has('piezas')) {
     faltan.push('cantidad');
   }

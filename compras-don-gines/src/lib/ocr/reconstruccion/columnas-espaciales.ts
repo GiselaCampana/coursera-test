@@ -1,4 +1,11 @@
+import type { Decimal } from '@/lib/money';
 import { reconocerColumnas, type ColumnaReconocida } from '@/lib/ocr/motor/columnas';
+import {
+  aColumnaReconocida,
+  asignarSemantica,
+  type AsignacionDeColumna,
+  type ContenidoDeColumna,
+} from '@/lib/ocr/motor/semantica-de-columnas';
 import { ancho, centroX, type Caja } from '@/lib/ocr/reconstruccion/evidencia';
 import {
   textoPreferido,
@@ -41,6 +48,8 @@ export interface ColumnaEspacial {
   campo: ColumnaReconocida | null;
   /** En cuántos renglones aparece un valor de esta columna. */
   apoyos: number;
+  /** Toda la evidencia que se juntó sobre qué es esta columna. */
+  semantica?: AsignacionDeColumna;
 }
 
 export interface LimitesDetectados {
@@ -162,6 +171,8 @@ export function detectarColumnas(
   renglones: RenglonVisual[],
   titulos: RenglonVisual | null,
   alturaTipica: number,
+  /** Los netos leídos en el pie, si se conocen: son una evidencia más. */
+  netosPosibles: Decimal[] = [],
 ): LimitesDetectados {
   const notas: string[] = [];
   const franjas = franjasDeDatos(renglones, alturaTipica);
@@ -191,13 +202,18 @@ export function detectarColumnas(
         'se usan los límites de la fila de títulos.',
     );
     return {
-      columnas: celdasDeTitulo.map((celda, i) => ({
-        desde: celda.caja.x0,
-        hasta: celda.caja.x1,
-        titulo: textosDeTitulo[i] ?? null,
-        campo: camposDeTitulo[i] ?? null,
-        apoyos: 0,
-      })),
+      columnas: conSemantica(
+        celdasDeTitulo.map((celda, i) => ({
+          desde: celda.caja.x0,
+          hasta: celda.caja.x1,
+          titulo: textosDeTitulo[i] ?? null,
+          campo: camposDeTitulo[i] ?? null,
+          apoyos: 0,
+        })),
+        renglones,
+        netosPosibles,
+        notas,
+      ),
       metodo: 'fila-de-titulos',
       notas,
     };
@@ -300,10 +316,114 @@ export function detectarColumnas(
   }
 
   return {
-    columnas,
+    columnas: conSemantica(columnas, renglones, netosPosibles, notas),
     metodo: titulos ? 'datos-con-titulos' : 'columnas-de-datos',
     notas,
   };
+}
+
+/**
+ * Le pregunta a la evidencia qué es cada columna, y no sólo al encabezado.
+ *
+ * Hasta acá los límites de las columnas salían de los datos y **el significado
+ * salía sólo del título**, que es la mitad frágil: una palabra borroneada en una
+ * sola línea de la foto decidía si veinte renglones existían o no. Acá entra el
+ * resto de la evidencia —la forma de lo que hay debajo, la posición, las
+ * vecinas, las cuentas que cierran— y, sobre todo, **ninguna columna se pierde**:
+ * la que no se resuelve queda con un marcador que dice qué lleva.
+ *
+ * Los límites no se tocan. Esto decide qué significa cada franja, no dónde está.
+ */
+function conSemantica(
+  columnas: ColumnaEspacial[],
+  renglones: RenglonVisual[],
+  netosPosibles: Decimal[],
+  notas: string[],
+): ColumnaEspacial[] {
+  if (columnas.length === 0) return columnas;
+
+  const contenidos: ContenidoDeColumna[] = columnas.map((columna) => ({
+    titulo: columna.titulo,
+    desde: columna.desde,
+    hasta: columna.hasta,
+    celdas: [],
+  }));
+
+  for (const renglon of renglones) {
+    const delRenglon: string[][] = columnas.map(() => []);
+    for (const observacion of renglon.observaciones) {
+      const indice = columnaDe(observacion, columnas);
+      if (indice === null) continue;
+      delRenglon[indice].push(textoPreferido(observacion));
+    }
+    /*
+     * Los pedazos de un número se pegan sin espacio, igual que al armar la celda.
+     *
+     * No es un detalle de formato: es lo que decide si la columna se ve como
+     * montos o como basura. El OCR parte «234.997,69» en «234.997» y «69», y
+     * unirlos con un espacio da «234.997 69», que no tiene forma de nada. Sobre
+     * la foto de Barraza eso dejaba la columna de importes sin una sola
+     * evidencia de contenido, y con el encabezado como única señal la columna no
+     * llegaba a las dos familias que hacen falta para aceptarla.
+     */
+    delRenglon.forEach((partes, i) => {
+      const todosNumericos =
+        partes.length > 0 && partes.every((t) => /^[\d.,%$-]+$/.test(t));
+      contenidos[i].celdas.push(partes.join(todosNumericos ? '' : ' ').trim());
+    });
+  }
+
+  return aplicarSemantica(columnas, contenidos, netosPosibles, notas);
+}
+
+/**
+ * Vuelve a preguntarle a la evidencia qué es cada columna, con celdas ya armadas.
+ *
+ * Se llama dos veces sobre el mismo comprobante, y las dos hacen falta:
+ *
+ *  - la primera, sobre las **líneas visuales**, para saber qué columnas llevan
+ *    números y con eso decidir qué líneas son artículos;
+ *  - la segunda, sobre los **renglones ya reconstruidos** de cada candidata,
+ *    para decidir qué significa cada columna con las celdas en su lugar.
+ *
+ * No es una vuelta en círculo: la primera pasada responde una pregunta más
+ * gruesa —«¿acá van números?»— y la segunda, la fina. Y la segunda cambia el
+ * resultado de verdad. Sobre la foto de Lácteos Barraza los dos importes caen en
+ * la misma línea visual, así que en la primera pasada la columna «Importe» se ve
+ * como una sola celda que dice «234.997238,234.2346975»: ni monto ni nada. Con
+ * el esqueleto que los separa en dos renglones, la misma columna se ve como dos
+ * montos, y ahí sí el encabezado tiene con qué confirmarse.
+ *
+ * Cada candidata se resemantiza sobre sus propias celdas y ninguna toca a las
+ * otras: si el esqueleto acertó, su lectura de las columnas también, y gana con
+ * las cuentas.
+ */
+export function aplicarSemantica(
+  columnas: ColumnaEspacial[],
+  contenidos: ContenidoDeColumna[],
+  netosPosibles: Decimal[],
+  notas: string[],
+): ColumnaEspacial[] {
+  const asignaciones = asignarSemantica(contenidos, { netosPosibles });
+
+  return columnas.map((columna, i) => {
+    const asignacion = asignaciones[i];
+    const campo = aColumnaReconocida(columna.titulo, asignacion);
+
+    if (campo && asignacion.requiereConfirmacion) {
+      notas.push(
+        `La columna ${columna.desde.toFixed(3)}–${columna.hasta.toFixed(3)} ` +
+          `quedó como ${campo.campo} por ${asignacion.origen}: hay que confirmarla.`,
+      );
+    }
+
+    return {
+      ...columna,
+      campo,
+      apoyos: Math.max(columna.apoyos, contenidos[i].celdas.filter((c) => c !== '').length),
+      semantica: asignacion,
+    };
+  });
 }
 
 /**
