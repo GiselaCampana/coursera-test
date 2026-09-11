@@ -183,20 +183,34 @@ export function armarRenglones(
 ): RenglonVisual[] {
   const ordenadas = [...observaciones].sort((a, b) => centroY(a.caja) - centroY(b.caja));
   const renglones: RenglonVisual[] = [];
+  /*
+   * La referencia de cada renglón es el **promedio de los centros** de lo que
+   * ya entró, no el centro de la caja que los contiene a todos.
+   *
+   * Es una diferencia que parece de detalle y no lo es. La caja que contiene
+   * crece con cada celda, y con ella se mueve su centro: sobre la foto de Ezra,
+   * un renglón con ocho celdas terminaba con el centro medio renglón más abajo
+   * del que tenía al empezar, alcanzaba la fila siguiente y se la comía. Los
+   * seis artículos salían fundidos de a dos, con los textos concatenados y los
+   * importes multiplicados por mil millones.
+   *
+   * El promedio, en cambio, no se corre: cada celda nueva lo mueve menos que la
+   * anterior, porque son todas del mismo renglón y están a la misma altura.
+   */
+  const centros: number[][] = [];
 
   for (const observacion of ordenadas) {
-    const abierto = renglones[renglones.length - 1];
-    if (abierto && comparteAltura(abierto.caja, observacion.caja, alturaTipica)) {
-      abierto.observaciones.push(observacion);
-      abierto.caja = unir(abierto.caja, observacion.caja);
-      abierto.y = centroY(abierto.caja);
+    const y = centroY(observacion.caja);
+    const ultimo = renglones.length - 1;
+    if (ultimo >= 0 && comparteAltura(renglones[ultimo].y, observacion.caja, alturaTipica)) {
+      renglones[ultimo].observaciones.push(observacion);
+      renglones[ultimo].caja = unir(renglones[ultimo].caja, observacion.caja);
+      centros[ultimo].push(y);
+      renglones[ultimo].y = centros[ultimo].reduce((a, b) => a + b, 0) / centros[ultimo].length;
       continue;
     }
-    renglones.push({
-      observaciones: [observacion],
-      caja: observacion.caja,
-      y: centroY(observacion.caja),
-    });
+    renglones.push({ observaciones: [observacion], caja: observacion.caja, y });
+    centros.push([y]);
   }
 
   for (const renglon of renglones) {
@@ -206,21 +220,13 @@ export function armarRenglones(
 }
 
 /**
- * ¿Están a la misma altura?
+ * ¿Está la observación a la altura del renglón que se viene armando?
  *
- * Dos condiciones, y las dos hacen falta:
- *
- *  - que las cajas se **solapen** en vertical más de un tercio de la más baja.
- *    Es lo que junta el código con la descripción de su propio renglón;
- *  - que los **centros** no estén más lejos que medio renglón. Es lo que impide
- *    que una caja alta —un título, un número con paréntesis que Tesseract
- *    estiró— se trague el renglón de abajo sólo porque lo toca.
- *
- * Con la primera sola, dos filas cercanas se mezclan; con la segunda sola, un
- * código chiquito no entra en su propio renglón.
+ * Se compara contra la altura de referencia del renglón —el promedio de los
+ * centros de sus celdas— y no contra su caja, por lo dicho arriba.
  */
-function comparteAltura(renglon: Caja, observacion: Caja, alturaTipica: number): boolean {
-  return Math.abs(centroY(renglon) - centroY(observacion)) <= alturaTipica * 1.2;
+function comparteAltura(yDelRenglon: number, observacion: Caja, alturaTipica: number): boolean {
+  return Math.abs(yDelRenglon - centroY(observacion)) <= alturaTipica * 0.6;
 }
 
 /**

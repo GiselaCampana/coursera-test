@@ -314,7 +314,7 @@ export function esRuido(texto: string): boolean {
  * tabla.
  */
 const EMPIEZA_EL_PIE =
-  /^(sub\s?-?\s?total|total\b|neto\b|i\.?\s?v\.?\s?a\.?\b|percep|perc\b|descuentos?\b|saldo|son\s+pesos|pesos\s*:|comentario|transporte)/i;
+  /^(sub\s?-?\s?total|total\b|neto\b|i\.?\s?v\.?\s?a\.?\b|percep|perc\b|descuentos?\b|saldo|son\s+pesos|pesos\b|comentario|transporte)/i;
 
 function cortarEnElPie(renglones: RenglonVisual[], notas: string[]): RenglonVisual[] {
   for (let i = 0; i < renglones.length; i++) {

@@ -146,6 +146,18 @@ export function franjasDeDatos(
  *  - **dos títulos sobre una franja**: los datos de esas dos columnas se tocan.
  *    Se parte la franja por el medio entre los dos títulos.
  */
+/**
+ * ¿Tiene forma de encabezado de columna?
+ *
+ * Tres letras o más. Con menos no hay nada que preguntar: ni una persona que
+ * mira la factura puede decir qué significa «e», y ofrecérselo es hacerle
+ * perder el tiempo con algo que no tiene respuesta.
+ */
+export function esTituloPlausible(texto: string): boolean {
+  const letras = texto.replace(/[^\p{L}]/gu, '');
+  return letras.length >= 3;
+}
+
 export function detectarColumnas(
   renglones: RenglonVisual[],
   titulos: RenglonVisual | null,
@@ -154,7 +166,22 @@ export function detectarColumnas(
   const notas: string[] = [];
   const franjas = franjasDeDatos(renglones, alturaTipica);
 
-  const celdasDeTitulo = titulos ? titulos.observaciones : [];
+  /*
+   * Un jirón del encabezado no es un título.
+   *
+   * Sobre la foto de Mabelherdi el OCR parte «Codigo Art.» y «Pr Unit» y deja
+   * además sueltos una «y», una «e», «UU» y «RM». Tomarlos por títulos hace que
+   * el comprobante pida configurar ocho columnas, y nadie puede contestar qué
+   * significa la columna «e». Lo que corresponde con eso es tratarlas como
+   * columnas **sin título**: se sigue viendo que hay datos ahí, pero no se le
+   * pide a una persona que resuelva algo que no se puede resolver.
+   *
+   * «Desc» sí pasa el filtro, y tiene que pasarlo: es el caso real de columna
+   * ambigua que hay que configurar una vez.
+   */
+  const celdasDeTitulo = (titulos ? titulos.observaciones : []).filter((o) =>
+    esTituloPlausible(textoPreferido(o)),
+  );
   const textosDeTitulo = celdasDeTitulo.map((o) => textoPreferido(o));
   const camposDeTitulo = textosDeTitulo.length ? reconocerColumnas(textosDeTitulo) : [];
 
