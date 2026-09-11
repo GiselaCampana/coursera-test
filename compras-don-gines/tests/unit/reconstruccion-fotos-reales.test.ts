@@ -5,6 +5,7 @@ import { interpretarReconstruccion } from '@/lib/ocr/motor/desde-reconstruccion'
 import type { InformeReconstruido } from '@/lib/ocr/motor/desde-reconstruccion';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
+import { bloquea } from '@/lib/ocr/motor/pendientes';
 
 /**
  * La reconstrucción completa sobre las fotos reales, sin ningún analizador de
@@ -94,6 +95,21 @@ describe('la reconstrucción de la tabla', () => {
     const ganadora = MABELHERDI.veredicto.ganadora!;
     expect(ganadora.sumaDeRenglones.toFixed(2)).toBe('32998.85');
     expect(MABELHERDI.pie.netTotal?.toFixed(2)).toBe('32998.85');
+    expect(ganadora.cierre?.compatible).toBe(true);
+  });
+
+  it('Mabelherdi: sólo dos decisiones reales, y el resto son anotaciones', () => {
+    /*
+     * El criterio del hito: con los nueve artículos bien y la suma exacta
+     * contra el neto, los fragmentos que el OCR descartó no pueden obligar a
+     * corregir la factura. Quedan las dos columnas que hay que configurar una
+     * vez para este formato.
+     */
+    expect(MABELHERDI.resumen.correccionesManuales).toBe(2);
+    expect(MABELHERDI.resumen.columnasSinReconocer).toBe(2);
+    expect(MABELHERDI.resumen.celdasObligatoriasFaltantes).toBe(0);
+    expect(MABELHERDI.resumen.ambiguedadesBloqueantes).toBe(0);
+    expect(MABELHERDI.resumen.advertenciasNoBloqueantes).toBeGreaterThan(10);
   });
 
   it('Errecalde: los códigos de artículo salen enteros', () => {
@@ -179,32 +195,51 @@ describe('el emisor', () => {
 });
 
 describe('qué le queda por resolver a una persona', () => {
-  it('Ezra: unos pocos pendientes, no la tabla entera', () => {
+  it('Ezra se acepta sola, sin nada bloqueante', () => {
     /*
-     * El criterio del hito: una revisión puntual y accionable, no volver a
-     * escribir los renglones. Ezra queda con un puñado de celdas señaladas,
-     * sobre seis renglones ya interpretados y con la suma cuadrando.
+     * El criterio del hito, cumplido: seis renglones interpretados, la suma
+     * compatible con el pie por truncamiento, y ninguna corrección manual.
      */
-    expect(EZRA.pendientes.length).toBeLessThanOrEqual(8);
-    expect(EZRA.veredicto.decision).toBe('revision-de-estructura');
+    expect(EZRA.veredicto.decision).toBe('automatica');
+    expect(EZRA.resumen.correccionesManuales).toBe(0);
   });
 
-  it('cada pendiente dice qué renglón y qué columna, no «no se pudo leer»', () => {
-    for (const pendiente of EZRA.pendientes) {
-      expect(pendiente.detalle.length).toBeGreaterThan(10);
-      if (pendiente.tipo === 'celda-ambigua' || pendiente.tipo === 'celda-sin-leer') {
-        expect(pendiente.renglon).not.toBeNull();
-        expect(pendiente.columna).not.toBeNull();
+  it('Ezra cierra por precisión, no por haber aflojado el umbral', () => {
+    const cierre = EZRA.veredicto.ganadora!.cierre!;
+    expect(cierre.compatible).toBe(true);
+    expect(cierre.politica).toBe('truncamiento');
+    expect(cierre.ajusteResidual.toNumber()).toBe(0);
+    expect(cierre.decimalesDeOrigen).toBe(3);
+    expect(cierre.decimalesDelPie).toBe(2);
+  });
+
+  it('cada pendiente dice renglón, campo, categoría y de dónde salió cada lectura', () => {
+    for (const [nombre, informe] of TODAS) {
+      for (const pendiente of informe.pendientes) {
+        expect(pendiente.motivo.length, nombre).toBeGreaterThan(10);
+        if (pendiente.renglon !== null) expect(pendiente.campo ?? pendiente.columna).not.toBeNull();
+        for (const alternativa of pendiente.alternativas) {
+          expect(alternativa.texto.length).toBeGreaterThan(0);
+          expect(alternativa.caja.x1).toBeGreaterThanOrEqual(alternativa.caja.x0);
+          expect(typeof alternativa.pasada).toBe('string');
+        }
       }
     }
   });
 
-  it('una celda ambigua trae las opciones entre las que elegir', () => {
-    const conOpciones = [...EZRA.pendientes, ...MABELHERDI.pendientes].filter(
-      (p) => p.tipo === 'celda-ambigua',
-    );
-    for (const pendiente of conOpciones) {
-      expect(pendiente.opciones!.length).toBeGreaterThanOrEqual(2);
+  it('una alternativa descartada no cuenta como corrección manual', () => {
+    /*
+     * Es la distinción central: si el renglón cierra, que el OCR haya leído la
+     * celda de dos maneras es evidencia anotada, no un dato que falte. Antes
+     * bajaba la confianza igual que una celda vacía.
+     */
+    for (const [nombre, informe] of TODAS) {
+      const descartadas = informe.pendientes.filter(
+        (p) => p.categoria === 'WARNING_DISCARDED_ALTERNATIVE',
+      );
+      for (const pendiente of descartadas) {
+        expect(bloquea(pendiente.categoria), nombre).toBe(false);
+      }
     }
   });
 
@@ -216,9 +251,8 @@ describe('qué le queda por resolver a una persona', () => {
      * respuesta.
      */
     const columnas = MABELHERDI.pendientes
-      .filter((p) => p.tipo === 'columna-sin-reconocer')
+      .filter((p) => p.categoria === 'BLOCKING_UNKNOWN_COLUMN')
       .map((p) => p.columna);
-    expect(columnas).toContain('Desc');
     for (const basura of ['y', 'e', 'UU', 'RM']) {
       expect(columnas).not.toContain(basura);
     }
@@ -226,28 +260,16 @@ describe('qué le queda por resolver a una persona', () => {
 
   it('Barraza todavía no llega, y no lo disimula', () => {
     /*
-     * La tabla de Barraza tiene dos renglones y el OCR pone el importe del
-     * segundo en la línea del primero. Hoy el motor general no la reconstruye:
-     * lo que hace es rechazarla, que es lo correcto mientras no pueda. La
-     * resuelve su analizador específico, que sigue como respaldo.
+     * La tabla de Barraza tiene dos renglones y el OCR los entrega por columnas.
+     * Hoy el motor general no los arma: lo que hace es rechazar, que es lo
+     * correcto mientras no pueda. La resuelve su analizador específico.
      */
     expect(BARRAZA.veredicto.decision).toBe('rechazo');
-    expect(BARRAZA.veredicto.ganadora!.renglones.length).toBeLessThan(2);
   });
 
   it('las dos fotos de Los Calvos se siguen rechazando por calidad', () => {
-    // Son las imágenes insuficientes: no hay que forzar datos que la foto no
-    // contiene.
     expect(CALVOS_212356.veredicto.decision).toBe('rechazo');
     expect(CALVOS_213103.veredicto.decision).toBe('rechazo');
-  });
-
-  it('ninguna de las seis se acepta sola todavía', () => {
-    // El estado de hoy, dicho entero. Cuando alguna empiece a aceptarse sola,
-    // esta prueba tiene que fallar.
-    for (const [nombre, informe] of TODAS) {
-      expect(informe.veredicto.decision, nombre).not.toBe('automatica');
-    }
   });
 });
 

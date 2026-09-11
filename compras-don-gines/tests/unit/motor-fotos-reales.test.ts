@@ -234,8 +234,8 @@ describe('el cuerpo de la tabla, sobre las facturas reales', () => {
       expect(motivos.length).toBeGreaterThan(0);
       expect(motivos.join(' ')).toMatch(/renglon|renglón|suma|neto/i);
     }
-    expect(EZRA.veredicto.ganadora!.penalizaciones.map((p) => p.motivo).join(' ')).toContain(
-      'la suma no se puede comparar',
+    expect(EZRA.veredicto.ganadora!.penalizaciones.map((p) => p.motivo).join(' ')).toMatch(
+      /renglones no tienen importe|no se pudieron comprobar/,
     );
   });
 

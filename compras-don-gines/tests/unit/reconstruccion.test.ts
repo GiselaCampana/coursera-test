@@ -252,9 +252,17 @@ describe('dos alternativas para la misma celda', () => {
     ];
     const tabla = reconstruir(enDesacuerdo);
     const celda = tabla.renglones[0].celdas[4]!;
-    expect(celda.alternativas).toContain('22.800,00');
-    expect(celda.alternativas).toContain('22.8OO,OO');
+    const textos = celda.alternativas.map((a) => a.texto);
+    expect(textos).toContain('22.800,00');
+    expect(textos).toContain('22.8OO,OO');
     expect(celda.estado).toBe('ambigua');
+
+    // Y cada alternativa trae de dónde salió, para poder señalarla en la foto.
+    for (const alternativa of celda.alternativas) {
+      expect(alternativa.pasada.length).toBeGreaterThan(0);
+      expect(alternativa.caja.x1).toBeGreaterThan(alternativa.caja.x0);
+    }
+    expect(celda.alternativas.map((a) => a.pasada)).toContain('articulos:limpieza-fuerte');
   });
 
   it('gana la lectura con más apoyo, no la más confiada de una sola pasada', () => {
@@ -286,7 +294,10 @@ describe('dos alternativas para la misma celda', () => {
       ...fila(Y_TITULOS + SALTO * 3, RENGLONES[2]),
     ];
     const celda = reconstruir(conAlternativa).renglones[0].celdas[4]!;
-    expect(celda.alternativas).toContain('22.800,00');
+    const propuesta = celda.alternativas.find((a) => a.texto === '22.800,00');
+    expect(propuesta).toBeDefined();
+    // Viene del propio OCR, no de otra pasada: queda marcado como tal.
+    expect(propuesta!.delPropioOcr).toBe(true);
     expect(celda.estado).toBe('ambigua');
   });
 });

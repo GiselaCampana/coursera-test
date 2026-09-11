@@ -77,17 +77,65 @@ export function mejorLectura(observacion: Observacion): Lectura {
   return mejor;
 }
 
-/** Todas las lecturas distintas de una observación, la ganadora primero. */
-export function textosAlternativos(observacion: Observacion): string[] {
-  const ganador = textoPreferido(observacion);
-  const otros = new Set<string>();
+/**
+ * Todas las lecturas distintas de una observación, la ganadora primero y **con
+ * su procedencia**.
+ *
+ * Que cada alternativa traiga de qué pasada salió, con qué confianza y dónde
+ * está en la foto es lo que permite después mostrarle a una persona las dos
+ * opciones señalando cada una en la imagen, en vez de pedirle que elija entre
+ * dos cadenas de texto sin contexto.
+ */
+export function lecturasAlternativas(observacion: Observacion): LecturaDeCelda[] {
+  const ganadora = mejorLectura(observacion);
+  const salida: LecturaDeCelda[] = [
+    { texto: ganadora.texto, caja: ganadora.caja, pasada: ganadora.pasada, confianza: ganadora.confianza },
+  ];
+  const vistos = new Set([ganadora.texto]);
+
   for (const lectura of observacion.lecturas) {
-    if (lectura.texto !== ganador) otros.add(lectura.texto);
+    if (vistos.has(lectura.texto)) continue;
+    vistos.add(lectura.texto);
+    salida.push({
+      texto: lectura.texto,
+      caja: lectura.caja,
+      pasada: lectura.pasada,
+      confianza: lectura.confianza,
+    });
+  }
+
+  // Las que ofreció el propio Tesseract para esa palabra: no son de otra
+  // pasada, así que llevan la caja y la pasada de la lectura que las propuso.
+  for (const lectura of observacion.lecturas) {
     for (const alternativa of lectura.alternativas) {
-      if (alternativa !== ganador) otros.add(alternativa);
+      if (vistos.has(alternativa)) continue;
+      vistos.add(alternativa);
+      salida.push({
+        texto: alternativa,
+        caja: lectura.caja,
+        pasada: lectura.pasada,
+        confianza: lectura.confianza,
+        delPropioOcr: true,
+      });
     }
   }
-  return [ganador, ...otros];
+
+  return salida;
+}
+
+/** Una lectura posible de una celda, con todo lo que hace falta para auditarla. */
+export interface LecturaDeCelda {
+  texto: string;
+  caja: Caja;
+  pasada: string;
+  confianza: number;
+  /** La propuso el propio OCR como segunda opción de esa misma palabra. */
+  delPropioOcr?: boolean;
+}
+
+/** Sólo los textos, para quien no necesita la procedencia. */
+export function textosAlternativos(observacion: Observacion): string[] {
+  return lecturasAlternativas(observacion).map((l) => l.texto);
 }
 
 /**

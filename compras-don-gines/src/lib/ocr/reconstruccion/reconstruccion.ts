@@ -2,6 +2,7 @@ import { esFilaDeEncabezados } from '@/lib/ocr/motor/columnas';
 import {
   alto,
   centroY,
+  unir as unirCajas,
   type Caja,
   type EvidenciaDeLectura,
   type Fragmento,
@@ -19,11 +20,14 @@ import {
   armarRenglones,
   mejorLectura,
   textoPreferido,
-  textosAlternativos,
+  lecturasAlternativas,
   unirPartidas,
+  type LecturaDeCelda,
   type Observacion,
   type RenglonVisual,
 } from '@/lib/ocr/reconstruccion/agrupar';
+
+export type { LecturaDeCelda } from '@/lib/ocr/reconstruccion/agrupar';
 import {
   columnaDe,
   detectarColumnas,
@@ -66,8 +70,8 @@ export interface Procedencia {
 export interface CeldaReconstruida {
   columna: number;
   texto: string | null;
-  /** Todas las lecturas posibles, la elegida primero. */
-  alternativas: string[];
+  /** Todas las lecturas posibles, la elegida primero, cada una con su origen. */
+  alternativas: LecturaDeCelda[];
   estado: EstadoDeCelda;
   procedencia: Procedencia | null;
 }
@@ -242,11 +246,11 @@ export function reconstruirTabla(
 function armarCelda(columna: number, competidoras: Observacion[]): CeldaReconstruida {
   if (competidoras.length === 1) {
     const observacion = competidoras[0];
-    const alternativas = textosAlternativos(observacion);
+    const alternativas = lecturasAlternativas(observacion);
     const lectura = mejorLectura(observacion);
     return {
       columna,
-      texto: alternativas[0],
+      texto: alternativas[0].texto,
       alternativas,
       // Que el propio OCR haya dudado también es ambigüedad, no ruido.
       estado: alternativas.length > 1 ? 'ambigua' : 'leida',
@@ -274,13 +278,23 @@ function armarCelda(columna: number, competidoras: Observacion[]): CeldaReconstr
    */
   const todosNumericos = partes.every((t) => /^[\d.,%$-]+$/.test(t));
   const juntas = partes.join(todosNumericos ? '' : ' ');
-  const alternativas = [juntas, ...partes];
   const lectura = mejorLectura(ordenadas[0]);
+  const cajaDeTodas = ordenadas.map((o) => mejorLectura(o).caja).reduce(unirCajas);
+
+  const alternativas: LecturaDeCelda[] = [
+    { texto: juntas, caja: cajaDeTodas, pasada: lectura.pasada, confianza: lectura.confianza },
+    ...ordenadas.map((o) => {
+      const suya = mejorLectura(o);
+      return { texto: suya.texto, caja: suya.caja, pasada: suya.pasada, confianza: suya.confianza };
+    }),
+  ];
 
   return {
     columna,
     texto: juntas,
-    alternativas: [...new Set(alternativas)],
+    alternativas: alternativas.filter(
+      (a, i) => alternativas.findIndex((b) => b.texto === a.texto) === i,
+    ),
     estado: 'ambigua',
     procedencia: { pasada: lectura.pasada, confianza: lectura.confianza, caja: lectura.caja },
   };

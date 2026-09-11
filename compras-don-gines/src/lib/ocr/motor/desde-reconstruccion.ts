@@ -11,14 +11,26 @@ import {
   type Veredicto,
 } from '@/lib/ocr/motor/candidatas';
 import { CAMPOS_NUMERICOS, type ColumnaReconocida } from '@/lib/ocr/motor/columnas';
+import {
+  bloquea,
+  resumir,
+  soloBloqueantes,
+  type AlternativaDePendiente,
+  type Pendiente,
+  type ResumenDePendientes,
+} from '@/lib/ocr/motor/pendientes';
+
+export type { Pendiente, ResumenDePendientes } from '@/lib/ocr/motor/pendientes';
 import type { Celda, FilaDeDatos } from '@/lib/ocr/motor/tabla';
 import { leerEmisor, leerPie, type EmisorLeido } from '@/lib/ocr/motor/motor';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import {
   reconstruirTabla,
+  type LecturaDeCelda,
   type RenglonReconstruido,
   type TablaReconstruida,
 } from '@/lib/ocr/reconstruccion/reconstruccion';
+import type { ColumnaEspacial } from '@/lib/ocr/reconstruccion/columnas-espaciales';
 import { textoDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
 
 /**
@@ -45,32 +57,10 @@ export interface InformeReconstruido {
   pie: PieLeido;
   candidatas: CandidataDeTabla[];
   veredicto: Veredicto;
-  /** Qué tendría que resolver una persona, si algo. */
+  /** Qué tendría que resolver una persona, y qué es sólo una anotación. */
   pendientes: Pendiente[];
+  resumen: ResumenDePendientes;
   ms: number;
-}
-
-/**
- * Algo concreto que le falta al comprobante, dicho de manera accionable.
- *
- * La diferencia entre esto y «no se pudo leer» es la que separa una revisión
- * asistida de volver a tipear la factura. Cada pendiente tiene que poder
- * resolverse con un clic o un dato corto.
- */
-export interface Pendiente {
-  tipo:
-    | 'columna-sin-reconocer'
-    | 'celda-ambigua'
-    | 'celda-sin-leer'
-    | 'renglon-contaminado'
-    | 'pie-sin-leer';
-  /** En qué renglón, contando desde 1. Null cuando es del comprobante. */
-  renglon: number | null;
-  /** Qué columna, por su título o su posición. */
-  columna: string | null;
-  detalle: string;
-  /** Las opciones entre las que elegir, cuando las hay. */
-  opciones?: string[];
 }
 
 export interface OpcionesDelMotorReconstruido {
@@ -93,18 +83,43 @@ export function interpretarReconstruccion(
   for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
     const pie = leerPie(textos.completo, convencion);
     const renglones = elegirParaElDocumento(tabla.renglones, columnas, convencion, pie.netTotal);
-    const { puntaje, penalizaciones, sumaDeRenglones } = puntuarTabla(renglones, {
+    const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
       netTotal: pie.netTotal,
-      filasVistas: tabla.filasVisibles,
+      /*
+       * Las filas que se vieron son las que la reconstrucción armó, no las
+       * líneas de texto que hay en la banda de la tabla.
+       *
+       * Pasar las líneas castigaba a los comprobantes que tienen texto suelto
+       * debajo de la tabla —una leyenda, un comentario, el borde— como si se
+       * hubieran perdido artículos: la factura de Ezra tiene seis renglones y
+       * trece líneas ahí, y perdía dos décimas de confianza por siete artículos
+       * que no existen.
+       */
+      filasVistas: tabla.renglones.length,
     });
-    candidatas.push({ convencion, pie, renglones, puntaje, penalizaciones, sumaDeRenglones });
+    candidatas.push({ convencion, pie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
   }
 
   const sinResolver = tabla.columnas
     .filter((c) => c.titulo !== null && c.campo === null && c.apoyos > 0)
     .map((c) => c.titulo!);
 
-  const veredicto = decidir(candidatas, sinResolver);
+  /*
+   * Se decide en dos tiempos: primero un veredicto provisorio para saber qué
+   * renglones cierran, y con eso se arma la lista de pendientes; después el
+   * veredicto definitivo, que sólo frena por las **bloqueantes**.
+   *
+   * Hace falta el ida y vuelta porque qué bloquea depende de si el renglón
+   * cerró: una celda ambigua en un renglón que cuadra es una alternativa
+   * descartada, no un dato que falta.
+   */
+  const provisorio = decidir(candidatas, sinResolver);
+  const pendientes = queFaltaResolver(tabla, provisorio, sinResolver);
+  const columnasQueFrenan = soloBloqueantes(pendientes)
+    .filter((p) => p.categoria === 'BLOCKING_UNKNOWN_COLUMN')
+    .map((p) => p.columna!);
+
+  const veredicto = decidir(candidatas, columnasQueFrenan);
 
   return {
     emisor,
@@ -112,7 +127,8 @@ export function interpretarReconstruccion(
     pie: veredicto.ganadora?.pie ?? candidatas[0].pie,
     candidatas,
     veredicto,
-    pendientes: queFaltaResolver(tabla, veredicto, sinResolver),
+    pendientes,
+    resumen: resumir(pendientes),
     ms: Date.now() - comienzo,
   };
 }
@@ -152,7 +168,7 @@ function variantesDeFila(
   renglon.celdas.forEach((celda, i) => {
     if (!celda || celda.alternativas.length < 2) return;
     for (const alternativa of celda.alternativas.slice(1)) {
-      filas.push(base((j) => (j === i ? alternativa : renglon.celdas[j]?.texto ?? null)));
+      filas.push(base((j) => (j === i ? alternativa.texto : renglon.celdas[j]?.texto ?? null)));
     }
   });
 
@@ -247,13 +263,29 @@ function puntosDeRenglon(renglon: RenglonCandidato): number {
   return puntos;
 }
 
+/** Las lecturas de una celda, en la forma que va al informe. */
+function alternativasDe(celda: { alternativas: LecturaDeCelda[] }): AlternativaDePendiente[] {
+  return celda.alternativas.map((a) => ({
+    texto: a.texto,
+    caja: a.caja,
+    pasada: a.pasada,
+    confianza: a.confianza,
+    ...(a.delPropioOcr ? { delPropioOcr: true } : {}),
+  }));
+}
+
 /**
- * Qué tendría que resolver una persona, dicho celda por celda.
+ * Qué le falta al comprobante, separado entre lo que frena y lo que no.
  *
- * Es la parte que convierte «no se pudo» en una revisión de un minuto. Se
- * ordena por cuánto cuesta: una columna sin reconocer se resuelve una vez y vale
- * para todas las facturas de ese formato; una celda ambigua es un clic entre dos
- * opciones; una celda sin leer hay que mirarla en la foto.
+ * El criterio es la aritmética del renglón, y por eso hace falta el veredicto
+ * para armar la lista: **una celda ambigua en un renglón que cierra no bloquea
+ * nada**. Los dos valores posibles llevan a la misma cuenta o uno de los dos la
+ * rompe, y si el renglón cuadra es porque ganó el correcto. Queda anotada como
+ * alternativa descartada, para poder revisarla, y no se le pide nada a nadie.
+ *
+ * Sin esta distinción la lista es inservible: sobre la foto de Errecalde salían
+ * ciento quince pedidos, casi todos ambigüedades de la descripción que no entran
+ * en ninguna igualdad. Una lista así es lo mismo que volver a tipear la factura.
  */
 function queFaltaResolver(
   tabla: TablaReconstruida,
@@ -262,88 +294,147 @@ function queFaltaResolver(
 ): Pendiente[] {
   const pendientes: Pendiente[] = [];
 
+  /*
+   * Una columna sin reconocer frena **sólo si hace falta para las cuentas**.
+   *
+   * Se mide por lo que hay debajo: una columna cuyos valores son casi todos
+   * montos o cantidades es parte de la aritmética del comprobante y no se puede
+   * adivinar. Una que tiene texto es una descripción, una marca o una leyenda, y
+   * no saber qué es no impide cargar la compra.
+   */
   for (const titulo of sinResolver) {
+    const columna = tabla.columnas.find((c) => c.titulo === titulo);
+    const numerica = columna ? columnaEsNumerica(tabla, columna) : false;
     pendientes.push({
-      tipo: 'columna-sin-reconocer',
+      categoria: numerica ? 'BLOCKING_UNKNOWN_COLUMN' : 'WARNING_OPTIONAL_FIELD',
       renglon: null,
+      campo: null,
       columna: titulo,
-      detalle: `Hay que decir qué es la columna «${titulo}». Se resuelve una vez y queda para este formato.`,
+      alternativas: [],
+      elegido: null,
+      motivo: numerica
+        ? `Debajo de «${titulo}» hay valores numéricos en casi todos los renglones, ` +
+          'así que entra en las cuentas y no se puede adivinar qué es. ' +
+          'Se resuelve una vez y queda para este formato.'
+        : `No se reconoció «${titulo}», pero lo que tiene debajo es texto: ` +
+          'no entra en ninguna cuenta y no impide cargar la compra.',
     });
   }
 
   if (!veredicto.ganadora?.pie.netTotal) {
     pendientes.push({
-      tipo: 'pie-sin-leer',
+      categoria: 'BLOCKING_UNKNOWN_COLUMN',
       renglon: null,
-      columna: null,
-      detalle: 'No se pudo leer el neto del pie, así que no hay contra qué comparar la suma.',
+      campo: 'netTotal',
+      columna: 'pie fiscal',
+      alternativas: [],
+      elegido: null,
+      motivo:
+        'No se pudo identificar el neto del pie, así que no hay contra qué comparar ' +
+        'la suma de los renglones. Hay que señalar cuál de los números del pie es el neto.',
     });
   }
 
-  // Sólo se piden celdas cuando el comprobante no se aceptó solo: si cerró,
-  // una celda ambigua que igual cuadra no es problema de nadie.
-  if (veredicto.decision === 'automatica') return pendientes;
-
   /*
-   * Se piden **sólo las celdas que impiden que el comprobante cierre**.
+   * Qué renglones están confirmados, y por lo tanto qué ambigüedades no importan.
    *
-   * Sin este filtro la lista es inservible, y no por poco: sobre la foto de
-   * Errecalde salían ciento quince pedidos, la mayoría ambigüedades de la
-   * descripción —«BARRA DANBO PUNTA DE AGUA» contra «BARRA»— que no entran en
-   * ninguna cuenta y no cambian nada. Una lista así es lo mismo que volver a
-   * tipear la factura.
+   * Hay dos maneras de estar confirmado, y la segunda es la que faltaba:
    *
-   * El criterio es la aritmética: si el renglón cierra con lo que se leyó, lo
-   * que quedó ambiguo da igual. Si no cierra, se piden las celdas **numéricas**
-   * de ese renglón, que son las únicas que pueden estar causándolo.
+   *  - **por la aritmética del propio renglón**: cantidad × precio da el
+   *    importe impreso, así que las lecturas elegidas son las correctas;
+   *
+   *  - **porque cierra el comprobante entero**. Es el control más fuerte que
+   *    hay y vale para todos los renglones a la vez: si la suma de los importes
+   *    elegidos coincide con el neto impreso, esas elecciones son las correctas,
+   *    por más que cada renglón por separado no tenga con qué comprobarse.
+   *
+   * Sin la segunda, la factura de Mabelherdi pedía veintinueve correcciones
+   * teniendo los nueve artículos bien y la suma **exacta** contra el pie: sus
+   * renglones no imprimen precio unitario, así que ninguno puede verificarse
+   * solo, y todas sus ambigüedades quedaban marcadas como bloqueantes.
    */
-  const renglonesQueCierran = new Set<number>();
+  const documentoCierra = veredicto.ganadora?.cierre?.compatible === true;
+  const cierran = new Set<number>();
   (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
-    const controles = renglon.controles;
-    if (controles.length > 0 && controles.every((c) => c.paso)) renglonesQueCierran.add(i);
+    if (renglon.controles.length > 0 && renglon.controles.every((c) => c.paso)) cierran.add(i);
   });
 
   tabla.renglones.forEach((renglon, i) => {
-    if (renglonesQueCierran.has(i)) return;
+    const cerro = documentoCierra || cierran.has(i);
 
     renglon.celdas.forEach((celda, j) => {
       const columna = tabla.columnas[j];
       const campo = columna?.campo?.campo;
-      // La descripción y la marca no entran en ninguna igualdad: que estén
-      // ambiguas no impide cerrar el comprobante y pedirlas es ruido.
+      const nombreDeColumna = columna?.titulo ?? `columna ${j + 1}`;
+      // La descripción y la marca no entran en ninguna igualdad.
       if (!campo || !CAMPOS_NUMERICOS.has(campo)) return;
 
       if (!celda) {
         pendientes.push({
-          tipo: 'celda-sin-leer',
+          categoria: cerro ? 'WARNING_OPTIONAL_FIELD' : 'BLOCKING_MISSING_CELL',
           renglon: i + 1,
-          columna: columna!.titulo ?? `columna ${j + 1}`,
-          detalle: `El renglón ${i + 1} no tiene ${campo}, y sin eso no cierra.`,
+          campo,
+          columna: nombreDeColumna,
+          alternativas: [],
+          elegido: null,
+          motivo: cerro
+            ? `El renglón ${i + 1} no trae ${campo}, pero cierra igual con lo que sí trae.`
+            : `El renglón ${i + 1} no trae ${campo} y sin eso no cierra.`,
         });
         return;
       }
-      if (celda.estado === 'ambigua') {
-        pendientes.push({
-          tipo: 'celda-ambigua',
-          renglon: i + 1,
-          columna: columna!.titulo ?? `columna ${j + 1}`,
-          detalle: `El renglón ${i + 1} tiene más de una lectura para ${campo}.`,
-          opciones: celda.alternativas.slice(0, 4),
-        });
-      }
+
+      if (celda.estado !== 'ambigua') return;
+
+      pendientes.push({
+        categoria: cerro ? 'WARNING_DISCARDED_ALTERNATIVE' : 'BLOCKING_AMBIGUOUS_CELL',
+        renglon: i + 1,
+        campo,
+        columna: nombreDeColumna,
+        alternativas: alternativasDe(celda),
+        elegido: celda.texto,
+        motivo: cerro
+          ? `Se leyó ${campo} de más de una manera y ganó «${celda.texto}», ` +
+            `con la que el renglón ${i + 1} cierra. Las otras quedan anotadas.`
+          : `Hay más de una lectura posible de ${campo} en el renglón ${i + 1} ` +
+            'y ninguna hace cerrar la cuenta.',
+      });
     });
 
-    if (renglon.sobrantes.length > 0) {
+    for (const sobrante of renglon.sobrantes) {
       pendientes.push({
-        tipo: 'renglon-contaminado',
+        categoria: cerro ? 'WARNING_OCR_NOISE' : 'BLOCKING_AMBIGUOUS_CELL',
         renglon: i + 1,
-        columna: null,
-        detalle:
-          `El renglón ${i + 1} tiene valores que no caen en ninguna columna ` +
-          `(${renglon.sobrantes.map((s) => s.texto).join(', ')}).`,
+        campo: null,
+        columna: 'fuera de toda columna',
+        alternativas: [
+          { texto: sobrante.texto, caja: sobrante.caja, pasada: '(fuera de columna)', confianza: 0 },
+        ],
+        elegido: null,
+        motivo: cerro
+          ? `«${sobrante.texto}» no cae en ninguna columna del renglón ${i + 1}, ` +
+            'que cierra igual: es ruido de la foto.'
+          : `«${sobrante.texto}» no cae en ninguna columna del renglón ${i + 1}, ` +
+            'que además no cierra: puede ser un valor de otra fila.',
       });
     }
   });
 
   return pendientes;
+}
+
+/** ¿Lo que hay debajo de una columna son números? */
+function columnaEsNumerica(tabla: TablaReconstruida, columna: ColumnaEspacial): boolean {
+  const indice = tabla.columnas.indexOf(columna);
+  let conValor = 0;
+  let numericos = 0;
+  for (const renglon of tabla.renglones) {
+    const texto = renglon.celdas[indice]?.texto;
+    if (!texto) continue;
+    conValor += 1;
+    if (/\d/.test(texto) && /^[^A-Za-zÁÉÍÓÚÑáéíóúñ]*$/.test(texto.replace(/[kg|%$]/gi, ''))) {
+      numericos += 1;
+    }
+  }
+  return conValor > 0 && numericos / conValor >= 0.6;
 }

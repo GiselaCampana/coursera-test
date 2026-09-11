@@ -1,4 +1,5 @@
 import { Decimal } from '@/lib/money';
+import { evaluarCierre, type CierreCompatible } from '@/lib/ocr/motor/precision';
 import { variantesDeNumero } from '@/lib/ocr/numeros';
 import { CAMPOS_NUMERICOS, type CampoDeColumna, type ColumnaReconocida } from '@/lib/ocr/motor/columnas';
 import type { FilaDeDatos } from '@/lib/ocr/motor/tabla';
@@ -329,6 +330,14 @@ export interface CandidataDeTabla {
   penalizaciones: Penalizacion[];
   /** La suma de los importes de los renglones. */
   sumaDeRenglones: Decimal;
+  /**
+   * Cómo se explica —o no— la diferencia entre la suma y el pie impreso.
+   *
+   * Va en la candidata y no en una constante global a propósito: la política de
+   * redondeo es de **este** comprobante, y lo que se decida acá no puede
+   * cambiarle el cierre a otro proveedor.
+   */
+  cierre?: CierreCompatible | null;
 }
 
 export interface PieParaControlar {
@@ -348,9 +357,15 @@ export interface PieParaControlar {
 export function puntuarTabla(
   renglones: RenglonCandidato[],
   pie: PieParaControlar,
-): { puntaje: number; penalizaciones: Penalizacion[]; sumaDeRenglones: Decimal } {
+): {
+  puntaje: number;
+  penalizaciones: Penalizacion[];
+  sumaDeRenglones: Decimal;
+  cierre: CierreCompatible | null;
+} {
   const penalizaciones: Penalizacion[] = [];
   let puntaje = 1;
+  let cierre: CierreCompatible | null = null;
 
   const penalizar = (motivo: string, puntos: number) => {
     penalizaciones.push({ motivo, puntos });
@@ -359,7 +374,7 @@ export function puntuarTabla(
 
   if (renglones.length === 0) {
     penalizar('No se interpretó ningún renglón.', 1);
-    return { puntaje: 0, penalizaciones, sumaDeRenglones: new Decimal(0) };
+    return { puntaje: 0, penalizaciones, sumaDeRenglones: new Decimal(0), cierre: null };
   }
 
   // --- Los controles de cada renglón ---------------------------------------
@@ -400,18 +415,48 @@ export function puntuarTabla(
   );
 
   if (pie.netTotal && pie.netTotal.gt(0)) {
-    const completos = renglones.every((r) => netoDelRenglon(r) !== null);
+    const netos = renglones
+      .map((r) => netoDelRenglon(r))
+      .filter((n): n is Decimal => n !== null);
+    const completos = netos.length === renglones.length;
     if (!completos) {
-      penalizar('Algún renglón no tiene importe: la suma no se puede comparar.', 0.15);
-    } else {
-      const diferencia = sumaDeRenglones.minus(pie.netTotal).abs();
-      // Dos centavos, o el truncamiento de un pie con tres decimales.
-      const tolerancia = Decimal.max(pie.netTotal.times('0.00005'), '0.02');
-      if (diferencia.gt(tolerancia)) {
+      penalizar(
+        `${renglones.length - netos.length} de ${renglones.length} renglones no tienen importe.`,
+        0.15,
+      );
+    }
+    /*
+     * El cierre se evalúa con los renglones que **sí** tienen importe, aunque
+     * falte alguno.
+     *
+     * Antes, con un solo renglón sin importe no se comparaba nada, y eso dejaba
+     * sin usar el control más fuerte que hay. Sobre la factura de Mabelherdi
+     * alcanzaba con que el OCR inventara dos líneas de basura al principio y al
+     * final para que sus nueve artículos —que suman **exactamente** el neto
+     * impreso— quedaran sin confirmar, y con ellos las veintidós ambigüedades
+     * que ese cierre vuelve irrelevantes.
+     *
+     * Que falten importes se sigue penalizando aparte: son dos cosas distintas
+     * y las dos importan.
+     */
+    if (netos.length > 0) {
+      /*
+       * El cierre se juzga contra la **precisión impresa**, no contra una
+       * tolerancia fija.
+       *
+       * Una tolerancia es un número elegido a ojo que afloja el control para
+       * todos los proveedores por igual. Lo que corresponde es preguntar si el
+       * pie impreso puede provenir de esta suma dados los decimales con que
+       * están escritos los dos: la factura de Ezra imprime los renglones con
+       * tres decimales y el pie con dos, y el centavo de diferencia lo explica
+       * el truncamiento entero. En otro comprobante, con los renglones y el pie
+       * a dos decimales, el mismo centavo no se explica y tiene que fallar.
+       */
+      cierre = evaluarCierre(netos, pie.netTotal);
+      if (!cierre.compatible) {
         penalizar(
-          `Los renglones suman ${sumaDeRenglones.toFixed(2)} y el neto impreso es ` +
-            `${pie.netTotal.toFixed(2)}: ${diferencia.toFixed(2)} de diferencia.`,
-          Math.min(0.7, 0.3 + diferencia.div(pie.netTotal).toNumber()),
+          cierre.explicacion,
+          Math.min(0.7, 0.3 + cierre.ajusteResidual.div(pie.netTotal).toNumber()),
         );
       }
     }
@@ -428,7 +473,7 @@ export function puntuarTabla(
     );
   }
 
-  return { puntaje: Math.max(0, puntaje), penalizaciones, sumaDeRenglones };
+  return { puntaje: Math.max(0, puntaje), penalizaciones, sumaDeRenglones, cierre };
 }
 
 /**

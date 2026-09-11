@@ -301,11 +301,11 @@ export function interpretar(
   for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
     const suPie = convencion === 'ar' ? pie : leerPie(textoDelPie, convencion);
     const renglones = elegirPorRenglon(filas, titulos.columnas, convencion, suPie.netTotal);
-    const { puntaje, penalizaciones, sumaDeRenglones } = puntuarTabla(renglones, {
+    const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
       netTotal: suPie.netTotal,
       filasVistas: opciones.filasVistas ?? null,
     });
-    candidatas.push({ convencion, pie: suPie, renglones, puntaje, penalizaciones, sumaDeRenglones });
+    candidatas.push({ convencion, pie: suPie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
   }
 
   const veredicto = decidir(candidatas, ambiguas);

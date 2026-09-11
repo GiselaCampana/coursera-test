@@ -224,7 +224,8 @@ describe('5. una interpretación aritméticamente incorrecta se rechaza', () => 
     }
     const motivos = informe.candidatas[0].penalizaciones.map((p) => p.motivo).join(' ');
     expect(motivos).toContain('controles aritméticos de renglón no cierran');
-    expect(motivos).toContain('de diferencia');
+    // La suma tampoco se explica por la precisión con que está impreso el pie.
+    expect(motivos).toContain('ni el redondeo ni el truncamiento explican');
   });
 
   it('la tabla se entendió: lo que falla son los números', () => {
@@ -452,7 +453,7 @@ describe('el informe que el motor deja de cada comprobante', () => {
     const texto = informeEnTexto(leer(ESTRUCTURA_QUE_NO_CIERRA));
     expect(texto).toContain('RECHAZO');
     expect(texto).toContain('NO CIERRA · cantidad-por-precio');
-    expect(texto).toContain('de diferencia');
+    expect(texto).toContain('ni el redondeo ni el truncamiento explican');
   });
 
   it('con dos cantidades, el informe dice cuál es la que cuesta', () => {
