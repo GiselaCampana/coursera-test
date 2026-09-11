@@ -130,6 +130,58 @@ describe('cierre compatible por precisión y truncamiento', () => {
     expect(evaluarCierre(dos, new Decimal('1999.90')).compatible).toBe(false);
   });
 
+  it('un renglón que falta NO puede esconderse en el margen acumulado', () => {
+    /*
+     * El modo de fallar más peligroso de todo esto. Cien renglones impresos con
+     * dos decimales dan un margen acumulado de un peso entero, y adentro de ese
+     * peso **entra un artículo barato completo**: la suma toca el pie, el
+     * comprobante cierra, y la compra se carga con un artículo de menos.
+     *
+     * El margen sólo puede representar el redondeo de valores efectivamente
+     * leídos. Un renglón ausente no es redondeo, y por eso lo que lo detiene es
+     * la integridad de filas y no la aritmética: los números **sí** llegan a
+     * tocarse, y aun así no alcanza.
+     */
+    const cien = Array.from({ length: 100 }, () => new Decimal('100.00'));
+    const pieQueIncluyeUnoMas = new Decimal('10000.50');
+
+    // Sin mirar la integridad, los rangos se tocan y el comprobante «cierra».
+    const soloLosNumeros = evaluarCierre(cien, pieQueIncluyeUnoMas);
+    expect(soloLosNumeros.compatible).toBe(true);
+
+    // Con la integridad —ciento un renglones vistos, cien con importe— no.
+    const conIntegridad = evaluarCierre(cien, pieQueIncluyeUnoMas, {
+      vistas: 101,
+      conImporte: 100,
+    });
+    expect(conIntegridad.compatible).toBe(false);
+    expect(conIntegridad.explicacion).toContain('un renglón que falta no entra ahí');
+
+    // Y con el renglón chico presente y las filas completas, sí cierra: lo que
+    // fallaba era la falta, no el número.
+    const completo = evaluarCierre([...cien, new Decimal('0.50')], pieQueIncluyeUnoMas, {
+      vistas: 101,
+      conImporte: 101,
+    });
+    expect(completo.compatible).toBe(true);
+  });
+
+  it('si algún renglón no tiene importe, el motivo es ése y no el redondeo', () => {
+    /*
+     * Un comprobante al que le falta un artículo no «no cierra por tres
+     * centavos»: le falta un artículo. Que el motivo informado sea el verdadero
+     * es lo que hace que la revisión pida lo correcto.
+     */
+    const cierre = evaluarCierre(
+      [new Decimal('100.00'), new Decimal('100.00')],
+      new Decimal('200.00'),
+      { vistas: 3, conImporte: 2 },
+    );
+    expect(cierre.compatible).toBe(false);
+    expect(cierre.explicacion).toContain('no tienen importe');
+    expect(cierre.explicacion).toContain('un renglón que falta no entra ahí');
+  });
+
   it('una diferencia grande no se explica por más renglones que haya', () => {
     const renglones = Array.from({ length: 10 }, () => new Decimal('100.00'));
     const cierre = evaluarCierre(renglones, new Decimal('900.00'));
@@ -185,9 +237,9 @@ describe('pendiente bloqueante contra alternativa descartada', () => {
      * cosas para corregir.
      */
     const resumen = resumir([descartada, descartada, descartada, bloqueante]);
-    expect(resumen.correccionesManuales).toBe(1);
+    expect(resumen.bloqueosUnicos).toBe(1);
     expect(resumen.advertenciasNoBloqueantes).toBe(3);
-    expect(resumen.ambiguedadesBloqueantes).toBe(1);
+    expect(resumen.desglose.ambiguedadesBloqueantes).toBe(1);
   });
 
   it('el resumen separa cada clase de decisión, no las suma en un número', () => {
@@ -198,11 +250,19 @@ describe('pendiente bloqueante contra alternativa descartada', () => {
       { ...bloqueante, categoria: 'BLOCKING_PRODUCT' },
       { ...descartada, categoria: 'WARNING_OCR_NOISE' },
     ]);
-    expect(resumen.celdasObligatoriasFaltantes).toBe(1);
-    expect(resumen.columnasSinReconocer).toBe(1);
-    expect(resumen.unidadesPendientes).toBe(1);
-    expect(resumen.asociacionesDeProductoPendientes).toBe(1);
+    expect(resumen.desglose.celdasObligatoriasFaltantes).toBe(1);
+    expect(resumen.desglose.columnasSinReconocer).toBe(1);
+    expect(resumen.desglose.unidadesPendientes).toBe(1);
+    expect(resumen.desglose.asociacionesDeProductoPendientes).toBe(1);
     expect(resumen.advertenciasNoBloqueantes).toBe(1);
-    expect(resumen.correccionesManuales).toBe(4);
+    expect(resumen.bloqueosUnicos).toBe(4);
+
+    /*
+     * El total y el desglose son la misma cosa contada de dos maneras, nunca
+     * dos cosas que se suman. Antes el informe decía «2 correcciones» y «2
+     * columnas», y eso se lee como cuatro problemas cuando son los mismos dos.
+     */
+    const suma = Object.values(resumen.desglose).reduce((a, b) => a + b, 0);
+    expect(suma).toBe(resumen.bloqueosUnicos);
   });
 });

@@ -452,7 +452,10 @@ export function puntuarTabla(
        * el truncamiento entero. En otro comprobante, con los renglones y el pie
        * a dos decimales, el mismo centavo no se explica y tiene que fallar.
        */
-      cierre = evaluarCierre(netos, pie.netTotal);
+      cierre = evaluarCierre(netos, pie.netTotal, {
+        vistas: renglones.length,
+        conImporte: netos.length,
+      });
       if (!cierre.compatible) {
         penalizar(
           cierre.explicacion,

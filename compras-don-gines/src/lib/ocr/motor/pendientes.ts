@@ -85,31 +85,48 @@ export interface Pendiente {
   motivo: string;
 }
 
+/**
+ * El resumen, con los conteos **disjuntos**.
+ *
+ * El total y el desglose no pueden sumarse entre sí. Antes el resumen decía
+ * «2 correcciones manuales» y «2 columnas sin reconocer», y eso se lee como
+ * cuatro problemas cuando son los mismos dos: las dos columnas **son** las dos
+ * correcciones. Ahora hay un total de bloqueos únicos y, debajo, en qué se
+ * reparte ese mismo total.
+ */
 export interface ResumenDePendientes {
-  celdasObligatoriasFaltantes: number;
-  ambiguedadesBloqueantes: number;
-  asociacionesDeProductoPendientes: number;
-  unidadesPendientes: number;
-  columnasSinReconocer: number;
+  /** Cuántas cosas distintas tiene que resolver una persona. */
+  bloqueosUnicos: number;
+  /** En qué se reparte ese total. Las cinco suman `bloqueosUnicos`. */
+  desglose: {
+    celdasObligatoriasFaltantes: number;
+    ambiguedadesBloqueantes: number;
+    columnasSinReconocer: number;
+    unidadesPendientes: number;
+    asociacionesDeProductoPendientes: number;
+  };
+  /** Evidencia anotada que no impide aceptar el comprobante. */
   advertenciasNoBloqueantes: number;
-  /** Cuántas cosas concretas tiene que tocar una persona. */
-  correccionesManuales: number;
 }
 
 export function resumir(pendientes: Pendiente[]): ResumenDePendientes {
   const contar = (categoria: CategoriaPendiente) =>
     pendientes.filter((p) => p.categoria === categoria).length;
 
-  const bloqueantes = pendientes.filter((p) => bloquea(p.categoria));
-
-  return {
+  const desglose = {
     celdasObligatoriasFaltantes: contar('BLOCKING_MISSING_CELL'),
     ambiguedadesBloqueantes: contar('BLOCKING_AMBIGUOUS_CELL'),
-    asociacionesDeProductoPendientes: contar('BLOCKING_PRODUCT'),
-    unidadesPendientes: contar('BLOCKING_UNIT'),
     columnasSinReconocer: contar('BLOCKING_UNKNOWN_COLUMN'),
-    advertenciasNoBloqueantes: pendientes.length - bloqueantes.length,
-    correccionesManuales: bloqueantes.length,
+    unidadesPendientes: contar('BLOCKING_UNIT'),
+    asociacionesDeProductoPendientes: contar('BLOCKING_PRODUCT'),
+  };
+
+  const bloqueosUnicos = Object.values(desglose).reduce((a, b) => a + b, 0);
+
+  return {
+    bloqueosUnicos,
+    desglose,
+    advertenciasNoBloqueantes: pendientes.length - bloqueosUnicos,
   };
 }
 

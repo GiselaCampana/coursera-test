@@ -1,4 +1,4 @@
-import { esFilaDeEncabezados } from '@/lib/ocr/motor/columnas';
+import { CAMPOS_NUMERICOS, esFilaDeEncabezados } from '@/lib/ocr/motor/columnas';
 import {
   alto,
   centroY,
@@ -176,6 +176,9 @@ export function reconstruirTabla(
   notas.push(...limites.notas);
 
   // --- Celdas --------------------------------------------------------------
+  const hayColumnasNumericas = limites.columnas.some(
+    (c) => c.campo && CAMPOS_NUMERICOS.has(c.campo.campo),
+  );
   const renglones: RenglonReconstruido[] = [];
   let valoresDeOtraPasada = 0;
 
@@ -204,6 +207,33 @@ export function reconstruirTabla(
     // Una línea con una sola celda no es un renglón de la tabla: es un
     // comentario, un pie de página o basura del borde.
     if (llenas < 2) continue;
+
+    /*
+     * Y un renglón de una tabla de precios tiene **algún número**.
+     *
+     * Sobre la foto de Mabelherdi el OCR produce cuatro líneas de basura entre
+     * los artículos —«LENIN NAL | UR EE ERE», «MI | eN»— que llenan dos celdas
+     * y pasan por renglones. No son inofensivas: cuentan como filas sin
+     * importe, y con eso el control de integridad concluye que a la factura le
+     * faltan renglones. Los nueve artículos buenos, que suman exactamente el
+     * neto impreso, quedaban sin confirmar por culpa de cuatro líneas que no
+     * dicen nada.
+     *
+     * Se pide un dígito en alguna columna que entre en las cuentas. No alcanza
+     * con que haya un dígito en cualquier lado: «956X30X1» está en la
+     * descripción de un artículo y no lo vuelve un renglón.
+     */
+    const tieneAlgunNumero = celdas.some((celda, i) => {
+      if (celda === null || !/\d/.test(celda.texto ?? '')) return false;
+      // Cuando ninguna columna se reconoció no hay dónde mirar, así que sirve
+      // un número en cualquier celda. Con columnas reconocidas, en cambio, se
+      // exige que el número esté en una que entre en las cuentas: «956X30X1»
+      // está en la descripción de un artículo y no vuelve renglón a una línea.
+      if (!hayColumnasNumericas) return true;
+      const campo = limites.columnas[i]?.campo?.campo;
+      return campo !== undefined && CAMPOS_NUMERICOS.has(campo);
+    });
+    if (!tieneAlgunNumero) continue;
 
     renglones.push({
       y: visual.y,

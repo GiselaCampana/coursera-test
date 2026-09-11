@@ -105,11 +105,15 @@ describe('la reconstrucción de la tabla', () => {
      * corregir la factura. Quedan las dos columnas que hay que configurar una
      * vez para este formato.
      */
-    expect(MABELHERDI.resumen.correccionesManuales).toBe(2);
-    expect(MABELHERDI.resumen.columnasSinReconocer).toBe(2);
-    expect(MABELHERDI.resumen.celdasObligatoriasFaltantes).toBe(0);
-    expect(MABELHERDI.resumen.ambiguedadesBloqueantes).toBe(0);
+    expect(MABELHERDI.resumen.bloqueosUnicos).toBe(2);
+    expect(MABELHERDI.resumen.desglose.columnasSinReconocer).toBe(2);
+    expect(MABELHERDI.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
+    expect(MABELHERDI.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
     expect(MABELHERDI.resumen.advertenciasNoBloqueantes).toBeGreaterThan(10);
+
+    // El total y el desglose son la misma cosa contada de dos maneras.
+    const suma = Object.values(MABELHERDI.resumen.desglose).reduce((a, b) => a + b, 0);
+    expect(suma).toBe(MABELHERDI.resumen.bloqueosUnicos);
   });
 
   it('Errecalde: los códigos de artículo salen enteros', () => {
@@ -201,7 +205,7 @@ describe('qué le queda por resolver a una persona', () => {
      * compatible con el pie por truncamiento, y ninguna corrección manual.
      */
     expect(EZRA.veredicto.decision).toBe('automatica');
-    expect(EZRA.resumen.correccionesManuales).toBe(0);
+    expect(EZRA.resumen.bloqueosUnicos).toBe(0);
   });
 
   it('Ezra cierra por precisión, no por haber aflojado el umbral', () => {

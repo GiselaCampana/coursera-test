@@ -81,6 +81,23 @@ export function decimalesDe(valor: Decimal): number {
   return Math.max(2, valor.decimalPlaces());
 }
 
+/**
+ * Cuántos renglones hay y cuántos aportaron un importe.
+ *
+ * Sin esto, la incertidumbre acumulada se convierte en un escondite. Veintitrés
+ * renglones impresos con dos decimales dan un intervalo de veintitrés centavos,
+ * y ahí adentro **entra un renglón entero** de veinte centavos: la suma tocaría
+ * el pie y el comprobante cerraría con un artículo de menos.
+ *
+ * La regla es que el intervalo sólo puede representar el redondeo de valores
+ * **efectivamente leídos**. Nunca un renglón que falta, un importe ausente ni un
+ * dígito de magnitud equivocada.
+ */
+export interface IntegridadDeFilas {
+  vistas: number;
+  conImporte: number;
+}
+
 export interface CierreCompatible {
   /** La suma de los renglones, tal como se calculó. */
   calculado: Decimal;
@@ -120,10 +137,20 @@ export interface CierreCompatible {
  * Se prueban las dos políticas y gana la primera que explique el pie. El
  * truncamiento se prueba antes porque es lo que hacen casi todos los sistemas de
  * facturación argentinos, y porque es la que explica el caso que trajo esto.
+ *
+ * Lo que el margen **no** puede hacer es tapar un renglón que falta, y eso no lo
+ * resuelve la aritmética sino `integridad`: con cien renglones de dos decimales
+ * el margen llega a un peso entero, y ahí adentro entra un artículo barato
+ * completo. Hubo un intento de detectarlo comparando el ancho del margen contra
+ * el renglón más chico; se descartó porque rechazaba facturas correctas que
+ * simplemente tienen un artículo barato, que es un falso negativo peor que el
+ * problema. Lo que distingue los dos casos no es el tamaño del margen: es si se
+ * leyeron todas las filas.
  */
 export function evaluarCierre(
   netosDeRenglon: Decimal[],
   impreso: Decimal,
+  integridad?: IntegridadDeFilas,
 ): CierreCompatible {
   const calculado = netosDeRenglon.reduce((acc, v) => acc.plus(v), new Decimal(0));
   const diferencia = calculado.minus(impreso).abs();
@@ -139,6 +166,27 @@ export function evaluarCierre(
     decimalesDelPie,
     diferencia,
   };
+
+  /*
+   * Antes que cualquier cuenta: si falta un renglón, no hay redondeo que valga.
+   *
+   * Se comprueba primero para que el motivo que se informa sea el verdadero. Un
+   * comprobante al que le falta un artículo no «no cierra por 0,03»: le falta un
+   * artículo, y eso es lo que hay que decir.
+   */
+  if (integridad && integridad.conImporte < integridad.vistas) {
+    const faltan = integridad.vistas - integridad.conImporte;
+    return {
+      ...base,
+      politica: null,
+      ajusteResidual: diferencia,
+      compatible: false,
+      explicacion:
+        `${faltan} de ${integridad.vistas} renglones no tienen importe. El margen por ` +
+        'redondeo sólo puede explicar lo que se leyó: un renglón que falta no entra ahí, ' +
+        'por más que los números lleguen a tocarse.',
+    };
+  }
 
   for (const politica of ['truncamiento', 'redondeo'] as PoliticaDeRedondeo[]) {
     const deLaSuma = netosDeRenglon.reduce<Intervalo>(
