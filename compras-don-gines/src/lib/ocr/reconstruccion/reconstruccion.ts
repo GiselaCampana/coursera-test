@@ -124,10 +124,36 @@ export interface OpcionesDeReconstruccion {
  */
 const PASADA_PRINCIPAL = 'completo:directo';
 
+/**
+ * Lo que la reconstrucción tiene listo antes de decidir dónde va cada celda.
+ *
+ * Se expone para poder armar **varias** candidatas de tabla sobre la misma
+ * evidencia sin volver a leer, enderezar y delimitar columnas tres veces.
+ */
+export interface ContextoDeTabla {
+  cuerpo: RenglonVisual[];
+  columnas: ColumnaEspacial[];
+  metodo: MetodoDeLimites;
+  encabezados: string[];
+  alturaTipica: number;
+  inclinacionGrados: number;
+  seEnderezo: boolean;
+  notas: string[];
+  hayColumnasNumericas: boolean;
+}
+
 export function reconstruirTabla(
   evidencia: EvidenciaDeLectura,
   opciones: OpcionesDeReconstruccion = {},
 ): TablaReconstruida {
+  const { tabla } = reconstruirConContexto(evidencia, opciones);
+  return tabla;
+}
+
+export function reconstruirConContexto(
+  evidencia: EvidenciaDeLectura,
+  opciones: OpcionesDeReconstruccion = {},
+): { tabla: TablaReconstruida; contexto: ContextoDeTabla } {
   const comienzo = Date.now();
   const notas: string[] = [];
 
@@ -249,18 +275,33 @@ export function reconstruirTabla(
     });
   }
 
-  return {
+  const contexto: ContextoDeTabla = {
+    cuerpo,
     columnas: limites.columnas,
     metodo: limites.metodo,
     encabezados: titulos ? titulos.observaciones.map((o) => textoPreferido(o)) : [],
-    renglones,
-    filasVisibles: cuerpo.length,
+    alturaTipica,
     inclinacionGrados: enGrados(inclinacion),
     seEnderezo: corregir,
-    alturaTipica,
     notas,
-    valoresDeOtraPasada,
-    ms: Date.now() - comienzo,
+    hayColumnasNumericas,
+  };
+
+  return {
+    contexto,
+    tabla: {
+      columnas: limites.columnas,
+      metodo: limites.metodo,
+      encabezados: contexto.encabezados,
+      renglones,
+      filasVisibles: cuerpo.length,
+      inclinacionGrados: enGrados(inclinacion),
+      seEnderezo: corregir,
+      alturaTipica,
+      notas,
+      valoresDeOtraPasada,
+      ms: Date.now() - comienzo,
+    },
   };
 }
 

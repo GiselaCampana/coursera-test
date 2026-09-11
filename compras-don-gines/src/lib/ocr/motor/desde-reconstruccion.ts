@@ -25,11 +25,11 @@ import type { Celda, FilaDeDatos } from '@/lib/ocr/motor/tabla';
 import { leerEmisor, leerPie, type EmisorLeido } from '@/lib/ocr/motor/motor';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import {
-  reconstruirTabla,
   type LecturaDeCelda,
   type RenglonReconstruido,
   type TablaReconstruida,
 } from '@/lib/ocr/reconstruccion/reconstruccion';
+import { candidatasDeTabla } from '@/lib/ocr/reconstruccion/candidatas-de-tabla';
 import type { ColumnaEspacial } from '@/lib/ocr/reconstruccion/columnas-espaciales';
 import { textoDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
 
@@ -60,6 +60,9 @@ export interface InformeReconstruido {
   /** Qué tendría que resolver una persona, y qué es sólo una anotación. */
   pendientes: Pendiente[];
   resumen: ResumenDePendientes;
+  /** Cómo se armó la tabla que ganó, y con qué compitió. */
+  reconstruccionElegida: string;
+  reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
   ms: number;
 }
 
@@ -73,32 +76,53 @@ export function interpretarReconstruccion(
 ): InformeReconstruido {
   const comienzo = Date.now();
 
-  const tabla = reconstruirTabla(evidencia);
   const textos = textoDeLaEvidencia(evidencia);
   const emisor = leerEmisor(textos, opciones.cuitDelReceptor);
 
-  const columnas = tabla.columnas.map((c) => c.campo);
+  /*
+   * Se interpretan **todas** las maneras de armar la tabla y gana la que mejor
+   * cierra, no la que se armó primero.
+   *
+   * Es lo que permite probar un reparto global de las columnas sin arriesgar lo
+   * que la reconstrucción por cercanía ya resolvía bien: si el reparto mejora el
+   * comprobante, gana con la suma contra el pie; si lo empeora, pierde y no tocó
+   * nada. Ninguna de las dos muta a la otra.
+   */
+  const armados = candidatasDeTabla(evidencia).map((candidata) => {
+    const columnas = candidata.tabla.columnas.map((c) => c.campo);
+    const lecturas: CandidataDeTabla[] = [];
 
-  const candidatas: CandidataDeTabla[] = [];
-  for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
-    const pie = leerPie(textos.completo, convencion);
-    const renglones = elegirParaElDocumento(tabla.renglones, columnas, convencion, pie.netTotal);
-    const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
-      netTotal: pie.netTotal,
-      /*
-       * Las filas que se vieron son las que la reconstrucción armó, no las
-       * líneas de texto que hay en la banda de la tabla.
-       *
-       * Pasar las líneas castigaba a los comprobantes que tienen texto suelto
-       * debajo de la tabla —una leyenda, un comentario, el borde— como si se
-       * hubieran perdido artículos: la factura de Ezra tiene seis renglones y
-       * trece líneas ahí, y perdía dos décimas de confianza por siete artículos
-       * que no existen.
-       */
-      filasVistas: tabla.renglones.length,
-    });
-    candidatas.push({ convencion, pie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
-  }
+    for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
+      const pie = leerPie(textos.completo, convencion);
+      const renglones = elegirParaElDocumento(
+        candidata.tabla.renglones,
+        columnas,
+        convencion,
+        pie.netTotal,
+      );
+      const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
+        netTotal: pie.netTotal,
+        /*
+         * Las filas esperadas salen del consenso entre columnas, no de una sola
+         * fuente. Si tres columnas sostienen dos renglones y una sostiene uno
+         * porque el OCR perdió un valor, hay dos.
+         */
+        filasVistas: Math.max(candidata.filasEsperadas, candidata.tabla.renglones.length),
+      });
+      lecturas.push({ convencion, pie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
+    }
+
+    return { candidata, lecturas };
+  });
+
+  const mejorDeCada = armados.map((armado) => ({
+    ...armado,
+    mejor: Math.max(...armado.lecturas.map((l) => l.puntaje)),
+  }));
+  const elegido = mejorDeCada.reduce((a, b) => (b.mejor > a.mejor ? b : a));
+
+  const tabla = elegido.candidata.tabla;
+  const candidatas = elegido.lecturas;
 
   const sinResolver = tabla.columnas
     .filter((c) => c.titulo !== null && c.campo === null && c.apoyos > 0)
@@ -108,10 +132,6 @@ export function interpretarReconstruccion(
    * Se decide en dos tiempos: primero un veredicto provisorio para saber qué
    * renglones cierran, y con eso se arma la lista de pendientes; después el
    * veredicto definitivo, que sólo frena por las **bloqueantes**.
-   *
-   * Hace falta el ida y vuelta porque qué bloquea depende de si el renglón
-   * cerró: una celda ambigua en un renglón que cuadra es una alternativa
-   * descartada, no un dato que falta.
    */
   const provisorio = decidir(candidatas, sinResolver);
   const pendientes = queFaltaResolver(tabla, provisorio, sinResolver);
@@ -129,6 +149,12 @@ export function interpretarReconstruccion(
     veredicto,
     pendientes,
     resumen: resumir(pendientes),
+    reconstruccionElegida: elegido.candidata.origen,
+    reconstruccionesProbadas: mejorDeCada.map((a) => ({
+      origen: a.candidata.origen,
+      puntaje: a.mejor,
+      renglones: a.candidata.tabla.renglones.length,
+    })),
     ms: Date.now() - comienzo,
   };
 }
