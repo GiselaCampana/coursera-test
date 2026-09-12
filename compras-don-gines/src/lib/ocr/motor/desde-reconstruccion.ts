@@ -45,6 +45,12 @@ import {
 import { candidatasDeTabla } from '@/lib/ocr/reconstruccion/candidatas-de-tabla';
 import type { ColumnaEspacial } from '@/lib/ocr/reconstruccion/columnas-espaciales';
 import { textoDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
+import {
+  celdasParaReleer,
+  convieneReleer,
+  sumarRelectura,
+  type EvidenciaDeRelectura,
+} from '@/lib/ocr/reconstruccion/relectura';
 
 /**
  * Interpretar un comprobante a partir de la evidencia con coordenadas.
@@ -76,14 +82,122 @@ export interface InformeReconstruido {
   /** Cómo se armó la tabla que ganó, y con qué compitió. */
   reconstruccionElegida: string;
   reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
+  /** Qué hizo la relectura focalizada, cuando hubo una. */
+  relectura?: InformeDeRelectura;
   ms: number;
+}
+
+/**
+ * Qué pasó con la relectura, medido aparte.
+ *
+ * Se informa siempre que haya habido una, gane o pierda. Una relectura que no
+ * recuperó nada es un dato tan útil como una que recuperó diez celdas: dice que
+ * el número no está en la foto y que lo que corresponde es pedírselo a una
+ * persona, no seguir intentando.
+ */
+export interface InformeDeRelectura {
+  /** Cuántas celdas bloqueadas justificaron la relectura. */
+  celdasPedidas: number;
+  /** Cuántas bandas se releyeron, dentro del presupuesto. */
+  bandas: number;
+  /** Cuánto tardó la relectura en sí, sin el resto del motor. */
+  ms: number;
+  /** ¿Ganó la lectura con relectura, o siguió ganando la original? */
+  gano: boolean;
+  /** Cuántos renglones se comprueban solos antes y después. */
+  comprobadosAntes: number;
+  comprobadosDespues: number;
+  /** Cuántos bloqueos había antes y quedaron después. */
+  bloqueosAntes: number;
+  bloqueosDespues: number;
 }
 
 export interface OpcionesDelMotorReconstruido {
   cuitDelReceptor?: string;
+  /**
+   * La evidencia de una relectura focalizada, si ya se capturó.
+   *
+   * Se usa **sólo si la primera reconstrucción quedó incompleta**, y se suma a
+   * la original en vez de reemplazarla: la lectura de la página entera sigue
+   * compitiendo dentro del mismo motor de candidatas, y si la relectura salió
+   * peor, pierde.
+   */
+  relectura?: EvidenciaDeRelectura;
 }
 
 export function interpretarReconstruccion(
+  evidencia: EvidenciaDeLectura,
+  opciones: OpcionesDelMotorReconstruido = {},
+): InformeReconstruido {
+  const primero = interpretarUnaVez(evidencia, opciones);
+  if (!opciones.relectura) return primero;
+
+  /*
+   * La relectura se activa **después** de que la primera reconstrucción quedó
+   * incompleta, nunca antes. Un comprobante que se leyó entero no se relee: no
+   * hay nada que recuperar y sí hay medio segundo por cada banda que gastar.
+   */
+  const pedidas = celdasParaReleer(
+    primero.tabla,
+    primero.pendientes,
+    renglonesQueNoCierran(primero),
+  );
+  if (!convieneReleer(pedidas)) return primero;
+
+  const segundo = interpretarUnaVez(sumarRelectura(evidencia, opciones.relectura), {
+    cuitDelReceptor: opciones.cuitDelReceptor,
+  });
+
+  /*
+   * Cuál de las dos vale lo decide el **mismo orden lexicográfico** que decide
+   * todo lo demás. No hay ninguna preferencia por la relectura: si los
+   * fragmentos nuevos no mejoran ni los renglones conservados, ni los
+   * comprobados, ni las reparaciones, gana la original.
+   */
+  const a = primero.veredicto.ganadora;
+  const b = segundo.veredicto.ganadora;
+  const gano = a !== null && b !== null ? compararCandidatas(b, a) < 0 : b !== null;
+
+  const informe: InformeDeRelectura = {
+    celdasPedidas: pedidas.length,
+    bandas: new Set(opciones.relectura.pasadas.map((p) => p.zona)).size,
+    ms: opciones.relectura.msTotal,
+    gano,
+    comprobadosAntes: comprobados(primero),
+    comprobadosDespues: comprobados(segundo),
+    bloqueosAntes: soloBloqueantes(primero.pendientes).length,
+    bloqueosDespues: soloBloqueantes(segundo.pendientes).length,
+  };
+
+  const elegido = gano ? segundo : primero;
+  return { ...elegido, relectura: informe, ms: primero.ms + segundo.ms };
+}
+
+/**
+ * Qué renglones no cumplen su propia aritmética, empezando en 1.
+ *
+ * Un renglón que tiene controles y falla alguno es un renglón donde **alguna**
+ * de sus celdas numéricas se leyó mal, sin que se sepa cuál: la igualdad se
+ * rompe entera. Los que no tienen ningún control no entran acá —a ésos les
+ * falta una celda y eso ya lo pide la lista de pendientes.
+ */
+export function renglonesQueNoCierran(informe: InformeReconstruido): number[] {
+  const renglones = informe.veredicto.ganadora?.renglones ?? [];
+  const numeros: number[] = [];
+  renglones.forEach((renglon, indice) => {
+    if (renglon.controles.length > 0 && renglon.controles.some((c) => !c.paso)) {
+      numeros.push(indice + 1);
+    }
+  });
+  return numeros;
+}
+
+function comprobados(informe: InformeReconstruido): number {
+  const renglones = informe.veredicto.ganadora?.renglones ?? [];
+  return renglones.filter((r) => r.controles.length > 0 && r.controles.every((c) => c.paso)).length;
+}
+
+function interpretarUnaVez(
   evidencia: EvidenciaDeLectura,
   opciones: OpcionesDelMotorReconstruido = {},
 ): InformeReconstruido {
@@ -138,19 +252,31 @@ export function interpretarReconstruccion(
   });
 
   /*
-   * Entre reconstrucciones se aplica el **mismo orden lexicográfico** que entre
-   * lecturas de una misma reconstrucción: no perder renglones, comprobarlos
-   * solos, no suponer nada, y el cierre contra el pie recién sexto. Antes eran
-   * dos criterios distintos —acá el puntaje, allá el puntaje con desempate— y
-   * que fueran dos era el problema: una reconstrucción podía ganar por cerrar
-   * mejor habiendo perdido un artículo del papel.
+   * Dentro de cada reconstrucción se elige con el **orden lexicográfico**: ahí
+   * el conjunto de renglones está fijo y «conservar todos los renglones reales»
+   * quiere decir lo que tiene que querer decir, que es no tirar ninguno para
+   * que la cuenta cierre.
+   *
+   * Entre reconstrucciones distintas la pregunta es otra y el orden no sirve
+   * para responderla. Son hipótesis de **estructura**: una parte la tabla en
+   * veintitrés renglones y otra en veinticuatro porque cortó una descripción a
+   * la mitad, y comparar «cuántos renglones reales conserva cada una» premia a
+   * la que más corta. Cuántos artículos tiene el papel ya lo decidió el
+   * consenso entre columnas —y `puntuarTabla` penaliza a la lectura que
+   * interpreta menos filas de las que el detector vio—, así que acá se compara
+   * el puntaje del comprobante, con la lectura que menos repara como desempate.
+   *
+   * Fue un error medido: con el orden lexicográfico aplicado también acá, la
+   * relectura de la banda de precios hacía ganar una reconstrucción de
+   * veinticuatro renglones —uno de ellos la continuación de una descripción— a
+   * la de veintitrés, que es la correcta.
    */
   const mejorDeCada = armados.map((armado) => {
     const ordenadas = [...armado.lecturas].sort(compararCandidatas);
-    return { ...armado, mejorLectura: ordenadas[0], mejor: ordenadas[0].puntaje };
+    return { ...armado, mejor: ordenadas[0].puntaje, reparaciones: ordenadas[0].reparaciones };
   });
   const elegido = mejorDeCada.reduce((a, b) =>
-    compararCandidatas(b.mejorLectura, a.mejorLectura) < 0 ? b : a,
+    b.mejor > a.mejor || (b.mejor === a.mejor && b.reparaciones < a.reparaciones) ? b : a,
   );
 
   const tabla = elegido.candidata.tabla;

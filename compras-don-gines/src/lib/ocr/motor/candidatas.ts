@@ -433,6 +433,22 @@ function combinarNumeros(
     const descuento = numeros.get('descuentoPct') ?? null;
 
     /*
+     * Un descuento de más de cien por ciento no es un descuento.
+     *
+     * Parece obvio y no lo era: una celda leída «629» entraba como 6,29 de
+     * fracción y el neto del renglón salía **negativo** —importe × (1 − 6,29)—
+     * sin que nada lo frenara. Y no se nota, porque un negativo grande se
+     * compensa en la suma con otro renglón leído de más y el comprobante parece
+     * cerrar contra el pie. Sobre una factura del banco eso dejaba cuatro
+     * artículos con costo negativo y la suma a dos décimas del neto impreso.
+     *
+     * No se corrige el valor ni se lo aproxima: la lectura se descarta. Si la
+     * celda de bonificación no dice un porcentaje posible, el renglón se
+     * interpreta sin descuento y, si hace falta, se pide.
+     */
+    if (descuento !== null && descuento.gt(100)) continue;
+
+    /*
      * Cuando hay descuento y un importe impreso, pero no hay una columna con el
      * precio ya descontado, no se sabe si ese importe es el bruto o el neto: las
      * dos formas están en el banco de facturas. Se generan las dos lecturas.
@@ -769,6 +785,20 @@ export function puntuarTabla(
  * de las dos cosas: un renglón sin importe no se inventa.
  */
 export function netoDelRenglon(renglon: RenglonCandidato): Decimal | null {
+  const valor = netoCrudo(renglon);
+  /*
+   * Red de seguridad: **un renglón no puede valer menos que nada**.
+   *
+   * Con el descuento acotado a cien por ciento esto no debería dispararse
+   * nunca, y está igual porque el daño de un neto negativo es silencioso: no
+   * rompe ninguna igualdad, se compensa con otro renglón leído de más y el
+   * comprobante cierra contra el pie con dos artículos de costo negativo
+   * adentro. Un valor imposible tiene que quedar **sin valor** y pedirse.
+   */
+  return valor && valor.lt(0) ? null : valor;
+}
+
+function netoCrudo(renglon: RenglonCandidato): Decimal | null {
   if (renglon.importe) {
     /*
      * Un importe bruto todavía no es lo que el pie totaliza: la bonificación de

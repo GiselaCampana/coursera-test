@@ -1,0 +1,226 @@
+{
+ "errecalde": [
+  {
+   "id": "relectura:UNID--numero",
+   "caja": {
+    "x0": 0.463,
+    "y0": 0.328723,
+    "x1": 0.502,
+    "y1": 0.7342384279653027
+   },
+   "tipo": "numero",
+   "celdas": 10,
+   "columna": "UNID.",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:CANTIDAD-numero",
+   "caja": {
+    "x0": 0.519,
+    "y0": 0.328723,
+    "x1": 0.5650000000000001,
+    "y1": 0.7342384279653027
+   },
+   "tipo": "numero",
+   "celdas": 10,
+   "columna": "CANTIDAD",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:UBTOTA-numero",
+   "caja": {
+    "x0": 0.743,
+    "y0": 0.328723,
+    "x1": 0.821,
+    "y1": 0.714227
+   },
+   "tipo": "numero",
+   "celdas": 9,
+   "columna": "UBTOTA",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:PRECIO-numero",
+   "caja": {
+    "x0": 0.581,
+    "y0": 0.36760186102206294,
+    "x1": 0.648,
+    "y1": 0.7342384279653027
+   },
+   "tipo": "numero",
+   "celdas": 9,
+   "columna": "PRECIO",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  }
+ ],
+ "mabelherdi": [],
+ "ezra": [],
+ "barraza": [],
+ "los-calvos-212356": [],
+ "los-calvos-213103": [
+  {
+   "id": "relectura:PIEZAS-numero",
+   "caja": {
+    "x0": 0.200995,
+    "y0": 0.6320870000000001,
+    "x1": 0.256,
+    "y1": 0.835650111111111
+   },
+   "tipo": "numero",
+   "celdas": 5,
+   "columna": "PIEZAS",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:PRECIO-numero",
+   "caja": {
+    "x0": 0.697,
+    "y0": 0.6320870000000001,
+    "x1": 0.752,
+    "y1": 0.835650111111111
+   },
+   "tipo": "numero",
+   "celdas": 5,
+   "columna": "PRECIO",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:KILOS-numero",
+   "caja": {
+    "x0": 0.127885,
+    "y0": 0.6320870000000001,
+    "x1": 0.20899500000000001,
+    "y1": 0.7739005
+   },
+   "tipo": "numero",
+   "celdas": 4,
+   "columna": "KILOS",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  },
+  {
+   "id": "relectura:IMPORTE-numero",
+   "caja": {
+    "x0": 0.861,
+    "y0": 0.6320870000000001,
+    "x1": 0.926,
+    "y1": 0.835650111111111
+   },
+   "tipo": "numero",
+   "celdas": 4,
+   "columna": "IMPORTE",
+   "esencial": true,
+   "variantes": [
+    {
+     "nombre": "numeros",
+     "preparacion": "directo",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    },
+    {
+     "nombre": "numeros-limpio",
+     "preparacion": "limpieza-fuerte",
+     "alfabeto": "0123456789.,$%- ",
+     "segmentacion": "bloque"
+    }
+   ]
+  }
+ ]
+}

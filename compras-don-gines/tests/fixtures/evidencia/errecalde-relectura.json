@@ -1,0 +1,1509 @@
+{
+ "anchoPx": 4284,
+ "altoPx": 5712,
+ "pasadas": [
+  {
+   "id": "relectura:UNID--numero:numeros",
+   "zona": "relectura:UNID--numero",
+   "variante": "numeros",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.46288515406162467,
+    "y0": 0.328781512605042,
+    "x1": 0.5018674136321195,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 10,
+   "columna": "UNID.",
+   "fragmentos": 7,
+   "ms": 485
+  },
+  {
+   "id": "relectura:UNID--numero:numeros-limpio",
+   "zona": "relectura:UNID--numero",
+   "variante": "numeros-limpio",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.46288515406162467,
+    "y0": 0.328781512605042,
+    "x1": 0.5018674136321195,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 10,
+   "columna": "UNID.",
+   "fragmentos": 8,
+   "ms": 253
+  },
+  {
+   "id": "relectura:CANTIDAD-numero:numeros",
+   "zona": "relectura:CANTIDAD-numero",
+   "variante": "numeros",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.5189075630252101,
+    "y0": 0.328781512605042,
+    "x1": 0.5648926237161531,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 10,
+   "columna": "CANTIDAD",
+   "fragmentos": 16,
+   "ms": 471
+  },
+  {
+   "id": "relectura:CANTIDAD-numero:numeros-limpio",
+   "zona": "relectura:CANTIDAD-numero",
+   "variante": "numeros-limpio",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.5189075630252101,
+    "y0": 0.328781512605042,
+    "x1": 0.5648926237161531,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 10,
+   "columna": "CANTIDAD",
+   "fragmentos": 16,
+   "ms": 429
+  },
+  {
+   "id": "relectura:UBTOTA-numero:numeros",
+   "zona": "relectura:UBTOTA-numero",
+   "variante": "numeros",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.7429971988795518,
+    "y0": 0.328781512605042,
+    "x1": 0.8209617180205415,
+    "y1": 0.7142857142857143
+   },
+   "celdasQueCubre": 9,
+   "columna": "UBTOTA",
+   "fragmentos": 20,
+   "ms": 642
+  },
+  {
+   "id": "relectura:UBTOTA-numero:numeros-limpio",
+   "zona": "relectura:UBTOTA-numero",
+   "variante": "numeros-limpio",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.7429971988795518,
+    "y0": 0.328781512605042,
+    "x1": 0.8209617180205415,
+    "y1": 0.7142857142857143
+   },
+   "celdasQueCubre": 9,
+   "columna": "UBTOTA",
+   "fragmentos": 20,
+   "ms": 603
+  },
+  {
+   "id": "relectura:PRECIO-numero:numeros",
+   "zona": "relectura:PRECIO-numero",
+   "variante": "numeros",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.580999066293184,
+    "y0": 0.36764705882352944,
+    "x1": 0.6479925303454716,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 9,
+   "columna": "PRECIO",
+   "fragmentos": 18,
+   "ms": 517
+  },
+  {
+   "id": "relectura:PRECIO-numero:numeros-limpio",
+   "zona": "relectura:PRECIO-numero",
+   "variante": "numeros-limpio",
+   "psm": "bloque",
+   "alfabeto": "0123456789.,$%- ",
+   "region": {
+    "x0": 0.580999066293184,
+    "y0": 0.36764705882352944,
+    "x1": 0.6479925303454716,
+    "y1": 0.7342436974789915
+   },
+   "celdasQueCubre": 9,
+   "columna": "PRECIO",
+   "fragmentos": 19,
+   "ms": 475
+  }
+ ],
+ "fragmentos": [
+  {
+   "texto": "20",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.36358,
+    "x1": 0.50187,
+    "y1": 0.37879
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.61
+  },
+  {
+   "texto": "70",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.42254,
+    "x1": 0.50187,
+    "y1": 0.43674
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.76
+  },
+  {
+   "texto": "70",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.4614,
+    "x1": 0.50187,
+    "y1": 0.47509
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.76
+  },
+  {
+   "texto": "040",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.49975,
+    "x1": 0.50187,
+    "y1": 0.51327
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.59
+  },
+  {
+   "texto": ".",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.53675,
+    "x1": 0.50187,
+    "y1": 0.55128
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "7",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.55567,
+    "x1": 0.50187,
+    "y1": 0.5702
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.61
+  },
+  {
+   "texto": "7",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.57493,
+    "x1": 0.50187,
+    "y1": 0.5898
+   },
+   "pasada": "relectura:UNID--numero:numeros",
+   "confianza": 0.78
+  },
+  {
+   "texto": "4",
+   "caja": {
+    "x0": 0.48902,
+    "y0": 0.33301,
+    "x1": 0.49488,
+    "y1": 0.33976
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.56
+  },
+  {
+   "texto": "2",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.36358,
+    "x1": 0.50187,
+    "y1": 0.37896
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.78
+  },
+  {
+   "texto": "710",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.42254,
+    "x1": 0.50187,
+    "y1": 0.43674
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.9
+  },
+  {
+   "texto": "40.",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.49975,
+    "x1": 0.50187,
+    "y1": 0.51327
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "7",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.53675,
+    "x1": 0.50187,
+    "y1": 0.55128
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.25
+  },
+  {
+   "texto": "7",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.55567,
+    "x1": 0.50187,
+    "y1": 0.5702
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.68
+  },
+  {
+   "texto": "3",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.57476,
+    "x1": 0.50187,
+    "y1": 0.5898
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.73
+  },
+  {
+   "texto": "13",
+   "caja": {
+    "x0": 0.46289,
+    "y0": 0.59402,
+    "x1": 0.50187,
+    "y1": 0.60923
+   },
+   "pasada": "relectura:UNID--numero:numeros-limpio",
+   "confianza": 0.3
+  },
+  {
+   "texto": "4",
+   "caja": {
+    "x0": 0.5543,
+    "y0": 0.33469,
+    "x1": 0.56016,
+    "y1": 0.34078
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.96
+  },
+  {
+   "texto": "78549",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.36494,
+    "x1": 0.56489,
+    "y1": 0.38183
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.22
+  },
+  {
+   "texto": "18.38",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.4043,
+    "x1": 0.56489,
+    "y1": 0.41984
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.76
+  },
+  {
+   "texto": ".",
+   "caja": {
+    "x0": 0.55295,
+    "y0": 0.40312,
+    "x1": 0.56444,
+    "y1": 0.42356
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "0",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.42322,
+    "x1": 0.56489,
+    "y1": 0.43707
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "929",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.44231,
+    "x1": 0.56489,
+    "y1": 0.45802
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.55
+  },
+  {
+   "texto": "563",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.49975,
+    "x1": 0.56489,
+    "y1": 0.51513
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.85
+  },
+  {
+   "texto": ".",
+   "caja": {
+    "x0": 0.5534,
+    "y0": 0.49823,
+    "x1": 0.56489,
+    "y1": 0.51901
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "309",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.5185,
+    "x1": 0.56489,
+    "y1": 0.53354
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "5",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.53641,
+    "x1": 0.56489,
+    "y1": 0.55297
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "1069",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.57476,
+    "x1": 0.56489,
+    "y1": 0.59166
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.45
+  },
+  {
+   "texto": "2",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.59419,
+    "x1": 0.56489,
+    "y1": 0.61125
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.43
+  },
+  {
+   "texto": "1419",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.61379,
+    "x1": 0.56489,
+    "y1": 0.63051
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0.43
+  },
+  {
+   "texto": "19219",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.63338,
+    "x1": 0.56489,
+    "y1": 0.65045
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "790",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.65349,
+    "x1": 0.56489,
+    "y1": 0.67072
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "28.9",
+   "caja": {
+    "x0": 0.52342,
+    "y0": 0.70231,
+    "x1": 0.54528,
+    "y1": 0.71042
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "4",
+   "caja": {
+    "x0": 0.55407,
+    "y0": 0.33469,
+    "x1": 0.56038,
+    "y1": 0.34095
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0.96
+  },
+  {
+   "texto": "785",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.36494,
+    "x1": 0.56489,
+    "y1": 0.38183
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "7.",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.38436,
+    "x1": 0.56489,
+    "y1": 0.40109
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "18.36",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.40447,
+    "x1": 0.56489,
+    "y1": 0.41984
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "%",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.48083,
+    "x1": 0.56489,
+    "y1": 0.49603
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "56.3",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.49975,
+    "x1": 0.56489,
+    "y1": 0.51513
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0.59
+  },
+  {
+   "texto": "9",
+   "caja": {
+    "x0": 0.54979,
+    "y0": 0.49823,
+    "x1": 0.56444,
+    "y1": 0.51969
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "309",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.5185,
+    "x1": 0.56489,
+    "y1": 0.53354
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0.01
+  },
+  {
+   "texto": "15",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.53675,
+    "x1": 0.56489,
+    "y1": 0.55297
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "10619",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.57476,
+    "x1": 0.56489,
+    "y1": 0.59166
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0.45
+  },
+  {
+   "texto": "2249",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.59419,
+    "x1": 0.56489,
+    "y1": 0.61125
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "14419",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.61379,
+    "x1": 0.56489,
+    "y1": 0.63034
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0.74
+  },
+  {
+   "texto": "19.21",
+   "caja": {
+    "x0": 0.51891,
+    "y0": 0.64149,
+    "x1": 0.5428,
+    "y1": 0.64859
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "7.9",
+   "caja": {
+    "x0": 0.52973,
+    "y0": 0.6616,
+    "x1": 0.54438,
+    "y1": 0.66869
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "4.75",
+   "caja": {
+    "x0": 0.52251,
+    "y0": 0.68187,
+    "x1": 0.54438,
+    "y1": 0.6893
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "28.9",
+   "caja": {
+    "x0": 0.52364,
+    "y0": 0.70248,
+    "x1": 0.54506,
+    "y1": 0.71008
+   },
+   "pasada": "relectura:CANTIDAD-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "$38.638,50",
+   "caja": {
+    "x0": 0.75628,
+    "y0": 0.33328,
+    "x1": 0.80854,
+    "y1": 0.34163
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.84
+  },
+  {
+   "texto": "$119.231,41",
+   "caja": {
+    "x0": 0.74942,
+    "y0": 0.35255,
+    "x1": 0.80661,
+    "y1": 0.36123
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$544.245,04",
+   "caja": {
+    "x0": 0.74857,
+    "y0": 0.37215,
+    "x1": 0.80747,
+    "y1": 0.38082
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.83
+  },
+  {
+   "texto": "$215.715,40",
+   "caja": {
+    "x0": 0.74792,
+    "y0": 0.39175,
+    "x1": 0.80618,
+    "y1": 0.39994
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$277.041,69",
+   "caja": {
+    "x0": 0.74707,
+    "y0": 0.41102,
+    "x1": 0.80533,
+    "y1": 0.41873
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$10.920,12",
+   "caja": {
+    "x0": 0.75264,
+    "y0": 0.43014,
+    "x1": 0.80447,
+    "y1": 0.43801
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$57.055,21",
+   "caja": {
+    "x0": 0.75156,
+    "y0": 0.44941,
+    "x1": 0.80276,
+    "y1": 0.45712
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.87
+  },
+  {
+   "texto": "$22.587,34",
+   "caja": {
+    "x0": 0.75092,
+    "y0": 0.46853,
+    "x1": 0.80404,
+    "y1": 0.47624
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$79.207,44",
+   "caja": {
+    "x0": 0.75071,
+    "y0": 0.48748,
+    "x1": 0.80383,
+    "y1": 0.49519
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$601.361,45",
+   "caja": {
+    "x0": 0.74385,
+    "y0": 0.50611,
+    "x1": 0.80297,
+    "y1": 0.51431
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0
+  },
+  {
+   "texto": "$243.385,16",
+   "caja": {
+    "x0": 0.74471,
+    "y0": 0.52459,
+    "x1": 0.8049,
+    "y1": 0.53262
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$123.154,88",
+   "caja": {
+    "x0": 0.74557,
+    "y0": 0.5445,
+    "x1": 0.80683,
+    "y1": 0.55237
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$68.791,22",
+   "caja": {
+    "x0": 0.75285,
+    "y0": 0.5633,
+    "x1": 0.80875,
+    "y1": 0.57149
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.89
+  },
+  {
+   "texto": "$130.465,79",
+   "caja": {
+    "x0": 0.74771,
+    "y0": 0.58257,
+    "x1": 0.80961,
+    "y1": 0.59108
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.85
+  },
+  {
+   "texto": "$277.152,45",
+   "caja": {
+    "x0": 0.74899,
+    "y0": 0.60201,
+    "x1": 0.81089,
+    "y1": 0.61052
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.86
+  },
+  {
+   "texto": "$45.655,74",
+   "caja": {
+    "x0": 0.75692,
+    "y0": 0.62193,
+    "x1": 0.81239,
+    "y1": 0.62964
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$200.784,37",
+   "caja": {
+    "x0": 0.75178,
+    "y0": 0.64104,
+    "x1": 0.81347,
+    "y1": 0.64955
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$116.913,32",
+   "caja": {
+    "x0": 0.75285,
+    "y0": 0.66144,
+    "x1": 0.81518,
+    "y1": 0.66995
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$63.152,43",
+   "caja": {
+    "x0": 0.76013,
+    "y0": 0.68152,
+    "x1": 0.81668,
+    "y1": 0.69019
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$187.236,17",
+   "caja": {
+    "x0": 0.75521,
+    "y0": 0.70192,
+    "x1": 0.81753,
+    "y1": 0.71091
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$38.638,50",
+   "caja": {
+    "x0": 0.75628,
+    "y0": 0.33328,
+    "x1": 0.80854,
+    "y1": 0.34163
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.83
+  },
+  {
+   "texto": "$119.231,41",
+   "caja": {
+    "x0": 0.74942,
+    "y0": 0.35271,
+    "x1": 0.80661,
+    "y1": 0.36139
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$544.245,04",
+   "caja": {
+    "x0": 0.74857,
+    "y0": 0.37215,
+    "x1": 0.80725,
+    "y1": 0.38082
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$215.715,40",
+   "caja": {
+    "x0": 0.74792,
+    "y0": 0.39159,
+    "x1": 0.80618,
+    "y1": 0.39994
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.89
+  },
+  {
+   "texto": "$277.041,69",
+   "caja": {
+    "x0": 0.74728,
+    "y0": 0.41102,
+    "x1": 0.80533,
+    "y1": 0.41873
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$10.920,12",
+   "caja": {
+    "x0": 0.75242,
+    "y0": 0.42998,
+    "x1": 0.80426,
+    "y1": 0.43817
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$57.055,21",
+   "caja": {
+    "x0": 0.75156,
+    "y0": 0.44925,
+    "x1": 0.80276,
+    "y1": 0.45712
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.85
+  },
+  {
+   "texto": "$22.587,34",
+   "caja": {
+    "x0": 0.75092,
+    "y0": 0.46853,
+    "x1": 0.80404,
+    "y1": 0.47624
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.89
+  },
+  {
+   "texto": "$79.207,44",
+   "caja": {
+    "x0": 0.75071,
+    "y0": 0.48748,
+    "x1": 0.80383,
+    "y1": 0.49519
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$601.361,45",
+   "caja": {
+    "x0": 0.74364,
+    "y0": 0.50611,
+    "x1": 0.80297,
+    "y1": 0.51431
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0
+  },
+  {
+   "texto": "$243.385,16",
+   "caja": {
+    "x0": 0.74471,
+    "y0": 0.52459,
+    "x1": 0.8049,
+    "y1": 0.53262
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$123.154,88",
+   "caja": {
+    "x0": 0.74557,
+    "y0": 0.5445,
+    "x1": 0.80661,
+    "y1": 0.55237
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$68.791,22",
+   "caja": {
+    "x0": 0.75285,
+    "y0": 0.56314,
+    "x1": 0.80875,
+    "y1": 0.57149
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.81
+  },
+  {
+   "texto": "$130.465,79",
+   "caja": {
+    "x0": 0.74771,
+    "y0": 0.58257,
+    "x1": 0.8094,
+    "y1": 0.59108
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$277.152,45",
+   "caja": {
+    "x0": 0.74899,
+    "y0": 0.60201,
+    "x1": 0.81068,
+    "y1": 0.61052
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.75
+  },
+  {
+   "texto": "$45.655,74",
+   "caja": {
+    "x0": 0.75692,
+    "y0": 0.62193,
+    "x1": 0.81239,
+    "y1": 0.62964
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$200.784,37",
+   "caja": {
+    "x0": 0.75178,
+    "y0": 0.64104,
+    "x1": 0.81347,
+    "y1": 0.64955
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$116.913,32",
+   "caja": {
+    "x0": 0.75285,
+    "y0": 0.66144,
+    "x1": 0.81518,
+    "y1": 0.66995
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$63.152,43",
+   "caja": {
+    "x0": 0.76013,
+    "y0": 0.68168,
+    "x1": 0.81625,
+    "y1": 0.69019
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.8
+  },
+  {
+   "texto": "$187.236,17",
+   "caja": {
+    "x0": 0.75542,
+    "y0": 0.70192,
+    "x1": 0.81753,
+    "y1": 0.71075
+   },
+   "pasada": "relectura:UBTOTA-numero:numeros-limpio",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$6.933,06",
+   "caja": {
+    "x0": 0.59179,
+    "y0": 0.37284,
+    "x1": 0.63964,
+    "y1": 0.38109
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.89
+  },
+  {
+   "texto": "$12.689,14",
+   "caja": {
+    "x0": 0.58548,
+    "y0": 0.39239,
+    "x1": 0.63924,
+    "y1": 0.40018
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$15.073,00",
+   "caja": {
+    "x0": 0.58507,
+    "y0": 0.41179,
+    "x1": 0.63903,
+    "y1": 0.41882
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$1.092,01",
+   "caja": {
+    "x0": 0.59118,
+    "y0": 0.43012,
+    "x1": 0.637,
+    "y1": 0.43822
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$6,201,65",
+   "caja": {
+    "x0": 0.59098,
+    "y0": 0.44921,
+    "x1": 0.63801,
+    "y1": 0.45716
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.87
+  },
+  {
+   "texto": "$2.258,73",
+   "caja": {
+    "x0": 0.59057,
+    "y0": 0.46831,
+    "x1": 0.63761,
+    "y1": 0.47625
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$8.800,83",
+   "caja": {
+    "x0": 0.59016,
+    "y0": 0.48725,
+    "x1": 0.6374,
+    "y1": 0.49534
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.65
+  },
+  {
+   "texto": "$3.847,48",
+   "caja": {
+    "x0": 0.59016,
+    "y0": 0.50619,
+    "x1": 0.6372,
+    "y1": 0.51444
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$8.112,84",
+   "caja": {
+    "x0": 0.59057,
+    "y0": 0.52452,
+    "x1": 0.63781,
+    "y1": 0.53277
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$8.210,33",
+   "caja": {
+    "x0": 0.59098,
+    "y0": 0.54407,
+    "x1": 0.63801,
+    "y1": 0.55201
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$22.930,41",
+   "caja": {
+    "x0": 0.58528,
+    "y0": 0.56286,
+    "x1": 0.63761,
+    "y1": 0.57141
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$12.308,09",
+   "caja": {
+    "x0": 0.58568,
+    "y0": 0.58241,
+    "x1": 0.63985,
+    "y1": 0.59066
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$12.597,84",
+   "caja": {
+    "x0": 0.58589,
+    "y0": 0.60166,
+    "x1": 0.64066,
+    "y1": 0.60991
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$3.170,54",
+   "caja": {
+    "x0": 0.59301,
+    "y0": 0.62121,
+    "x1": 0.64148,
+    "y1": 0.62946
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$10.452,08",
+   "caja": {
+    "x0": 0.5869,
+    "y0": 0.64107,
+    "x1": 0.64209,
+    "y1": 0.64962
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$14.799,16",
+   "caja": {
+    "x0": 0.58731,
+    "y0": 0.66138,
+    "x1": 0.6429,
+    "y1": 0.66978
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.67
+  },
+  {
+   "texto": "$13.295,25",
+   "caja": {
+    "x0": 0.58772,
+    "y0": 0.6817,
+    "x1": 0.64331,
+    "y1": 0.69025
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$6.478,76",
+   "caja": {
+    "x0": 0.59485,
+    "y0": 0.70171,
+    "x1": 0.64453,
+    "y1": 0.71118
+   },
+   "pasada": "relectura:PRECIO-numero:numeros",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$6.933,06",
+   "caja": {
+    "x0": 0.59199,
+    "y0": 0.37284,
+    "x1": 0.63964,
+    "y1": 0.38109
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.87
+  },
+  {
+   "texto": "$12.689,14",
+   "caja": {
+    "x0": 0.58548,
+    "y0": 0.39239,
+    "x1": 0.63924,
+    "y1": 0.40018
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$15.073,00",
+   "caja": {
+    "x0": 0.58507,
+    "y0": 0.41179,
+    "x1": 0.63903,
+    "y1": 0.41882
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$1.092,01",
+   "caja": {
+    "x0": 0.59118,
+    "y0": 0.42997,
+    "x1": 0.637,
+    "y1": 0.43822
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$6.201,65",
+   "caja": {
+    "x0": 0.59098,
+    "y0": 0.44921,
+    "x1": 0.63801,
+    "y1": 0.45716
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$2.258,73",
+   "caja": {
+    "x0": 0.59057,
+    "y0": 0.46831,
+    "x1": 0.6374,
+    "y1": 0.47625
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$8.800,83",
+   "caja": {
+    "x0": 0.59016,
+    "y0": 0.48725,
+    "x1": 0.6372,
+    "y1": 0.49534
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$3.847,48",
+   "caja": {
+    "x0": 0.59016,
+    "y0": 0.50604,
+    "x1": 0.6372,
+    "y1": 0.51444
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.86
+  },
+  {
+   "texto": "$8.112,84",
+   "caja": {
+    "x0": 0.59057,
+    "y0": 0.52437,
+    "x1": 0.63781,
+    "y1": 0.53277
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$8.210,33",
+   "caja": {
+    "x0": 0.59098,
+    "y0": 0.54407,
+    "x1": 0.63801,
+    "y1": 0.55201
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$22.930,41",
+   "caja": {
+    "x0": 0.58548,
+    "y0": 0.56271,
+    "x1": 0.63761,
+    "y1": 0.57141
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.88
+  },
+  {
+   "texto": "$12.308,09",
+   "caja": {
+    "x0": 0.58568,
+    "y0": 0.58241,
+    "x1": 0.63964,
+    "y1": 0.59066
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.87
+  },
+  {
+   "texto": "$12.597,84",
+   "caja": {
+    "x0": 0.58609,
+    "y0": 0.60166,
+    "x1": 0.64066,
+    "y1": 0.60991
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.9
+  },
+  {
+   "texto": "$3.170,54",
+   "caja": {
+    "x0": 0.59301,
+    "y0": 0.62136,
+    "x1": 0.64148,
+    "y1": 0.62946
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$10.452,08",
+   "caja": {
+    "x0": 0.58711,
+    "y0": 0.64107,
+    "x1": 0.64209,
+    "y1": 0.64947
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$14.799,16",
+   "caja": {
+    "x0": 0.58731,
+    "y0": 0.66138,
+    "x1": 0.6427,
+    "y1": 0.66963
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$13.295,25",
+   "caja": {
+    "x0": 0.58772,
+    "y0": 0.6817,
+    "x1": 0.64311,
+    "y1": 0.6901
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.92
+  },
+  {
+   "texto": "$6.478,76",
+   "caja": {
+    "x0": 0.59485,
+    "y0": 0.70171,
+    "x1": 0.64433,
+    "y1": 0.71087
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.91
+  },
+  {
+   "texto": "$1.021,35",
+   "caja": {
+    "x0": 0.59505,
+    "y0": 0.72248,
+    "x1": 0.64494,
+    "y1": 0.73226
+   },
+   "pasada": "relectura:PRECIO-numero:numeros-limpio",
+   "confianza": 0.77
+  }
+ ],
+ "msTotal": 6803
+}

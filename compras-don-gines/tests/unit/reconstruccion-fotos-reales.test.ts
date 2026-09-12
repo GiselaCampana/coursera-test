@@ -6,6 +6,7 @@ import type { InformeReconstruido } from '@/lib/ocr/motor/desde-reconstruccion';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
 import { bloquea } from '@/lib/ocr/motor/pendientes';
+import { netoDelRenglon } from '@/lib/ocr/motor/candidatas';
 
 /**
  * La reconstrucción completa sobre las fotos reales, sin ningún analizador de
@@ -215,21 +216,43 @@ describe('el pie fiscal', () => {
     expect(ERRECALDE.pie.netTotal?.toFixed(2)).toBe('3830467.37');
   });
 
-  it('Errecalde: la suma del detalle llega al mismo orden que el neto impreso', () => {
+  it('Errecalde: la primera pasada no finge cerrar, y lo dice', () => {
     /*
-     * La distancia dejó de ser de escala y pasó a ser de unos pocos artículos.
+     * En la primera pasada la suma del detalle queda lejos del neto impreso
+     * —cerca de un diecinueve por ciento— y eso es lo que hay que informar.
      *
-     * **En la primera pasada** son unos cuatro puntos y medio, y eso es lo que
-     * corresponde informar: desde que el orden de preferencias es lexicográfico,
-     * el motor ya no acerca la suma al pie eligiendo la lectura que más se le
-     * parece. Antes daba 0,05 % y era peor, porque llegaba ahí con reparaciones
-     * elegidas para que el total diera —exactamente lo que el pie no puede
-     * decidir—. Con la relectura focalizada baja a menos del uno por ciento con
-     * evidencia de verdad, y eso se prueba aparte.
+     * Durante un rato el número fue mucho mejor y era mentira. Dos cosas lo
+     * maquillaban: una búsqueda que elegía reparaciones para acercar la suma al
+     * pie, y una celda de bonificación leída «629» que entraba como 629 % y
+     * dejaba el neto de cuatro renglones **negativo**. Un negativo grande se
+     * compensa con otro renglón leído de más, la suma daba a dos décimas del
+     * neto impreso y había cuatro artículos con costo negativo adentro.
+     *
+     * Así que se prueba lo contrario de lo que uno querría: que la lectura de
+     * la página entera **no cierra**, que no hay un solo renglón con valor
+     * imposible, y que el comprobante no se acepta solo. La distancia la cierra
+     * la relectura focalizada con evidencia nueva, y eso se prueba aparte.
      */
-    const suma = ERRECALDE.veredicto.ganadora!.sumaDeRenglones;
-    const neto = ERRECALDE.pie.netTotal!;
-    expect(suma.minus(neto).abs().div(neto).toNumber()).toBeLessThan(0.05);
+    const ganadora = ERRECALDE.veredicto.ganadora!;
+    expect(ganadora.cierre?.compatible).toBe(false);
+    expect(ERRECALDE.veredicto.decision).not.toBe('automatica');
+
+    for (const renglon of ganadora.renglones) {
+      const neto = netoDelRenglon(renglon);
+      expect(neto === null || neto.gte(0), renglon.descripcion).toBe(true);
+    }
+  });
+
+  it('Errecalde: un descuento imposible no se usa ni se aproxima', () => {
+    /*
+     * Ningún renglón puede quedar con una bonificación de más de cien por
+     * ciento. No se corrige el valor: la lectura se descarta y el renglón se
+     * interpreta sin descuento, que es lo único honesto que se puede hacer con
+     * una celda que dice algo que no existe.
+     */
+    for (const renglon of ERRECALDE.veredicto.ganadora!.renglones) {
+      expect(renglon.descuentoPct === null || renglon.descuentoPct.lte(1)).toBe(true);
+    }
   });
 });
 

@@ -64,20 +64,26 @@ export interface RasgosDeCandidata {
  * ¿Es éste un renglón que estaba impreso en el papel?
  *
  * Un renglón real tiene **algo que lo nombra** —una descripción o un código— y
- * **algún número**. No se le pide que cierre: un artículo cuyo precio salió
- * ilegible sigue siendo un artículo, y perderlo es justamente lo que el primer
+ * **algo de plata**: un importe, un precio, o un precio con descuento. No se le
+ * pide que cierre: un artículo cuyo subtotal salió ilegible sigue siendo un
+ * artículo si se leyó su precio, y perderlo es justamente lo que el primer
  * nivel del orden existe para impedir.
+ *
+ * Lo que **no** alcanza es tener un número cualquiera, y eso fue un error
+ * medido. Con «nombre más algún número» la continuación de una descripción
+ * —una línea que sigue el nombre del artículo de arriba y a la que le cayó
+ * encima un valor de la columna de cantidades— cuenta como artículo, y una
+ * reconstrucción con veinticuatro renglones le gana en el primer nivel a la de
+ * veintitrés, que es la correcta. Una continuación de descripción no se vuelve
+ * un artículo nuevo por contener una unidad o un número.
  */
 function esReal(renglon: RenglonCandidato): boolean {
   const nombrado = renglon.descripcion.trim() !== '' || renglon.codigo !== null;
-  const conNumero =
-    renglon.kilos !== null ||
-    renglon.cantidad !== null ||
-    renglon.piezas !== null ||
+  const conMonto =
+    renglon.importe !== null ||
     renglon.precioUnitario !== null ||
-    renglon.precioConDescuento !== null ||
-    renglon.importe !== null;
-  return nombrado && conNumero;
+    renglon.precioConDescuento !== null;
+  return nombrado && conMonto;
 }
 
 /** ¿Se comprueba solo? Al menos un control hecho y ninguno fallado. */
