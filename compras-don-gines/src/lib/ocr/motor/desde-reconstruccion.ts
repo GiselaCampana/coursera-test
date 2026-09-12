@@ -14,6 +14,7 @@ import {
 } from '@/lib/ocr/motor/candidatas';
 import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
 import { DERIVED_SUGGESTION, sugerenciasDerivadas } from '@/lib/ocr/motor/sugerencias';
+import { reconciliarPie, type PieFiscal } from '@/lib/ocr/motor/pie-fiscal';
 import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
@@ -83,6 +84,15 @@ export interface InformeReconstruido {
   /** Cómo se armó la tabla que ganó, y con qué compitió. */
   reconstruccionElegida: string;
   reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
+  /**
+   * El pie fiscal reconciliado, asignación por asignación.
+   *
+   * Es más que los cuatro totales de `pie`: dice de qué fragmento salió cada
+   * número, qué igualdad cumple, cuánto costó leerlo, cuál era la segunda mejor
+   * asignación y con cuánto margen ganó la elegida. Y admite cero, una o varias
+   * percepciones, que es como son los papeles.
+   */
+  pieFiscal: PieFiscal;
   /** Qué hizo la relectura focalizada, cuando hubo una. */
   relectura?: InformeDeRelectura;
   ms: number;
@@ -329,10 +339,28 @@ function interpretarUnaVez(
 
   const veredicto = decidir(candidatas, columnasQueFrenan);
 
+  /*
+   * Y al final el pie fiscal, reconciliado como un grafo de relaciones.
+   *
+   * Va después del veredicto y no antes porque necesita la suma del detalle:
+   * el neto gravado es el único concepto del pie con una relación **externa**
+   * —tiene que dar esa suma— y con el neto puesto se verifican los IVAs contra
+   * su alícuota y el total contra la suma de todo. El pie basado en etiquetas
+   * sigue corriendo antes, porque la búsqueda de la tabla necesita un neto para
+   * apuntar; esto lo completa y lo explica, asignación por asignación.
+   */
+  const pieFiscal = reconciliarPie(evidencia.fragmentos, {
+    sumaDelDetalle: veredicto.ganadora?.sumaDeRenglones ?? null,
+    alturaTipica: tabla.alturaTipica,
+    renglonesDelDetalle: tabla.renglones.length,
+    desdeY: tabla.renglones[0]?.y ?? 0,
+  });
+
   return {
     emisor,
     tabla,
     pie: veredicto.ganadora?.pie ?? candidatas[0].pie,
+    pieFiscal,
     candidatas,
     veredicto,
     pendientes,
