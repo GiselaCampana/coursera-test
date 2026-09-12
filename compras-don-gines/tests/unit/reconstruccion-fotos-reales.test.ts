@@ -217,14 +217,19 @@ describe('el pie fiscal', () => {
 
   it('Errecalde: la suma del detalle llega al mismo orden que el neto impreso', () => {
     /*
-     * Todavía no cierra al centavo —quedan renglones con celdas que el OCR
-     * mutiló y que se informan uno por uno— pero la distancia dejó de ser de
-     * escala y pasó a ser de unos pocos artículos. Es la medida honesta de dónde
-     * está: menos del uno por ciento del neto.
+     * La distancia dejó de ser de escala y pasó a ser de unos pocos artículos.
+     *
+     * **En la primera pasada** son unos cuatro puntos y medio, y eso es lo que
+     * corresponde informar: desde que el orden de preferencias es lexicográfico,
+     * el motor ya no acerca la suma al pie eligiendo la lectura que más se le
+     * parece. Antes daba 0,05 % y era peor, porque llegaba ahí con reparaciones
+     * elegidas para que el total diera —exactamente lo que el pie no puede
+     * decidir—. Con la relectura focalizada baja a menos del uno por ciento con
+     * evidencia de verdad, y eso se prueba aparte.
      */
     const suma = ERRECALDE.veredicto.ganadora!.sumaDeRenglones;
     const neto = ERRECALDE.pie.netTotal!;
-    expect(suma.minus(neto).abs().div(neto).toNumber()).toBeLessThan(0.01);
+    expect(suma.minus(neto).abs().div(neto).toNumber()).toBeLessThan(0.05);
   });
 });
 

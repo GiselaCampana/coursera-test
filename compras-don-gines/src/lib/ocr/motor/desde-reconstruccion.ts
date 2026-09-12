@@ -12,12 +12,18 @@ import {
   type RenglonCandidato,
   type Veredicto,
 } from '@/lib/ocr/motor/candidatas';
+import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
 import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
   llevaNumeros,
+  type CampoDeColumna,
   type ColumnaReconocida,
 } from '@/lib/ocr/motor/columnas';
+import {
+  formatoDeColumna,
+  type FormatoDeColumna,
+} from '@/lib/ocr/motor/formato-de-columna';
 import {
   bloquea,
   resumir,
@@ -131,15 +137,20 @@ export function interpretarReconstruccion(
     return { candidata, lecturas };
   });
 
+  /*
+   * Entre reconstrucciones se aplica el **mismo orden lexicográfico** que entre
+   * lecturas de una misma reconstrucción: no perder renglones, comprobarlos
+   * solos, no suponer nada, y el cierre contra el pie recién sexto. Antes eran
+   * dos criterios distintos —acá el puntaje, allá el puntaje con desempate— y
+   * que fueran dos era el problema: una reconstrucción podía ganar por cerrar
+   * mejor habiendo perdido un artículo del papel.
+   */
   const mejorDeCada = armados.map((armado) => {
-    const ordenadas = [...armado.lecturas].sort(
-      (a, b) => b.puntaje - a.puntaje || a.reparaciones - b.reparaciones,
-    );
-    return { ...armado, mejor: ordenadas[0].puntaje, reparaciones: ordenadas[0].reparaciones };
+    const ordenadas = [...armado.lecturas].sort(compararCandidatas);
+    return { ...armado, mejorLectura: ordenadas[0], mejor: ordenadas[0].puntaje };
   });
-  // A igual puntaje gana la tabla cuya lectura repara menos números impresos.
   const elegido = mejorDeCada.reduce((a, b) =>
-    b.mejor > a.mejor || (b.mejor === a.mejor && b.reparaciones < a.reparaciones) ? b : a,
+    compararCandidatas(b.mejorLectura, a.mejorLectura) < 0 ? b : a,
   );
 
   const tabla = elegido.candidata.tabla;
@@ -312,12 +323,36 @@ function elegirParaElDocumento(
 ): RenglonCandidato[] {
   const esNumerica = (columna: number): boolean => llevaNumeros(columnas[columna]?.campo);
 
+  /*
+   * El formato de cada columna se calcula **una vez, sobre la columna entera**,
+   * y después cada celda se lee adentro de él.
+   *
+   * Es el desacople que faltaba. Antes cada celda se leía sola: todas las
+   * lecturas posibles de sus dígitos, sin nada que las ordenara, y quien elegía
+   * era la búsqueda contra el total. Así, un precio que el OCR devolvió sin un
+   * solo separador se leía como lo que más acercara la suma al neto impreso, que
+   * es ajustar un número para que dé.
+   *
+   * Los otros veinte valores de esa misma columna dicen cómo escribe este papel:
+   * cuántos decimales, con qué separador, en qué orden de magnitud. Bajo esa
+   * hipótesis el mutilado tiene una lectura preferida y las absurdas quedan
+   * marcadas como tales, antes de que el total opine.
+   */
+  const formatos = new Map<CampoDeColumna, FormatoDeColumna>();
+  columnas.forEach((columna, i) => {
+    const campo = columna?.campo;
+    if (!campo || !CAMPOS_NUMERICOS.has(campo)) return;
+    const textos = renglones.map((r) => r.celdas[i]?.texto ?? '');
+    const formato = formatoDeColumna(textos);
+    if (formato) formatos.set(campo, formato);
+  });
+
   const porFila = renglones.map((renglon, i) => {
     const vecinos = [renglones[i - 1], renglones[i + 1]]
       .filter((v): v is RenglonReconstruido => v !== undefined)
       .flatMap((v) => v.sobrantes);
     const candidatas = variantesDeFila(renglon, i, esNumerica, vecinos).flatMap((fila) =>
-      candidatasDeRenglon(fila, columnas, convencion),
+      candidatasDeRenglon(fila, columnas, convencion, formatos),
     );
     /*
      * Dos lecturas que dicen lo mismo son una sola.
@@ -452,6 +487,21 @@ function elegirParaElDocumento(
 function puntosDeRenglon(renglon: RenglonCandidato): number {
   let puntos = 0;
   for (const control of renglon.controles) puntos += control.paso ? 10 : -10;
+  /*
+   * Una lectura que necesita suponer un salto de escala pierde contra
+   * cualquiera que no lo necesite, **incluso si cierra la cuenta**.
+   *
+   * Cierra porque la proporción se mantiene: el mismo renglón cien veces más
+   * grande multiplica igual. Nada dentro del renglón lo desmiente, y por eso el
+   * desempate no puede vivir adentro del renglón: vive en la columna, que es la
+   * que dice en qué orden de magnitud está escrita. La severidad viene de ahí.
+   *
+   * El peso es mayor que el de un control aprobado a propósito. No es que la
+   * cuenta importe menos: es que una cuenta que cierra cien veces fuera de
+   * escala no es evidencia de nada, y aceptarla ensucia el costo de cada
+   * artículo sin que ninguna igualdad lo delate.
+   */
+  puntos -= renglon.severidad * 12;
   puntos += [
     renglon.codigo,
     renglon.marca,
@@ -460,23 +510,6 @@ function puntosDeRenglon(renglon: RenglonCandidato): number {
     renglon.piezas,
     renglon.importe,
   ].filter(Boolean).length;
-  /*
-   * PENDIENTE MEDIDO: acá debería desempatar a favor de la lectura que menos
-   * números repara, y hoy no lo hace.
-   *
-   * El caso es real: un renglón leído en la escala del papel y el mismo renglón
-   * leído cien veces más grande **cierran los dos**, porque la proporción se
-   * mantiene, así que entre ellos decide el orden en que se generaron. Se probó
-   * restar las reparaciones —con peso grande y con peso de desempate— y las dos
-   * veces **mide peor**: la elección por renglón cambia el punto de partida de
-   * la búsqueda contra el total y el comprobante termina más lejos del neto
-   * impreso, no más cerca.
-   *
-   * Que empeore no lo vuelve correcto. Lo que muestra es que la búsqueda contra
-   * el total y la elección por renglón están más acopladas de lo que deberían, y
-   * eso es lo que hay que separar antes. Queda anotado acá y no escondido en un
-   * cambio que degrada el resultado medido.
-   */
   return puntos;
 }
 

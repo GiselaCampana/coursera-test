@@ -8,6 +8,13 @@ import {
   type ColumnaReconocida,
 } from '@/lib/ocr/motor/columnas';
 import type { FilaDeDatos } from '@/lib/ocr/motor/tabla';
+import {
+  formatoDeColumna,
+  lecturasDeCelda,
+  type FormatoDeColumna,
+  type LecturaNumerica,
+} from '@/lib/ocr/motor/formato-de-columna';
+import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
 
 /**
  * Interpretar la tabla generando varias lecturas y dejando que la aritmética
@@ -69,6 +76,25 @@ export interface RenglonCandidato {
    * que explica el papel— pero que hay que preferir no hacer.
    */
   reparaciones: number;
+  /**
+   * Cuán grave es la peor suposición que necesitó, de 0 a 3.
+   *
+   * Es el **máximo** de las severidades de sus celdas y no la suma, porque no se
+   * compensan: un renglón con cinco números leídos al pie de la letra y uno cien
+   * veces fuera de la escala de su columna es un renglón sospechoso, no un
+   * renglón casi perfecto.
+   */
+  severidad: number;
+  /**
+   * En cuántas de sus celdas la lectura elegida no se parece a su columna.
+   *
+   * Es el quinto nivel del orden de preferencias y es distinto de la severidad:
+   * la severidad mide cuán grave fue la peor suposición, y esto mide cuántas
+   * veces se eligió una lectura que ninguno de los vecinos de columna sostiene.
+   * Un renglón puede no haber reparado nada y ser el único de la tabla que
+   * escribe sus precios sin coma.
+   */
+  incoherentes: number;
   /** Qué controles pasó y cuáles no. */
   controles: ControlDeRenglon[];
 }
@@ -91,6 +117,16 @@ export function cantidadQueCuesta(renglon: RenglonCandidato): Decimal | null {
  * un mismo comprobante no pasa, y probar celda por celda multiplicaría las
  * combinaciones sin ganar nada.
  */
+function lecturasDeColumna(
+  texto: string,
+  convencion: ConvencionDecimal,
+  formato: FormatoDeColumna | null,
+): LecturaNumerica[] {
+  const sinUnidad = texto.replace(/\s*\p{L}{1,3}\.?\s*$/u, '');
+  const usable = /\d/.test(sinUnidad) ? sinUnidad : texto;
+  return lecturasDeCelda(aConvencionAr(usable.replace(/[$%\s]/g, '').trim(), convencion), formato);
+}
+
 function numerosDeCelda(texto: string, convencion: ConvencionDecimal): Decimal[] {
   /*
    * La unidad pegada al número se saca antes de leerlo.
@@ -207,6 +243,15 @@ export function candidatasDeRenglon(
   fila: FilaDeDatos,
   columnas: (ColumnaReconocida | null)[],
   convencion: ConvencionDecimal,
+  /**
+   * Cómo escribe los números cada columna, según la mayoría de sus valores.
+   *
+   * Es lo que permite leer una celda mutilada sin preguntarle al total cuánto
+   * le falta: los otros veinte valores de esa misma columna dicen dónde van los
+   * separadores y en qué orden de magnitud está el número. Es opcional porque
+   * una tabla de dos renglones no tiene mayoría que defina nada.
+   */
+  formatos: ReadonlyMap<CampoDeColumna, FormatoDeColumna> = new Map(),
 ): RenglonCandidato[] {
   const { mapa: celdas, lugares, montosSinConfirmar } = porCampo(fila, columnas);
 
@@ -289,7 +334,7 @@ export function candidatasDeRenglon(
     }
     if (repetido) continue;
 
-    for (const candidata of combinarNumeros(variante, convencion)) {
+    for (const candidata of combinarNumeros(variante, convencion, formatos)) {
       /*
        * Sin descripción **ni cuenta propia** no hay renglón.
        *
@@ -320,6 +365,7 @@ export function candidatasDeRenglon(
 function combinarNumeros(
   celdas: Map<CampoDeColumna, string>,
   convencion: ConvencionDecimal,
+  formatos: ReadonlyMap<CampoDeColumna, FormatoDeColumna>,
 ): RenglonCandidato[] {
   const numericos: CampoDeColumna[] = [
     'cantidad',
@@ -333,7 +379,7 @@ function combinarNumeros(
 
   const lecturas = numericos.map((campo) => ({
     campo,
-    valores: numerosDeCelda(celdas.get(campo)!, convencion),
+    valores: lecturasDeColumna(celdas.get(campo)!, convencion, formatos.get(campo) ?? null),
   }));
 
   /*
@@ -354,21 +400,28 @@ function combinarNumeros(
    * Lo que la descarta no es un umbral: es que necesita reparar todos los
    * números del papel, y la otra no necesita reparar ninguno.
    */
-  const combinaciones: { valores: Map<CampoDeColumna, Decimal>; reparaciones: number }[] = [
-    { valores: new Map(), reparaciones: 0 },
-  ];
+  const combinaciones: {
+    valores: Map<CampoDeColumna, Decimal>;
+    reparaciones: number;
+    severidad: number;
+    incoherentes: number;
+  }[] = [{ valores: new Map(), reparaciones: 0, severidad: 0, incoherentes: 0 }];
   for (const { campo, valores } of lecturas) {
     if (valores.length === 0) continue;
-    const siguiente: { valores: Map<CampoDeColumna, Decimal>; reparaciones: number }[] = [];
+    const siguiente: typeof combinaciones = [];
     for (const parcial of combinaciones) {
-      valores.forEach((valor, indice) => {
+      for (const lectura of valores) {
         const copia = new Map(parcial.valores);
-        copia.set(campo, valor);
+        copia.set(campo, lectura.valor);
         siguiente.push({
           valores: copia,
-          reparaciones: parcial.reparaciones + (indice === 0 ? 0 : 1),
+          reparaciones: parcial.reparaciones + lectura.reparaciones,
+          // La severidad del renglón es la de su peor lectura, no la suma: una
+          // celda cien veces fuera de escala no se compensa con cinco correctas.
+          severidad: Math.max(parcial.severidad, lectura.severidad),
+          incoherentes: parcial.incoherentes + (lectura.coherente ? 0 : 1),
         });
-      });
+      }
     }
     // Tope de seguridad: una fila con más de esto no es ambigua, es ilegible.
     combinaciones.length = 0;
@@ -376,7 +429,7 @@ function combinarNumeros(
   }
 
   const salida: RenglonCandidato[] = [];
-  for (const { valores: numeros, reparaciones } of combinaciones) {
+  for (const { valores: numeros, reparaciones, severidad, incoherentes } of combinaciones) {
     const descuento = numeros.get('descuentoPct') ?? null;
 
     /*
@@ -408,6 +461,8 @@ function combinarNumeros(
         importe: numeros.get('importe') ?? null,
         descuentoEnElImporte: enElImporte,
         reparaciones,
+        severidad,
+        incoherentes,
         controles: [],
       };
       renglon.controles = controlarRenglon(renglon);
@@ -818,24 +873,18 @@ export function decidir(
   encabezadosSinResolver: string[] = [],
 ): Veredicto {
   /*
-   * A igual puntaje gana la lectura que **menos números tuvo que reparar**.
-   *
-   * No es un desempate cosmético. Sobre la factura de Lácteos Barraza existe una
-   * lectura del comprobante entero en la que se ignoran todos los separadores
-   * decimales, y es internamente consistente: los dos renglones cierran y la
-   * suma da el pie leído de la misma manera, cien veces más grande. Puntúa igual
-   * que la buena porque cumple las mismas igualdades.
-   *
-   * Lo que la distingue es que necesita suponer que el OCR perdió el separador
-   * de cada número del papel, y la otra no necesita suponer nada. Entre dos
-   * explicaciones que cuadran, la que no inventa nada es la que hay que mostrar.
-   *
-   * Sigue siendo un empate de puntaje, así que el margen las manda a revisión
-   * igual: esto decide cuál se le muestra a la persona, no si se acepta sola.
+   * El orden es **lexicográfico**, no una suma: primero no perder renglones,
+   * después comprobarlos solos, después no suponer nada, y el cierre contra el
+   * pie recién sexto. Está todo explicado en `orden-lexicografico.ts`, y el
+   * motivo es el error que lo originó: sobre la factura de Lácteos Barraza
+   * existe una lectura del comprobante entero en la que se ignoran todos los
+   * separadores decimales, y es internamente consistente —los dos renglones
+   * cierran y la suma da el pie leído de la misma manera, cien veces más
+   * grande—. Con una suma de puntajes empata con la buena; con un orden pierde,
+   * porque necesita suponer que el OCR perdió el separador de cada número del
+   * papel y la otra no necesita suponer nada.
    */
-  const ordenadas = [...candidatas].sort(
-    (a, b) => b.puntaje - a.puntaje || a.reparaciones - b.reparaciones,
-  );
+  const ordenadas = [...candidatas].sort(compararCandidatas);
 
   // Dos caminos que llegan al mismo resultado son una sola respuesta.
   const vistas = new Set<string>();

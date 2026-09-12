@@ -234,6 +234,8 @@ describe('el cierre contra el pie no tapa una fila incorrecta', () => {
       importe: new Decimal(1000),
       descuentoEnElImporte: null,
       reparaciones: 0,
+      severidad: 0,
+      incoherentes: 0,
       controles: [],
       ...campos,
     };
@@ -450,6 +452,8 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       importe: new Decimal(1000),
       descuentoEnElImporte: null,
       reparaciones: 0,
+      severidad: 0,
+      incoherentes: 0,
       controles: [],
     };
     conControl.controles = controlarRenglon(conControl);
