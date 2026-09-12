@@ -13,6 +13,7 @@ import {
   type Veredicto,
 } from '@/lib/ocr/motor/candidatas';
 import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
+import { DERIVED_SUGGESTION, sugerenciasDerivadas } from '@/lib/ocr/motor/sugerencias';
 import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
@@ -181,6 +182,23 @@ export function interpretarReconstruccion(
  * rompe entera. Los que no tienen ningún control no entran acá —a ésos les
  * falta una celda y eso ya lo pide la lista de pendientes.
  */
+/**
+ * Cómo nombra `leFalta` a cada campo de la cuenta.
+ *
+ * Existe para poder emparejar una sugerencia con el bloqueo al que corresponde
+ * sin comparar textos a ojo: son los mismos tres campos escritos de dos
+ * maneras, y que el emparejamiento se rompa en silencio dejaría el bloqueo sin
+ * su sugerencia sin que nada lo diga.
+ */
+const COMO_LO_LLAMA_LE_FALTA: Partial<Record<CampoDeColumna, string>> = {
+  cantidad: 'la cantidad',
+  kilos: 'la cantidad',
+  piezas: 'la cantidad',
+  precioUnitario: 'el precio',
+  precioConDescuento: 'el precio',
+  importe: 'el importe',
+};
+
 export function renglonesQueNoCierran(informe: InformeReconstruido): number[] {
   const renglones = informe.veredicto.ganadora?.renglones ?? [];
   const numeros: number[] = [];
@@ -738,8 +756,21 @@ export function queFaltaResolver(
    * confirmar se contesta una vez y vale para el formato; un renglón sin precio
    * es un dato que falta en ese renglón y hay que mirarlo ahí.
    */
+  /*
+   * Y con ellos, cuánto **daría** el valor que falta.
+   *
+   * La sugerencia viaja dentro del bloqueo, no en el renglón: la celda sigue
+   * faltando, el renglón sigue sin comprobarse y la compra sigue sin poder
+   * guardarse. Lo único que agrega es que quien vaya a tipear el número sepa
+   * contra qué contrastarlo.
+   */
+  const sugerencias = sugerenciasDerivadas(veredicto.ganadora?.renglones ?? []);
+
   (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
     for (const falta of leFalta(renglon)) {
+      const sugerencia = sugerencias.find(
+        (s) => s.renglon === i + 1 && COMO_LO_LLAMA_LE_FALTA[s.campo] === falta,
+      );
       pendientes.push({
         categoria: 'BLOCKING_MISSING_CELL',
         renglon: i + 1,
@@ -747,9 +778,15 @@ export function queFaltaResolver(
         columna: null,
         alternativas: [],
         elegido: null,
+        ...(sugerencia ? { sugerencia } : {}),
         motivo:
           `Al renglón ${i + 1} le falta ${falta}, así que no se puede comprobar contra su ` +
-          'propia aritmética. Que la suma del comprobante dé el neto impreso no lo reemplaza.',
+          'propia aritmética. Que la suma del comprobante dé el neto impreso no lo reemplaza.' +
+          (sugerencia
+            ? ` La aritmética del renglón da ${sugerencia.valor.toString()} ` +
+              `(${DERIVED_SUGGESTION}: valor calculado, no leído del papel; ` +
+              `sale de ${sugerencia.deDondeSale}). Hay que confirmarlo contra el comprobante.`
+            : ''),
       });
     }
   });

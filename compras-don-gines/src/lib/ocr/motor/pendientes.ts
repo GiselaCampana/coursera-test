@@ -1,4 +1,5 @@
 import type { Caja } from '@/lib/ocr/reconstruccion/evidencia';
+import type { SugerenciaDerivada } from '@/lib/ocr/motor/sugerencias';
 
 /**
  * Qué le queda por resolver a una persona, y qué es apenas una anotación.
@@ -81,6 +82,16 @@ export interface Pendiente {
   alternativas: AlternativaDePendiente[];
   /** El valor que quedó elegido, si hay alguno. */
   elegido: string | null;
+  /**
+   * Cuánto **daría** el valor que falta, si la aritmética del renglón lo puede
+   * calcular.
+   *
+   * Va acá y no en el renglón a propósito: es una ayuda para quien va a tipear
+   * el número, no un dato. El renglón sigue teniendo el agujero, la celda sigue
+   * siendo un bloqueo, y la sugerencia dice de qué igualdad salió para que se
+   * pueda contrastar contra el papel en vez de aceptarla a ciegas.
+   */
+  sugerencia?: SugerenciaDerivada;
   /** Por qué frena, o por qué no frena. */
   motivo: string;
 }
