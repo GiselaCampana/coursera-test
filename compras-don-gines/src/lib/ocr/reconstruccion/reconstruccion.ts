@@ -412,11 +412,54 @@ export function esRuido(texto: string): boolean {
 const EMPIEZA_EL_PIE =
   /^(sub\s?-?\s?total|total\b|neto\b|i\.?\s?v\.?\s?a\.?\b|percep|perc\b|descuentos?\b|saldo|son\s+pesos|pesos\b|comentario|transporte)/i;
 
+/**
+ * Las etiquetas del pie que **no pueden estar en el medio de una tabla**.
+ *
+ * La lista de arriba se prueba al principio de la línea, y ahí tiene que ser
+ * generosa: «IVA», «Neto» o «Total» pegados al margen izquierdo son del pie.
+ * Ésta se prueba en **cualquier posición**, así que tiene que ser mucho más
+ * corta: «IVA» aparece en la columna de alícuotas de cada artículo, y cortar la
+ * tabla ahí la dejaría vacía.
+ *
+ * Lo que queda son las que nombran un concepto fiscal completo. Ninguna puede
+ * aparecer adentro del nombre de un artículo.
+ */
+const ETIQUETA_FISCAL =
+  /^(neto\s*(gravado|no\s*gravado)?|no\s*gravado|totales?|percep\w*|sub\s?-?\s?totales?|son\s+pesos)$/i;
+
+/**
+ * Corta la tabla donde empieza el pie.
+ *
+ * El pie tiene números grandes y creíbles repartidos en columnas, así que sus
+ * líneas pasan por renglones perfectamente: sobre la factura de Mabelherdi, la
+ * línea «Neto $32998.85 IVA 21.00% $6929.76» entraba como un artículo más.
+ *
+ * Se busca de dos maneras, y las dos hacen falta:
+ *
+ *  - una etiqueta de pie **al principio** de la línea, con la lista larga. Que
+ *    sea al principio importa: «BONIFICACION ESPECIAL» es un nombre de artículo
+ *    legítimo en el medio de una descripción, y cortar ahí perdería media tabla;
+ *
+ *  - una etiqueta fiscal **en cualquier posición**, con la lista corta. Hace
+ *    falta porque el pie no siempre arranca pegado al margen: sobre la factura
+ *    de Errecalde el «Neto Gravado» cae a un tercio del ancho, debajo de las
+ *    columnas de unidad y cantidad, y con la primera regla sola trece líneas de
+ *    pie —el neto, el IVA, las dos percepciones, el total y la leyenda— seguían
+ *    adentro del cuerpo. No eran inofensivas: ensuciaban el perfil de todas las
+ *    columnas, inventaban renglones y dejaban el conteo de artículos en cualquier
+ *    cosa menos en el que tiene el papel.
+ */
 function cortarEnElPie(renglones: RenglonVisual[], notas: string[]): RenglonVisual[] {
   for (let i = 0; i < renglones.length; i++) {
-    const primeras = renglones[i].observaciones.slice(0, 2).map((o) => textoPreferido(o)).join(' ');
-    if (!EMPIEZA_EL_PIE.test(primeras.trim())) continue;
-    notas.push(`La tabla se cortó en «${primeras.trim().slice(0, 40)}», que es del pie.`);
+    const textos = renglones[i].observaciones.map((o) => textoPreferido(o).trim());
+    const primeras = textos.slice(0, 2).join(' ').trim();
+
+    const porElPrincipio = EMPIEZA_EL_PIE.test(primeras);
+    const fiscal = textos.find((t) => ETIQUETA_FISCAL.test(t));
+    if (!porElPrincipio && fiscal === undefined) continue;
+
+    const donde = porElPrincipio ? primeras : fiscal!;
+    notas.push(`La tabla se cortó en «${donde.slice(0, 40)}», que es del pie.`);
     return renglones.slice(0, i);
   }
   return renglones;
