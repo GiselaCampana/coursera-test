@@ -1,5 +1,5 @@
 import { Decimal } from '@/lib/money';
-import { numerosDelTexto } from '@/lib/ocr/numeros';
+import { numerosConProcedencia, numerosDelTexto } from '@/lib/ocr/numeros';
 import { emisorNormalizado } from '@/lib/ocr/zona-emisor';
 import type { TextosComprobante } from '@/lib/ocr/parsers/tipos';
 import {
@@ -155,7 +155,7 @@ export function leerPie(texto: string, convencion: ConvencionDecimal = 'ar'): Pi
     ignorados: [],
   };
 
-  const candidatos: Record<string, Decimal[]> = {
+  const candidatos: Record<string, { valor: Decimal; literal: boolean }[]> = {
     netTotal: [],
     ivaTotal: [],
     percepciones: [],
@@ -194,8 +194,10 @@ export function leerPie(texto: string, convencion: ConvencionDecimal = 'ar'): Pi
        * los dos.
        */
       const hastaLaProxima = despues.split(/(?=\b(?:sub\s?-?total|neto|i\.?v\.?a|perc|total)\b)/i)[0];
-      for (const valor of numeros(hastaLaProxima)) {
-        if (!candidatos[campo].some((x) => x.eq(valor))) candidatos[campo].push(valor);
+      for (const leido of numerosConProcedencia(aConvencionAr(hastaLaProxima, convencion))) {
+        const ya = candidatos[campo].find((x) => x.valor.eq(leido.valor));
+        if (ya) ya.literal = ya.literal || leido.literal;
+        else candidatos[campo].push(leido);
       }
     }
   }
@@ -207,25 +209,42 @@ export function leerPie(texto: string, convencion: ConvencionDecimal = 'ar'): Pi
    * papel. Que las cuatro cuadren entre sí es lo que permite creerles, y es lo
    * que descarta que un saldo acumulado se haya colado en alguna.
    */
+  const cero = { valor: new Decimal(0), literal: true };
   for (const neto of candidatos.netTotal) {
-    for (const iva of candidatos.ivaTotal.length ? candidatos.ivaTotal : [new Decimal(0)]) {
-      for (const perc of candidatos.percepciones.length ? candidatos.percepciones : [new Decimal(0)]) {
+    for (const iva of candidatos.ivaTotal.length ? candidatos.ivaTotal : [cero]) {
+      for (const perc of candidatos.percepciones.length ? candidatos.percepciones : [cero]) {
         for (const total of candidatos.total) {
-          if (neto.plus(iva).plus(perc).minus(total).abs().gt(1)) continue;
+          if (neto.valor.plus(iva.valor).plus(perc.valor).minus(total.valor).abs().gt(1)) continue;
           if (pie.total) continue;
-          pie.netTotal = neto;
-          pie.ivaTotal = iva.gt(0) ? iva : null;
-          pie.percepciones = perc.gt(0) ? perc : null;
-          pie.total = total;
+          pie.netTotal = neto.valor;
+          pie.ivaTotal = iva.valor.gt(0) ? iva.valor : null;
+          pie.percepciones = perc.valor.gt(0) ? perc.valor : null;
+          pie.total = total.valor;
         }
       }
     }
   }
 
-  // Si no cerró, se conserva al menos el neto más grande leído: sirve para
-  // puntuar, con la penalización que corresponda.
+  /*
+   * Si no cerró, se conserva un neto para poder puntuar, y **no es el más
+   * grande**.
+   *
+   * Era el más grande, y el más grande es casi siempre la lectura que ignora
+   * todos los separadores decimales: el neto de 3.830.467,37 salía 383.046.737,
+   * y a partir de ahí el comprobante entero se acomodaba cien veces más grande.
+   * Cada renglón cerraba contra su propio precio inflado, la suma daba el neto
+   * inflado, y todo cuadraba. El costo por kilo de veintitrés artículos habría
+   * salido cien veces mal sin que ninguna cuenta lo delatara.
+   *
+   * Se prefiere la lectura **literal** —la que toma los separadores como están
+   * impresos— y sólo entre esas se toma la mayor. Adivinar que el OCR se comió
+   * un separador es una suposición, y no se hace cuando hay una lectura que no
+   * necesita ninguna.
+   */
   if (!pie.netTotal && candidatos.netTotal.length > 0) {
-    pie.netTotal = candidatos.netTotal.reduce((a, b) => (a.gt(b) ? a : b));
+    const literales = candidatos.netTotal.filter((c) => c.literal);
+    const entre = literales.length > 0 ? literales : candidatos.netTotal;
+    pie.netTotal = entre.reduce((a, b) => (a.valor.gt(b.valor) ? a : b)).valor;
   }
 
   return pie;

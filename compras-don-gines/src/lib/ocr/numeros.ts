@@ -116,17 +116,39 @@ export function variantesDeNumero(texto: string): Decimal[] {
  * descuento. La regresión que lo fija está en `numeros-canonicos.test.ts`.
  */
 export function numerosDelTexto(texto: string): Decimal[] {
+  return numerosConProcedencia(texto).map((n) => n.valor);
+}
+
+/**
+ * Los números de un texto, diciendo cuáles se leyeron **tal como están escritos**.
+ *
+ * `variantesDeNumero` devuelve primero la lectura literal y después las que
+ * suponen que el OCR perdió o corrió un separador. Las dos son legítimas, pero
+ * no valen lo mismo, y quien elige entre ellas necesita saber cuál es cuál.
+ *
+ * Sin esta distinción el pie de un comprobante se elegía por tamaño, y «el más
+ * grande» es exactamente la lectura que ignora todos los separadores decimales:
+ * 3.830.467,37 se leía 383.046.737 y con eso el comprobante entero se acomodaba
+ * cien veces más grande, coherente consigo mismo y equivocado en todo.
+ */
+export function numerosConProcedencia(texto: string): { valor: Decimal; literal: boolean }[] {
   const encontrados = [
     ...texto.matchAll(new RegExp(`[${CLASE_DIGITOS_OCR}][${CLASE_DIGITOS_OCR}.,]*`, 'g')),
   ].map((m) => m[0]);
 
-  const salida: Decimal[] = [];
+  const salida: { valor: Decimal; literal: boolean }[] = [];
   for (const crudo of encontrados) {
     // Un tramo sin ningún dígito de verdad no es un número.
     if (!/\d/.test(crudo)) continue;
-    for (const valor of variantesDeNumero(crudo)) {
-      if (valor.gt(0) && !salida.some((x) => x.eq(valor))) salida.push(valor);
-    }
+    variantesDeNumero(crudo).forEach((valor, indice) => {
+      if (!valor.gt(0)) return;
+      const ya = salida.find((x) => x.valor.eq(valor));
+      if (ya) {
+        ya.literal = ya.literal || indice === 0;
+        return;
+      }
+      salida.push({ valor, literal: indice === 0 });
+    });
   }
   return salida;
 }
