@@ -1,5 +1,13 @@
-# Las fotos originales de la validación son comprobantes reales de la cadena.
-# Se dejan afuera del repositorio: lo que hace falta para reproducir la medición
-# es la evidencia capturada —que sí se commitea— más el sha256 de cada imagen,
-# que el acta registra.
-imagenes/
+# Todo lo de la validación se queda local.
+#
+# Las fotos son comprobantes reales de la cadena, y las actas, las
+# transcripciones y las comparaciones contienen los mismos datos fiscales y
+# personales que las fotos: CUIT, razón social, domicilio, artículos y
+# precios. Que estén en JSON no los vuelve menos sensibles.
+#
+# Lo único que se versiona de este directorio es cómo se usa y contra qué
+# versión del motor se midió.
+*
+!.gitignore
+!COMO-SE-USA.md
+!MOTOR-CONGELADO.md
