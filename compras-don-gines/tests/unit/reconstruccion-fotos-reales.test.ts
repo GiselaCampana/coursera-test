@@ -197,17 +197,34 @@ describe('el pie fiscal', () => {
     }
   });
 
-  it('Errecalde: el pie todavía se lee mal, y queda dicho', () => {
+  it('Errecalde: el neto del pie sale con la coma en su lugar', () => {
     /*
-     * El papel dice 3.830.467,37 de neto. El OCR pierde la coma decimal y el
-     * motor se queda con la lectura entera, porque este formato no imprime el
-     * IVA ni el total con etiquetas reconocibles y no hay con qué contrastar.
+     * El papel dice 3.830.467,37 y durante mucho tiempo el motor leía
+     * 383.046.737: cuando el pie no cerraba contra sí mismo se quedaba con «el
+     * neto más grande», y el más grande es siempre la lectura que ignora los
+     * separadores decimales.
      *
-     * Se prueba que está mal en vez de callarlo: es la falta que impide que
-     * Errecalde reconcilie, y cuando se arregle esta prueba tiene que fallar.
+     * No era un error acotado al pie. A partir de ese neto el comprobante entero
+     * se acomodaba cien veces más grande: cada renglón cerraba contra su propio
+     * precio inflado y la suma daba el neto inflado. Todo cuadraba y el costo por
+     * kilo de veintitrés artículos salía cien veces mal.
+     *
+     * Ahora se prefiere la lectura literal —los separadores como están impresos—
+     * y sólo entre ésas se toma la mayor.
      */
-    expect(ERRECALDE.pie.netTotal?.toFixed(2)).not.toBe('3830467.37');
-    expect(ERRECALDE.veredicto.decision).not.toBe('automatica');
+    expect(ERRECALDE.pie.netTotal?.toFixed(2)).toBe('3830467.37');
+  });
+
+  it('Errecalde: la suma del detalle llega al mismo orden que el neto impreso', () => {
+    /*
+     * Todavía no cierra al centavo —quedan renglones con celdas que el OCR
+     * mutiló y que se informan uno por uno— pero la distancia dejó de ser de
+     * escala y pasó a ser de unos pocos artículos. Es la medida honesta de dónde
+     * está: menos del uno por ciento del neto.
+     */
+    const suma = ERRECALDE.veredicto.ganadora!.sumaDeRenglones;
+    const neto = ERRECALDE.pie.netTotal!;
+    expect(suma.minus(neto).abs().div(neto).toNumber()).toBeLessThan(0.01);
   });
 });
 

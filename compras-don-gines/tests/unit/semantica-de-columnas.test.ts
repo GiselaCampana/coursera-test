@@ -305,14 +305,40 @@ describe('una columna desconocida no significa renglones inexistentes', () => {
     expect(cierra!.importe?.toString()).toBe('234997.69');
   });
 
-  it('sin la columna de texto, el mismo renglón sí se descarta', () => {
+  it('sin la columna de texto, el renglón sobrevive por su aritmética', () => {
     /*
-     * La otra mitad de la garantía: no es que ahora entre cualquier cosa. Un
-     * renglón sin ningún texto con el que identificar el artículo sigue sin ser
-     * un renglón, porque no hay a qué producto asociarlo.
+     * La descripción es lo que identifica el artículo para una persona, pero no
+     * es lo que demuestra que el renglón existe: eso lo demuestra la cuenta. Una
+     * fila donde cantidad × precio da el importe impreso es un artículo aunque
+     * el OCR no haya leído su nombre, y tirarla es perder una compra entera por
+     * una palabra.
      */
     const sinTexto = columnas.map((c, i) => (i === 1 ? null : c));
-    expect(candidatasDeRenglon(filaDeBarraza(), sinTexto, 'ar')).toEqual([]);
+    const candidatas = candidatasDeRenglon(filaDeBarraza(), sinTexto, 'ar');
+    const cierra = candidatas.find((c) => c.controles.some((x) => x.paso));
+    expect(cierra).toBeDefined();
+    expect(cierra!.descripcion).toBe('');
+    expect(cierra!.importe?.toString()).toBe('234997.69');
+  });
+
+  it('pero sin texto ni cuenta propia no hay renglón', () => {
+    /*
+     * La otra mitad de la garantía: no es que ahora entre cualquier cosa. Sin
+     * nombre **y** sin con qué comprobarse, una línea no es un artículo: es una
+     * fila de números sueltos que nadie puede verificar ni asociar a un producto.
+     */
+    const textos = ['03', '', '27.00', '9.00', '', '16.00', ''];
+    const celdas: (Celda | null)[] = textos.map((texto, i) =>
+      texto === '' ? null : { texto, desde: i, hasta: i },
+    );
+    const sinNadaQueComprobar: FilaDeDatos = {
+      linea: 0,
+      cruda: '',
+      celdas,
+      sobrantes: [],
+    };
+    const sinTexto = columnas.map((c, i) => (i === 1 ? null : c));
+    expect(candidatasDeRenglon(sinNadaQueComprobar, sinTexto, 'ar')).toEqual([]);
   });
 });
 

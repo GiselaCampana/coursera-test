@@ -92,7 +92,21 @@ export function cantidadQueCuesta(renglon: RenglonCandidato): Decimal | null {
  * combinaciones sin ganar nada.
  */
 function numerosDeCelda(texto: string, convencion: ConvencionDecimal): Decimal[] {
-  const limpio = texto.replace(/[$%\s]/g, '').trim();
+  /*
+   * La unidad pegada al número se saca antes de leerlo.
+   *
+   * «18.38 kg», «30 kg», «9kg» son cantidades perfectamente legibles con la
+   * unidad impresa al lado, que es como las imprime más de un proveedor. Sin
+   * sacarla, la celda no tiene ningún número leíble y el renglón se queda sin
+   * cantidad: sobre una de las fotos del banco eso dejaba sin cuenta propia a
+   * casi la mitad de los artículos, teniendo el precio y el subtotal perfectos.
+   *
+   * Se saca sólo lo que está **al final** y es corto: una unidad son dos o tres
+   * letras. Lo que tenga letras en el medio no es un número con unidad, es otra
+   * cosa, y se deja como está para que no se lea de menos.
+   */
+  const sinUnidad = texto.replace(/\s*\p{L}{1,3}\.?\s*$/u, '');
+  const limpio = (/\d/.test(sinUnidad) ? sinUnidad : texto).replace(/[$%\s]/g, '').trim();
   if (limpio === '' || !/\d/.test(limpio)) return [];
 
   return variantesDeNumero(aConvencionAr(limpio, convencion));
@@ -276,8 +290,26 @@ export function candidatasDeRenglon(
     if (repetido) continue;
 
     for (const candidata of combinarNumeros(variante, convencion)) {
-      // Sin descripción no hay renglón: no hay con qué asociar el artículo.
-      if (candidata.descripcion.replace(/[^A-Za-zÁÉÍÓÚÑ]/g, '').length < 3) continue;
+      /*
+       * Sin descripción **ni cuenta propia** no hay renglón.
+       *
+       * La descripción es lo que identifica el artículo para una persona, pero
+       * no es lo que demuestra que el renglón existe: eso lo demuestra la
+       * aritmética. Una fila donde cantidad × precio da el importe impreso es un
+       * artículo aunque el OCR no haya leído su nombre, y tirarla es perder una
+       * compra entera por una palabra.
+       *
+       * Es la misma lección que la columna sin encabezado, un escalón más
+       * abajo. En la mitad de abajo de una foto tomada de lejos las
+       * descripciones se borronean antes que los números —son letra más chica y
+       * más apretada— y ahí se perdían nueve artículos que traían la cantidad,
+       * el precio, el descuento, la alícuota y el subtotal perfectos.
+       *
+       * Lo que **no** cambia es que la falta se informa: el renglón queda con un
+       * bloqueo puntual pidiendo el nombre del artículo, no cargado a ciegas.
+       */
+      const tieneNombre = candidata.descripcion.replace(/[^A-Za-zÁÉÍÓÚÑ]/g, '').length >= 3;
+      if (!tieneNombre && leFalta(candidata).length > 0) continue;
       salida.push(candidata);
     }
   }
