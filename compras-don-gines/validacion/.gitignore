@@ -1,0 +1,5 @@
+# Las fotos originales de la validación son comprobantes reales de la cadena.
+# Se dejan afuera del repositorio: lo que hace falta para reproducir la medición
+# es la evidencia capturada —que sí se commitea— más el sha256 de cada imagen,
+# que el acta registra.
+imagenes/
