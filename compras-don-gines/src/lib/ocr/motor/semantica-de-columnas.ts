@@ -448,15 +448,26 @@ export function camposParecidos(titulo: string): { campo: CampoDeColumna; pareci
 // Las igualdades que la tabla hace cerrar
 // ---------------------------------------------------------------------------
 
-/** El valor de una celda bajo una convención, o null. */
-function valorEn(texto: string, invertida: boolean): Decimal | null {
+/**
+ * Los valores que una celda puede tener bajo una convención.
+ *
+ * Se devuelven **todos**, no el primero. El OCR deja números que no se pueden
+ * leer al pie de la letra —«234.99769» no es un número en ninguna convención— y
+ * quedarse con la lectura literal descartaba justamente la que hace cerrar la
+ * cuenta. Sobre la foto de Lácteos Barraza eso dejaba sin detectar que
+ * 27 × 10.361,45 × 0,84 da el importe impreso, que es la evidencia más fuerte
+ * que hay de qué significa cada una de esas tres columnas.
+ *
+ * Se acotan a cuatro por celda: más que eso no es ambigüedad, es una celda
+ * ilegible, y multiplicarlas entre columnas sale caro.
+ */
+function valoresEn(texto: string, invertida: boolean): Decimal[] {
   const limpio = texto.replace(/[^\d.,]/g, '');
-  if (limpio === '' || !/\d/.test(limpio)) return null;
+  if (limpio === '' || !/\d/.test(limpio)) return [];
   const usado = invertida
     ? limpio.replace(/,/g, '\u0001').replace(/\./g, ',').replace(/\u0001/g, '.')
     : limpio;
-  const variantes = variantesDeNumero(usado);
-  return variantes[0] ?? null;
+  return variantesDeNumero(usado).slice(0, 4);
 }
 
 function casiIgual(a: Decimal, b: Decimal): boolean {
@@ -494,7 +505,16 @@ export interface RelacionAritmetica {
  * multiplicar y dar un cuarto por pura coincidencia; con dos ya no.
  */
 export function relacionesAritmeticas(columnas: ContenidoDeColumna[]): RelacionAritmetica[] {
-  const filas = Math.max(0, ...columnas.map((c) => c.celdas.length));
+  /*
+   * Se miran a lo sumo doce renglones.
+   *
+   * Una igualdad que vale para la tabla se ve en los primeros doce renglones
+   * igual de bien que en los cuarenta, y esto se corre muchas veces: una por
+   * cada combinación de repartos que se evalúa. Sin el tope, una factura larga
+   * multiplicaba por tres el tiempo de lectura del comprobante entero para no
+   * decir nada distinto.
+   */
+  const filas = Math.min(12, Math.max(0, ...columnas.map((c) => c.celdas.length)));
   if (filas < 2) return [];
 
   const perfiles = columnas.map((c) => perfilDeContenido(c.celdas));
@@ -502,23 +522,44 @@ export function relacionesAritmeticas(columnas: ContenidoDeColumna[]): RelacionA
     .map((p, i) => ({ p, i }))
     .filter(({ p }) => p.conValor >= 2 && p.fracciones.numero >= PREDOMINIO)
     .map(({ i }) => i);
-  const montos = numericas.filter((i) => perfiles[i].fracciones.monto >= PREDOMINIO);
+  /*
+   * Quién puede hacer de precio y de importe se decide por **magnitud**, no por
+   * puntuación.
+   *
+   * Pedir que la columna tenga forma de monto parece lo natural y deja afuera
+   * justo las que hay que rescatar: sobre la foto de Lácteos Barraza los dos
+   * importes salen «234.99769» y «238,234.», que no tienen forma de monto en
+   * ninguna convención. Con ese filtro la columna de importes no entraba en
+   * ninguna tripleta y la igualdad que identifica las cuatro columnas no se
+   * encontraba nunca.
+   *
+   * Lo que sí distingue un precio de un porcentaje o de una cantidad de bultos
+   * es el tamaño, y eso sobrevive a que el OCR se coma un separador: alguna
+   * lectura de la celda da cien o más. Las columnas chicas quedan afuera, que es
+   * lo que mantiene acotada la cantidad de tripletas a probar.
+   */
+  const grandes = numericas.filter((i) => {
+    const conGrande = columnas[i].celdas.filter((celda) =>
+      valoresEn(celda, false).concat(valoresEn(celda, true)).some((v) => v.abs().gte(100)),
+    ).length;
+    return perfiles[i].conValor > 0 && conGrande / perfiles[i].conValor >= PREDOMINIO;
+  });
   const porcentajes = numericas.filter(
-    (i) => perfiles[i].fracciones.porcentaje >= PREDOMINIO && perfiles[i].fracciones.monto < PREDOMINIO,
+    (i) => perfiles[i].fracciones.porcentaje >= PREDOMINIO && !grandes.includes(i),
   );
 
   const salida: RelacionAritmetica[] = [];
 
   for (const invertida of [false, true]) {
-    const valor = (columna: number, fila: number): Decimal | null => {
+    const valores = (columna: number, fila: number): Decimal[] => {
       const texto = columnas[columna].celdas[fila];
-      return texto === undefined ? null : valorEn(texto, invertida);
+      return texto === undefined ? [] : valoresEn(texto, invertida);
     };
 
     for (const cantidad of numericas) {
-      for (const precio of montos) {
+      for (const precio of grandes) {
         if (precio === cantidad) continue;
-        for (const importe of montos) {
+        for (const importe of grandes) {
           if (importe === cantidad || importe === precio) continue;
           for (const descuento of [null, ...porcentajes]) {
             if (descuento === cantidad || descuento === precio || descuento === importe) continue;
@@ -526,18 +567,36 @@ export function relacionesAritmeticas(columnas: ContenidoDeColumna[]): RelacionA
             let cierran = 0;
             let probados = 0;
             for (let fila = 0; fila < filas; fila++) {
-              const c = valor(cantidad, fila);
-              const p = valor(precio, fila);
-              const i = valor(importe, fila);
-              if (!c || !p || !i || c.lte(0) || p.lte(0) || i.lte(0)) continue;
-              let esperado = c.times(p);
-              if (descuento !== null) {
-                const d = valor(descuento, fila);
-                if (!d || d.lt(0) || d.gt(100)) continue;
-                esperado = esperado.times(new Decimal(1).minus(d.div(100)));
-              }
+              const cs = valores(cantidad, fila).filter((v) => v.gt(0));
+              const ps = valores(precio, fila).filter((v) => v.gt(0));
+              const is = valores(importe, fila).filter((v) => v.gt(0));
+              if (cs.length === 0 || ps.length === 0 || is.length === 0) continue;
+
+              const ds =
+                descuento === null
+                  ? [null]
+                  : valores(descuento, fila).filter((v) => v.gte(0) && v.lte(100));
+              if (ds.length === 0) continue;
+
               probados += 1;
-              if (casiIgual(esperado, i)) cierran += 1;
+              /*
+               * Alcanza con que **alguna** lectura de los cuatro números cumpla
+               * la igualdad. No es aflojar el control: las lecturas son las que
+               * el OCR produjo de esos mismos dígitos, y que una combinación de
+               * ellas dé exacto sobre varios renglones seguidos no pasa por
+               * casualidad. Exigir la lectura literal, en cambio, descarta el
+               * renglón por un separador que el OCR se comió.
+               */
+              const cierra = cs.some((c) =>
+                ps.some((p) =>
+                  ds.some((d) => {
+                    const esperado =
+                      d === null ? c.times(p) : c.times(p).times(new Decimal(1).minus(d.div(100)));
+                    return is.some((i) => casiIgual(esperado, i));
+                  }),
+                ),
+              );
+              if (cierra) cierran += 1;
             }
 
             if (probados >= 2 && cierran >= 2 && cierran / probados >= PREDOMINIO) {
@@ -778,8 +837,8 @@ export function asignarSemantica(
       if (perfiles[i].fracciones.monto < PREDOMINIO) return;
       for (const invertida of [false, true]) {
         const valores = columna.celdas
-          .map((celda) => valorEn(celda, invertida))
-          .filter((v): v is Decimal => v !== null);
+          .map((celda) => valoresEn(celda, invertida)[0])
+          .filter((v): v is Decimal => v !== undefined);
         if (valores.length < 2) continue;
         const suma = valores.reduce((a, b) => a.plus(b), new Decimal(0));
         const coincide = netos.some((neto) => neto.gt(0) && casiIgual(suma, neto));

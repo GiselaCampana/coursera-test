@@ -12,8 +12,8 @@ import {
 import {
   ALEJAMIENTO_MAXIMO,
   agruparPedazos,
-  asignarMonotonicamente,
-  segundaMejorAsignacion,
+  mejoresAsignaciones,
+  type Asignacion,
   type ValorPosicionado,
 } from '@/lib/ocr/reconstruccion/asignacion';
 import {
@@ -23,7 +23,10 @@ import {
   type Esqueleto,
 } from '@/lib/ocr/reconstruccion/esqueleto';
 import { aplicarSemantica } from '@/lib/ocr/reconstruccion/columnas-espaciales';
-import type { ContenidoDeColumna } from '@/lib/ocr/motor/semantica-de-columnas';
+import {
+  relacionesAritmeticas,
+  type ContenidoDeColumna,
+} from '@/lib/ocr/motor/semantica-de-columnas';
 import {
   armarCelda,
   reconstruirConContexto,
@@ -109,41 +112,34 @@ export function candidatasDeTabla(
   ];
 
   /*
-   * Una candidata por hipótesis de esqueleto, hasta tres.
+   * Una candidata por hipótesis de esqueleto, hasta tres, y dentro de cada una
+   * **las combinaciones de repartos que la aritmética sostiene**.
    *
-   * Tres porque cada una cuesta una interpretación completa del comprobante, y
-   * porque las hipótesis vienen ordenadas por cuántas columnas las sostienen:
-   * de la cuarta en adelante son las que ninguna otra columna acompaña.
+   * Tres esqueletos porque cada uno cuesta una interpretación completa del
+   * comprobante, y porque vienen ordenados por cuántas columnas los sostienen:
+   * del cuarto en adelante son los que ninguna otra columna acompaña.
    */
   for (const esqueleto of esqueletos.slice(0, 3)) {
     // No tiene sentido una hipótesis que dice lo mismo que la base.
     if (esqueleto.alturas.length === tabla.renglones.length && esqueleto.origen !== 'consenso') {
       continue;
     }
-    const armada = armarConEsqueleto(contexto, esqueleto);
-    if (!armada) continue;
-    candidatas.push({
-      origen: `esqueleto de ${esqueleto.origen}`,
-      tabla: resemantizada(armada.tabla, netosPosibles),
-      filasEsperadas: consenso.esperadas,
-      notas: [esqueleto.nota, ...armada.notas, ...consenso.discrepancias],
-    });
+    if (esqueleto.alturas.length === 0) continue;
 
-    /*
-     * Y una candidata más por cada columna cuyo reparto quedó empatado, con el
-     * otro reparto. Dos a lo sumo: cada una cuesta una interpretación entera del
-     * comprobante, y una columna que admite tres repartos distintos no se
-     * resuelve probando, se manda a revisión.
-     */
-    for (const columna of armada.dudosas.slice(0, 2)) {
-      const otra = armarConEsqueleto(contexto, esqueleto, columna);
-      if (!otra) continue;
-      const nombre = contexto.columnas[columna]?.titulo ?? `columna ${columna + 1}`;
+    if (candidatas.length >= CANDIDATAS_MAXIMAS) break;
+
+    const filas = esqueleto.alturas.map((y) => ({ y }));
+    const preparado = prepararColumnas(contexto, filas);
+
+    for (const combinacion of combinacionesDeReparto(contexto, preparado, filas, esqueleto)) {
+      if (candidatas.length >= CANDIDATAS_MAXIMAS) break;
+      const armada = armarConEsqueleto(contexto, esqueleto, preparado, filas, combinacion.eleccion);
+      if (!armada) continue;
       candidatas.push({
-        origen: `esqueleto de ${esqueleto.origen}, otro reparto de «${nombre}»`,
-        tabla: resemantizada(otra.tabla, netosPosibles),
+        origen: `esqueleto de ${esqueleto.origen}${combinacion.nombre}`,
+        tabla: resemantizada(armada.tabla, netosPosibles),
         filasEsperadas: consenso.esperadas,
-        notas: [esqueleto.nota, ...otra.notas, ...consenso.discrepancias],
+        notas: [esqueleto.nota, ...armada.notas, ...consenso.discrepancias],
       });
     }
   }
@@ -152,30 +148,195 @@ export function candidatasDeTabla(
 }
 
 /**
- * Arma una tabla entera colgando las columnas de un esqueleto dado.
+ * Cuántos repartos se conservan por columna, y cuántas combinaciones se prueban.
  *
- * Las columnas de texto se reparten por cercanía, como siempre. Las numéricas
- * —que son las que entran en las cuentas y las que el OCR cruza entre filas— se
- * reparten **de una sola vez por columna**, conservando el orden vertical y sin
- * reutilizar ningún fragmento.
+ * Dos por columna: el mejor y el que le discute. Un tercero ya no es una duda
+ * entre dos lecturas, es una columna ilegible, y eso se informa en vez de
+ * probarse.
+ *
+ * Seis combinaciones en total. El número importa porque cada una cuesta una
+ * interpretación entera del comprobante: con tres columnas en duda hay ocho
+ * combinaciones posibles, y quedarse con las seis mejores según la aritmética
+ * es lo que mantiene el costo acotado sin perder la que cierra.
  */
-function armarConEsqueleto(
+const REPARTOS_POR_COLUMNA = 2;
+const COMBINACIONES_MAXIMAS = 6;
+
+/**
+ * Cuántas tablas candidatas se interpretan enteras, contando la base.
+ *
+ * Cada una cuesta una interpretación completa del comprobante con las dos
+ * convenciones decimales, que sobre una factura de cuarenta renglones no es
+ * gratis. Ocho alcanza para probar la base, las combinaciones que la aritmética
+ * favorece del mejor esqueleto y alguna del segundo; más que eso es gastar
+ * segundos en hipótesis que ya perdieron.
+ */
+const CANDIDATAS_MAXIMAS = 8;
+
+/**
+ * Las combinaciones de repartos que vale la pena interpretar enteras.
+ *
+ * Éste es el punto que el reparto columna por columna no puede resolver. Cada
+ * columna, mirada sola, elige su mejor asignación geométrica; y la combinación
+ * correcta a veces no está formada por las mejores de cada una. Sobre la foto de
+ * Lácteos Barraza los dos «16,00» de bonificación están impresos casi a la misma
+ * altura y una mala lectura del segundo —«42»— cae un poco más cerca del segundo
+ * renglón: por distancia gana «42», y la columna de bonificaciones mirada sola no
+ * tiene con qué saber que se equivoca.
+ *
+ * Con qué saberlo tienen las columnas **juntas**: 30 × 9.453,76 × 0,84 da
+ * 238.234,75, que es el importe impreso, y con 42 % no da nada parecido. Así que
+ * se combinan los repartos y se puntúa cada combinación por cuántos renglones
+ * hace cerrar, antes de gastar una interpretación completa en ella.
+ *
+ * El descarte es temprano y barato: la unicidad y el orden ya los garantiza cada
+ * reparto por construcción, y lo que se mide acá es sólo la aritmética. Después,
+ * las que sobreviven compiten contra el pie como cualquier otra candidata.
+ */
+function combinacionesDeReparto(
   contexto: ContextoDeTabla,
+  preparado: { preparadas: ColumnaPreparada[]; fueraDeToda: Observacion[] },
+  filas: { y: number }[],
   esqueleto: Esqueleto,
-  /** Para qué columna usar el segundo mejor reparto en vez del primero. */
-  columnaConSegundoReparto?: number,
-): { tabla: TablaReconstruida; notas: string[]; dudosas: number[] } | null {
-  if (esqueleto.alturas.length === 0) return null;
-  const comienzo = Date.now();
-  const notas: string[] = [];
-  const dudosas: number[] = [];
+): { eleccion: Map<number, number>; nombre: string }[] {
+  /*
+   * Sólo entran al producto las columnas cuyo mejor reparto **no le saca
+   * ventaja** al segundo. Una columna donde la geometría decidió con holgura no
+   * tiene nada que discutir, y meterla en la combinatoria duplica el trabajo
+   * para volver siempre a la misma respuesta.
+   */
+  const enDuda = preparado.preparadas.filter((c) => c.esNumerica && c.dudosa);
+
+  if (enDuda.length === 0) return [{ eleccion: new Map(), nombre: '' }];
+
+  // El producto cartesiano de los repartos de las columnas en duda.
+  let combinaciones: Map<number, number>[] = [new Map()];
+  for (const columna of enDuda) {
+    const siguiente: Map<number, number>[] = [];
+    for (const parcial of combinaciones) {
+      for (let cual = 0; cual < columna.asignaciones.length; cual++) {
+        const copia = new Map(parcial);
+        copia.set(columna.indice, cual);
+        siguiente.push(copia);
+      }
+    }
+    combinaciones = siguiente;
+    // Tope duro contra la explosión: con seis columnas en duda serían sesenta y
+    // cuatro combinaciones, y ninguna factura necesita eso para leerse.
+    if (combinaciones.length > 64) {
+      combinaciones = combinaciones.slice(0, 64);
+      break;
+    }
+  }
+
+  /*
+   * Se puntúa cada combinación por **cuántos renglones hace cerrar**, sin armar
+   * la tabla ni interpretar el comprobante: alcanza con los textos de las celdas
+   * y las identidades de cantidad, precio, descuento e importe.
+   */
+  const puntuadas = combinaciones.map((eleccion) => {
+    const contenidos = contenidosDe(contexto, preparado, filas, eleccion);
+    const relaciones = relacionesAritmeticas(contenidos);
+    const cierran = relaciones.length > 0 ? relaciones[0].cierran : 0;
+    const costo = [...eleccion.entries()].reduce((total, [indice, cual]) => {
+      const columna = preparado.preparadas.find((c) => c.indice === indice)!;
+      return total + (columna.asignaciones[cual]?.costo ?? 0);
+    }, 0);
+    return { eleccion, cierran, costo };
+  });
+
+  /*
+   * Gana la que más renglones hace cerrar; a igualdad, la geométricamente más
+   * barata. Ese orden es el que expresa la regla: la aritmética manda, y la
+   * distancia sólo desempata cuando la aritmética no distingue.
+   */
+  puntuadas.sort((a, b) => b.cierran - a.cierran || a.costo - b.costo);
+
+  const elegidas = puntuadas.slice(0, COMBINACIONES_MAXIMAS);
+  // La combinación de los mejores repartos de cada columna se prueba siempre,
+  // aunque la aritmética no la favorezca: es la respuesta de la geometría y
+  // tiene que poder ganar si el resto falla.
+  if (!elegidas.some((c) => [...c.eleccion.values()].every((v) => v === 0))) {
+    elegidas.push(puntuadas.find((c) => [...c.eleccion.values()].every((v) => v === 0))!);
+  }
+
+  void esqueleto;
+  return elegidas.map(({ eleccion, cierran }) => ({
+    eleccion,
+    nombre:
+      [...eleccion.entries()].every(([, v]) => v === 0)
+        ? ''
+        : `, repartos ${[...eleccion.entries()]
+            .filter(([, v]) => v > 0)
+            .map(([i]) => `«${preparado.preparadas.find((c) => c.indice === i)!.nombre}»`)
+            .join(' y ')} (${cierran} renglón/es cierran)`,
+  }));
+}
+
+/** Los textos de cada columna bajo un reparto dado, para puntuarlo barato. */
+function contenidosDe(
+  contexto: ContextoDeTabla,
+  preparado: { preparadas: ColumnaPreparada[] },
+  filas: { y: number }[],
+  eleccion: ReadonlyMap<number, number>,
+): ContenidoDeColumna[] {
+  return contexto.columnas.map((columna, indice) => {
+    const preparada = preparado.preparadas[indice];
+    const celdas = filas.map(() => '');
+
+    if (preparada.esNumerica) {
+      const cual = eleccion.get(indice) ?? 0;
+      const asignada = preparada.asignaciones[cual] ?? preparada.asignaciones[0];
+      asignada?.porFila.forEach((valor, fila) => {
+        if (valor) celdas[fila] = valor.texto;
+      });
+    } else {
+      preparada.porFila.forEach((grupo, fila) => {
+        celdas[fila] = grupo.map((o) => textoPreferido(o)).join(' ').trim();
+      });
+    }
+
+    return { titulo: columna.titulo, desde: columna.desde, hasta: columna.hasta, celdas };
+  });
+}
+
+/**
+ * Lo que hace falta saber de cada columna antes de elegir un reparto.
+ *
+ * Se calcula **una vez por esqueleto** y se reutiliza para todas las
+ * combinaciones. Agrupar los pedazos de cada número y resolver la programación
+ * dinámica de cada columna es lo caro; combinar repartos ya calculados es
+ * gratis. Sin esta separación, probar ocho combinaciones costaba ocho veces el
+ * trabajo pesado.
+ */
+interface ColumnaPreparada {
+  indice: number;
+  nombre: string;
+  esNumerica: boolean;
+  /** Para las de texto: qué observaciones caen en cada fila. */
+  porFila: Observacion[][];
+  /** Lo que quedó demasiado lejos de toda fila. */
+  lejanos: { fila: number; texto: string; caja: Caja }[];
+  /** Para las numéricas: los repartos posibles, el mejor primero. */
+  asignaciones: Asignacion<ValorConObservaciones>[];
+  compuestos: number;
+  /** El mejor reparto no le saca ventaja al segundo: hay que probar los dos. */
+  dudosa: boolean;
+}
+
+/**
+ * Reparte cada columna del cuerpo entre las alturas de un esqueleto.
+ *
+ * Las de texto se reparten por cercanía; las de números, con la programación
+ * dinámica monótona, y de ésas se guardan **varias** alternativas en vez de
+ * una. Cuál usar no se decide acá: se decide mirando las columnas juntas.
+ */
+function prepararColumnas(
+  contexto: ContextoDeTabla,
+  filas: { y: number }[],
+): { preparadas: ColumnaPreparada[]; fueraDeToda: Observacion[] } {
   const { columnas, alturaTipica } = contexto;
 
-  const filas = esqueleto.alturas.map((y) => ({ y }));
-  const celdas: (CeldaReconstruida | null)[][] = filas.map(() => columnas.map(() => null));
-  const sobrantes: { texto: string; caja: Caja }[][] = filas.map(() => []);
-
-  // Todas las observaciones del cuerpo, agrupadas por la columna en la que caen.
   const porColumna: Observacion[][] = columnas.map(() => []);
   const fueraDeToda: Observacion[] = [];
   for (const renglon of contexto.cuerpo) {
@@ -186,11 +347,10 @@ function armarConEsqueleto(
     }
   }
 
-  columnas.forEach((columna, indice) => {
+  const preparadas = columnas.map((columna, indice): ColumnaPreparada => {
     const observaciones = porColumna[indice];
-    if (observaciones.length === 0) return;
-
     const campo = columna.campo?.campo;
+    const nombre = columna.titulo ?? campo ?? `columna ${indice + 1}`;
     /*
      * Vale el reparto global para toda columna **de números**, tenga o no
      * semántica confirmada. Es lo que necesita Lácteos Barraza: sus dos importes
@@ -198,6 +358,17 @@ function armarConEsqueleto(
      * llama «Importe» para repartirlos bien, no se repartirían nunca.
      */
     const esNumerica = llevaNumeros(campo);
+    const vacia: ColumnaPreparada = {
+      indice,
+      nombre,
+      esNumerica,
+      porFila: filas.map(() => []),
+      lejanos: [],
+      asignaciones: [],
+      compuestos: 0,
+      dudosa: false,
+    };
+    if (observaciones.length === 0) return vacia;
 
     /*
      * Una columna de texto **no** se reparte de a un valor por renglón.
@@ -208,30 +379,21 @@ function armarConEsqueleto(
      * palabras de un mismo renglón— y aplicarle la misma regla deja una palabra
      * por fila y las otras cuatro como sobrantes. Sobre la foto de Barraza, las
      * dos descripciones quedaban en «CIL» y «PLAN», con «MUZZA», «BARRAZA» y el
-     * resto tirados afuera: la candidata del esqueleto reconstruía bien los
-     * números y perdía los nombres de los artículos, así que no ganaba nunca.
-     *
-     * Para el texto vale lo de siempre: cada palabra al renglón que tiene más
-     * cerca, y la celda se arma con todas las que le tocaron.
+     * resto tirados afuera.
      */
     if (!esNumerica) {
       const porFila: Observacion[][] = filas.map(() => []);
+      const lejanos: { fila: number; texto: string; caja: Caja }[] = [];
       for (const observacion of observaciones) {
         const fila = filaMasCercana(centroY(observacion.caja), filas);
         const lejania = Math.abs(filas[fila].y - centroY(observacion.caja)) / (alturaTipica || 1);
         if (lejania > ALEJAMIENTO_MAXIMO) {
-          sobrantes[fila].push({
-            texto: textoPreferido(observacion),
-            caja: observacion.caja,
-          });
+          lejanos.push({ fila, texto: textoPreferido(observacion), caja: observacion.caja });
           continue;
         }
         porFila[fila].push(observacion);
       }
-      porFila.forEach((grupo, fila) => {
-        if (grupo.length > 0) celdas[fila][indice] = armarCelda(indice, grupo);
-      });
-      return;
+      return { ...vacia, porFila, lejanos };
     }
 
     /*
@@ -241,53 +403,87 @@ function armarConEsqueleto(
      * a cada renglón. La unión se registra, y las partes quedan disponibles como
      * alternativas: si el número compuesto no cierra, puede cerrar una parte.
      */
-    const valores: ValorConObservaciones[] = esNumerica
-      ? agruparPedazos(
-          observaciones.map((o) => aValor(o)),
-          alturaTipica,
-        ).map((grupo) => ({
-          texto: grupo.texto,
-          caja: grupo.caja,
-          pasada: grupo.partes[0].pasada,
-          confianza: Math.min(...grupo.partes.map((p) => p.confianza)),
-          observaciones: grupo.partes.map((p) => p.observacion),
-          compuesto: grupo.partes.length > 1,
-        }))
-      : observaciones.map((o) => ({ ...aValor(o), observaciones: [o], compuesto: false }));
+    const valores: ValorConObservaciones[] = agruparPedazos(
+      observaciones.map((o) => aValor(o)),
+      alturaTipica,
+    ).map((grupo) => ({
+      texto: grupo.texto,
+      caja: grupo.caja,
+      pasada: grupo.partes[0].pasada,
+      confianza: Math.min(...grupo.partes.map((p) => p.confianza)),
+      observaciones: grupo.partes.map((p) => p.observacion),
+      compuesto: grupo.partes.length > 1,
+    }));
 
-    const compuestos = valores.filter((v) => v.compuesto).length;
-    if (compuestos > 0) {
+    const asignaciones = mejoresAsignaciones(valores, filas, alturaTipica, REPARTOS_POR_COLUMNA);
+    const dudosa =
+      asignaciones.length > 1 && asignaciones[1].costo - asignaciones[0].costo < MARGEN_DE_REPARTO;
+
+    return {
+      ...vacia,
+      asignaciones,
+      dudosa,
+      compuestos: valores.filter((v) => v.compuesto).length,
+    };
+  });
+
+  return { preparadas, fueraDeToda };
+}
+
+/**
+ * Arma una tabla entera con un reparto elegido para cada columna.
+ *
+ * `eleccion` dice, para cada columna numérica, cuál de sus repartos usar. Es lo
+ * único que cambia entre las combinaciones que se prueban.
+ */
+function armarConEsqueleto(
+  contexto: ContextoDeTabla,
+  esqueleto: Esqueleto,
+  preparado: { preparadas: ColumnaPreparada[]; fueraDeToda: Observacion[] },
+  filas: { y: number }[],
+  eleccion: ReadonlyMap<number, number>,
+): { tabla: TablaReconstruida; notas: string[] } | null {
+  if (filas.length === 0) return null;
+  const comienzo = Date.now();
+  const notas: string[] = [];
+  const { columnas, alturaTipica } = contexto;
+
+  const celdas: (CeldaReconstruida | null)[][] = filas.map(() => columnas.map(() => null));
+  const sobrantes: { texto: string; caja: Caja }[][] = filas.map(() => []);
+
+  for (const preparada of preparado.preparadas) {
+    const { indice } = preparada;
+
+    if (!preparada.esNumerica) {
+      preparada.porFila.forEach((grupo, fila) => {
+        if (grupo.length > 0) celdas[fila][indice] = armarCelda(indice, grupo);
+      });
+      for (const lejano of preparada.lejanos) {
+        sobrantes[lejano.fila].push({ texto: lejano.texto, caja: lejano.caja });
+      }
+      continue;
+    }
+
+    if (preparada.compuestos > 0) {
       notas.push(
-        `En «${columna.titulo ?? campo ?? indice}» se compusieron ${compuestos} número/s ` +
+        `En «${preparada.nombre}» se compusieron ${preparada.compuestos} número/s ` +
           'a partir de pedazos que el OCR había separado.',
       );
     }
-
-    const primera = asignarMonotonicamente(valores, filas, alturaTipica);
-    const segunda = segundaMejorAsignacion(valores, filas, alturaTipica, primera);
-    const noEsConcluyente = segunda !== null && segunda.costo - primera.costo < MARGEN_DE_REPARTO;
-
-    if (noEsConcluyente) {
-      dudosas.push(indice);
+    if (preparada.dudosa) {
       notas.push(
-        `El reparto de «${columna.titulo ?? campo ?? indice}» no es concluyente: ` +
-          `${primera.costo.toFixed(2)} contra ${segunda!.costo.toFixed(2)}.`,
+        `El reparto de «${preparada.nombre}» no es concluyente: ` +
+          `${preparada.asignaciones[0].costo.toFixed(2)} contra ` +
+          `${preparada.asignaciones[1].costo.toFixed(2)}.`,
       );
     }
 
-    /*
-     * Cuando el reparto de una columna no es concluyente, **la geometría ya dio
-     * todo lo que tenía**: los dos repartos están a la misma distancia y elegir
-     * uno es tirar una moneda. Lo que falta decidirlo es la aritmética, y la
-     * aritmética vive en el motor, no acá.
-     *
-     * Así que se arma una candidata con cada reparto y se dejan competir. Sobre
-     * la foto de Lácteos Barraza eso importa: el importe correcto del primer
-     * renglón está un renglón más arriba de donde debería, y un compuesto
-     * espurio del encabezado le gana por cercanía. Por cercanía; no por la
-     * cuenta.
-     */
-    const asignada = columnaConSegundoReparto === indice && segunda ? segunda : primera;
+    const cual = eleccion.get(indice) ?? 0;
+    const asignada = preparada.asignaciones[cual] ?? preparada.asignaciones[0];
+    if (!asignada) continue;
+    if (cual > 0) {
+      notas.push(`En «${preparada.nombre}» se usó el reparto alternativo n.º ${cual + 1}.`);
+    }
 
     asignada.porFila.forEach((valor, fila) => {
       if (!valor) return;
@@ -297,9 +493,9 @@ function armarConEsqueleto(
       const fila = filaMasCercana(centroY(sobra.caja), filas);
       sobrantes[fila].push({ texto: sobra.texto, caja: sobra.caja });
     }
-  });
+  }
 
-  for (const observacion of fueraDeToda) {
+  for (const observacion of preparado.fueraDeToda) {
     const fila = filaMasCercana(centroY(observacion.caja), filas);
     sobrantes[fila].push({ texto: textoPreferido(observacion), caja: observacion.caja });
   }
@@ -314,11 +510,6 @@ function armarConEsqueleto(
    * Los Calvos eso producía dieciocho «artículos» llamados «Federal», «Aires,» y
    * «Monotributista», que es peor que no leer nada: una lista de basura larga
    * parece una lectura y hay que revisarla entera para descubrir que no lo es.
-   *
-   * El criterio es el mismo que usa la reconstrucción por cercanía, y por la
-   * misma razón: dos celdas llenas y **un número en una columna de números**.
-   * Un dígito en cualquier lado no alcanza, porque «956X30X1» está adentro de la
-   * descripción de un artículo legítimo y no vuelve artículo a una línea.
    */
   const conDatos = filas
     .map((fila, i) => ({ fila, i }))
@@ -362,7 +553,6 @@ function armarConEsqueleto(
 
   return {
     notas,
-    dudosas,
     tabla: {
       columnas,
       metodo: contexto.metodo,
@@ -372,7 +562,7 @@ function armarConEsqueleto(
       inclinacionGrados: contexto.inclinacionGrados,
       seEnderezo: contexto.seEnderezo,
       alturaTipica,
-      notas: [...contexto.notas, ...notas],
+      notas: [...contexto.notas, ...notas, esqueleto.nota],
       valoresDeOtraPasada,
       ms: Date.now() - comienzo,
     },

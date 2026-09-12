@@ -249,6 +249,91 @@ export function asignarMonotonicamente<T extends ValorPosicionado>(
  * honesta a «¿había otra manera de repartir esto?»: si la segunda cuesta casi
  * lo mismo, la evidencia no alcanza para elegir y corresponde revisión.
  */
+/**
+ * Las mejores maneras de repartir una columna, no sólo la mejor.
+ *
+ * La asignación de costo mínimo es la respuesta correcta **cuando la geometría
+ * alcanza**, y muchas veces no alcanza. Sobre la foto de Lácteos Barraza los dos
+ * «16,00» de bonificación están impresos casi a la misma altura y una mala
+ * lectura de la segunda —«42»— cae un poco más cerca del segundo renglón: por
+ * distancia gana el «42», y con él el renglón no cierra.
+ *
+ * Elegir columna por columna, cada una por su cuenta, no puede resolver eso:
+ * mirando sólo la columna de bonificaciones, el «42» es la mejor respuesta. Lo
+ * que lo resuelve es la cuenta del renglón, que necesita el precio y el importe
+ * a la vez. Así que acá no se elige: se devuelven las alternativas para que la
+ * aritmética las combine y decida.
+ *
+ * Se obtienen prohibiendo de a una las parejas que eligió la ganadora, que es lo
+ * mismo que hace `segundaMejorAsignacion`, repetido. Vienen ordenadas por costo
+ * y sin repetir: dos exclusiones distintas suelen llevar al mismo reparto.
+ */
+export function mejoresAsignaciones<T extends ValorPosicionado>(
+  valores: T[],
+  filas: FilaObjetivo[],
+  alturaTipica: number,
+  cuantas: number,
+): Asignacion<T>[] {
+  const primera = asignarMonotonicamente(valores, filas, alturaTipica);
+  const salida: Asignacion<T>[] = [primera];
+  if (cuantas <= 1) return salida;
+
+  const firmas = new Set([firmaDeAsignacion(primera)]);
+
+  for (const excluido of primera.porFila) {
+    if (!excluido) continue;
+    const otra = asignarMonotonicamente(
+      valores.filter((v) => v !== excluido),
+      filas,
+      alturaTipica,
+    );
+    const firma = firmaDeAsignacion(otra);
+    if (firmas.has(firma)) continue;
+    firmas.add(firma);
+    /*
+     * El valor excluido **sobra**; no desaparece. Sacarlo sin más lo borraría de
+     * la evidencia, y la regla de esta capa es que nada se descarta en silencio:
+     * si esta alternativa gana, ese valor tiene que seguir estando disponible
+     * como sobrante del renglón.
+     */
+    otra.sobrantes.push(excluido);
+    /*
+     * Y su costo se paga igual, porque si no **los costos no son comparables**.
+     *
+     * La alternativa se calcula sobre un valor menos, así que se ahorra de arriba
+     * el precio de descartarlo: una asignación peor sobre menos valores da un
+     * número más chico que la mejor sobre todos. Sin este ajuste la lista salía
+     * ordenada al revés, y sobre la foto de Lácteos Barraza el mejor reparto de
+     * la columna de precios —10.361,45 arriba y 9.453,76 abajo— quedaba segundo
+     * detrás de uno que ponía una mancha del papel en el primer renglón y tiraba
+     * el precio. Los dos precios estaban bien leídos y bien ubicados; los
+     * perdía la comparación.
+     */
+    otra.costo += COSTO_DE_DESCARTE;
+    salida.push(otra);
+  }
+
+  return salida.sort((a, b) => a.costo - b.costo).slice(0, cuantas);
+}
+
+/**
+ * Qué quedó en cada fila, para no ofrecer dos veces el mismo reparto.
+ *
+ * Se compara por **texto** y no por fragmento. Dos repartos que dejan los mismos
+ * números en las mismas filas son la misma respuesta, por más que uno haya usado
+ * la lectura de una pasada y el otro la de otra, y ofrecerlos como dos gasta el
+ * cupo de alternativas sin agregar nada.
+ *
+ * Sobre la foto de Lácteos Barraza eso era exactamente lo que pasaba: la columna
+ * de bonificaciones tiene dos «16,00» y un «42», y las dos primeras alternativas
+ * dejaban «16,00 y 42» —las dos, con distintos fragmentos—, así que el reparto
+ * que pone los dos «16,00» quedaba tercero y nunca se probaba. Es el que hace
+ * cerrar el segundo renglón.
+ */
+function firmaDeAsignacion<T extends ValorPosicionado>(asignacion: Asignacion<T>): string {
+  return asignacion.porFila.map((v) => v?.texto ?? '').join('|');
+}
+
 export function segundaMejorAsignacion<T extends ValorPosicionado>(
   valores: T[],
   filas: FilaObjetivo[],
