@@ -105,15 +105,19 @@ describe('la reconstrucción de la tabla', () => {
      * corregir la factura. Lo que queda son columnas que se configuran una vez
      * para este formato, y todas son preguntas contestables.
      *
-     * Eran dos y ahora son cinco, y eso **no** es un retroceso: son las
-     * columnas que antes desaparecían sin decir nada. «Sugerido», «Unit» y la
+     * Eran dos y ahora son cuatro, y eso **no** es un retroceso: son las
+     * columnas que antes desaparecían sin decir nada. «Codigo», «Sugerido» y la
      * columna de texto sin encabezado ahora se conservan y se preguntan en vez
      * de evaporarse, y a cambio el comprobante recuperó los nueve precios
      * unitarios y los nueve códigos de artículo que antes venían en blanco.
      * El puntaje pasó de 0,63 a 0,93 por eso mismo.
+     *
+     * «Unit» ya no está entre ellas: el reparto conjunto de las columnas hace
+     * que su precio cierre la cuenta de los nueve renglones, y una coincidencia
+     * así vale más que cualquier cosa que se pueda decir de su nombre.
      */
-    expect(MABELHERDI.resumen.bloqueosUnicos).toBe(5);
-    expect(MABELHERDI.resumen.desglose.columnasSinReconocer).toBe(5);
+    expect(MABELHERDI.resumen.bloqueosUnicos).toBe(4);
+    expect(MABELHERDI.resumen.desglose.columnasSinReconocer).toBe(4);
     expect(MABELHERDI.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
     expect(MABELHERDI.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
     expect(MABELHERDI.resumen.advertenciasNoBloqueantes).toBeGreaterThan(10);

@@ -32,6 +32,24 @@ export interface Celda {
   desde: number;
   /** Desplazamiento donde termina. */
   hasta: number;
+  /**
+   * De qué pedazo de papel salió, cuando se sabe.
+   *
+   * Identifica el **fragmento físico**, no el texto: dos celdas que dicen «30»
+   * leídas de dos lugares distintos de la hoja son dos datos, y la misma caja
+   * usada dos veces es un dato inventado. Sobre la factura de Lácteos Barraza
+   * esa diferencia es exactamente la que hay que sostener: el código del segundo
+   * artículo dice 30 y su cantidad también, y son dos impresiones distintas.
+   *
+   * Es opcional porque el motor también lee tablas de texto plano, donde no hay
+   * coordenadas de las que hablar.
+   */
+  lugar?: string;
+}
+
+/** El identificador de un fragmento físico: dónde está en la página. */
+export function lugarDe(caja: { x0: number; y0: number; x1: number; y1: number }): string {
+  return `${caja.x0.toFixed(4)}:${caja.y0.toFixed(4)}:${caja.x1.toFixed(4)}:${caja.y1.toFixed(4)}`;
 }
 
 /**

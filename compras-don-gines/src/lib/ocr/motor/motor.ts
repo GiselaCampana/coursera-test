@@ -305,7 +305,16 @@ export function interpretar(
       netTotal: suPie.netTotal,
       filasVistas: opciones.filasVistas ?? null,
     });
-    candidatas.push({ convencion, pie: suPie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
+    candidatas.push({
+      convencion,
+      pie: suPie,
+      renglones,
+      puntaje,
+      penalizaciones,
+      sumaDeRenglones,
+      cierre,
+      reparaciones: renglones.reduce((total, r) => total + r.reparaciones, 0),
+    });
   }
 
   const veredicto = decidir(candidatas, ambiguas);

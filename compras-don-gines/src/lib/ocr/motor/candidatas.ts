@@ -60,6 +60,15 @@ export interface RenglonCandidato {
    * sin descuento, o con el precio con descuento impreso aparte.
    */
   descuentoEnElImporte: boolean | null;
+  /**
+   * Cuántos de sus números no se leyeron tal como están impresos.
+   *
+   * Cero significa que cada valor salió de tomar los separadores del papel al
+   * pie de la letra. Más que cero significa que hizo falta suponer que el OCR
+   * perdió o corrió alguno, que es una suposición legítima —y a veces la única
+   * que explica el papel— pero que hay que preferir no hacer.
+   */
+  reparaciones: number;
   /** Qué controles pasó y cuáles no. */
   controles: ControlDeRenglon[];
 }
@@ -122,8 +131,9 @@ export function partirNumeroYTexto(texto: string): { numero: string; resto: stri
 /** Las celdas de una fila, indexadas por campo. */
 function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
   const mapa = new Map<CampoDeColumna, string>();
+  const lugares = new Map<CampoDeColumna, string>();
   const textosSinConfirmar: string[] = [];
-  const montosSinConfirmar: string[] = [];
+  const montosSinConfirmar: { texto: string; lugar?: string }[] = [];
 
   columnas.forEach((columna, i) => {
     if (!columna || columna.campo === 'ignorada') return;
@@ -134,11 +144,12 @@ function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
       return;
     }
     if (columna.campo === 'UNKNOWN_MONEY') {
-      montosSinConfirmar.push(celda.texto.trim());
+      montosSinConfirmar.push({ texto: celda.texto.trim(), lugar: celda.lugar });
       return;
     }
     if (CAMPOS_SIN_CONFIRMAR.has(columna.campo)) return;
     mapa.set(columna.campo, celda.texto.trim());
+    if (celda.lugar) lugares.set(columna.campo, celda.lugar);
   });
 
   /*
@@ -167,7 +178,7 @@ function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
     mapa.set('descripcion', textosSinConfirmar.join(' ').replace(/\s+/g, ' ').trim());
   }
 
-  return { mapa, montosSinConfirmar };
+  return { mapa, lugares, montosSinConfirmar };
 }
 
 /**
@@ -183,7 +194,7 @@ export function candidatasDeRenglon(
   columnas: (ColumnaReconocida | null)[],
   convencion: ConvencionDecimal,
 ): RenglonCandidato[] {
-  const { mapa: celdas, montosSinConfirmar } = porCampo(fila, columnas);
+  const { mapa: celdas, lugares, montosSinConfirmar } = porCampo(fila, columnas);
 
   /*
    * Una celda invadida por la de al lado se lee de las dos maneras.
@@ -220,12 +231,18 @@ export function candidatasDeRenglon(
    * Se ofrece únicamente donde **falta** el campo: una columna sin confirmar no
    * desplaza a una reconocida.
    */
+  const lugaresPorVariante = new Map<Map<CampoDeColumna, string>, Map<CampoDeColumna, string>>();
+  for (const variante of variantesDeCeldas) lugaresPorVariante.set(variante, lugares);
+
   for (const monto of montosSinConfirmar) {
     for (const destino of ['precioUnitario', 'precioConDescuento', 'importe'] as const) {
       if (celdas.has(destino)) continue;
       for (const base of [...variantesDeCeldas]) {
         const conMonto = new Map(base);
-        conMonto.set(destino, monto);
+        conMonto.set(destino, monto.texto);
+        const susLugares = new Map(lugaresPorVariante.get(base) ?? lugares);
+        if (monto.lugar) susLugares.set(destino, monto.lugar);
+        lugaresPorVariante.set(conMonto, susLugares);
         variantesDeCeldas.push(conMonto);
       }
     }
@@ -233,6 +250,31 @@ export function candidatasDeRenglon(
 
   const salida: RenglonCandidato[] = [];
   for (const variante of variantesDeCeldas) {
+    /*
+     * **Un mismo fragmento del papel no puede ocupar dos campos del renglón.**
+     *
+     * La prohibición vale para todo el comprobante y no sólo dentro de una
+     * columna, porque el daño es el mismo venga de donde venga: si el «30» que
+     * dice la cantidad se usara además como código de artículo, la factura
+     * quedaría con un código que nadie imprimió y el historial de precios se
+     * ensuciaría con un producto inventado.
+     *
+     * Dos celdas que **dicen** lo mismo sí pueden convivir, y tienen que poder:
+     * en el segundo renglón de Lácteos Barraza el código es 30 y la cantidad es
+     * 30, y son dos impresiones distintas en dos lugares distintos de la hoja.
+     * Lo que se compara es el lugar, no el texto.
+     */
+    const usados = new Set<string>();
+    let repetido = false;
+    for (const [, lugar] of lugaresPorVariante.get(variante) ?? lugares) {
+      if (usados.has(lugar)) {
+        repetido = true;
+        break;
+      }
+      usados.add(lugar);
+    }
+    if (repetido) continue;
+
     for (const candidata of combinarNumeros(variante, convencion)) {
       // Sin descripción no hay renglón: no hay con qué asociar el artículo.
       if (candidata.descripcion.replace(/[^A-Za-zÁÉÍÓÚÑ]/g, '').length < 3) continue;
@@ -262,16 +304,39 @@ function combinarNumeros(
     valores: numerosDeCelda(celdas.get(campo)!, convencion),
   }));
 
-  const combinaciones: Map<CampoDeColumna, Decimal>[] = [new Map()];
+  /*
+   * Se lleva la cuenta de **cuántos números hubo que reparar**.
+   *
+   * `variantesDeNumero` devuelve primero la lectura literal —los separadores tal
+   * como están impresos— y después las que suponen que el OCR perdió o corrió
+   * alguno. Las dos son lecturas legítimas de los mismos dígitos, pero no valen
+   * lo mismo, y sin esta cuenta no había manera de distinguirlas.
+   *
+   * El caso que lo obliga apareció en Lácteos Barraza apenas los dos renglones
+   * empezaron a cerrar: existe una lectura del comprobante entero en la que
+   * **todos** los separadores decimales se ignoran, y es internamente
+   * consistente. 27 × 1.036.145 × 0,84 da 23.499.769, los dos renglones cierran,
+   * y la suma da el pie leído de la misma manera. Todo cuadra cien veces más
+   * grande, y el costo de cada artículo sale cien veces mal.
+   *
+   * Lo que la descarta no es un umbral: es que necesita reparar todos los
+   * números del papel, y la otra no necesita reparar ninguno.
+   */
+  const combinaciones: { valores: Map<CampoDeColumna, Decimal>; reparaciones: number }[] = [
+    { valores: new Map(), reparaciones: 0 },
+  ];
   for (const { campo, valores } of lecturas) {
     if (valores.length === 0) continue;
-    const siguiente: Map<CampoDeColumna, Decimal>[] = [];
+    const siguiente: { valores: Map<CampoDeColumna, Decimal>; reparaciones: number }[] = [];
     for (const parcial of combinaciones) {
-      for (const valor of valores) {
-        const copia = new Map(parcial);
+      valores.forEach((valor, indice) => {
+        const copia = new Map(parcial.valores);
         copia.set(campo, valor);
-        siguiente.push(copia);
-      }
+        siguiente.push({
+          valores: copia,
+          reparaciones: parcial.reparaciones + (indice === 0 ? 0 : 1),
+        });
+      });
     }
     // Tope de seguridad: una fila con más de esto no es ambigua, es ilegible.
     combinaciones.length = 0;
@@ -279,7 +344,7 @@ function combinarNumeros(
   }
 
   const salida: RenglonCandidato[] = [];
-  for (const numeros of combinaciones) {
+  for (const { valores: numeros, reparaciones } of combinaciones) {
     const descuento = numeros.get('descuentoPct') ?? null;
 
     /*
@@ -310,6 +375,7 @@ function combinarNumeros(
         precioConDescuento: numeros.get('precioConDescuento') ?? null,
         importe: numeros.get('importe') ?? null,
         descuentoEnElImporte: enElImporte,
+        reparaciones,
         controles: [],
       };
       renglon.controles = controlarRenglon(renglon);
@@ -401,6 +467,8 @@ export interface CandidataDeTabla {
   penalizaciones: Penalizacion[];
   /** La suma de los importes de los renglones. */
   sumaDeRenglones: Decimal;
+  /** Cuántos números de todo el comprobante no se leyeron tal como están impresos. */
+  reparaciones: number;
   /**
    * Cómo se explica —o no— la diferencia entre la suma y el pie impreso.
    *
@@ -410,6 +478,30 @@ export interface CandidataDeTabla {
    */
   cierre?: CierreCompatible | null;
 }
+
+/**
+ * Qué le falta a un renglón para poder comprobarse solo.
+ *
+ * Los tres que hacen falta y ninguno más: sin cantidad no hay con qué
+ * multiplicar, sin precio no hay por cuánto, y sin importe no hay contra qué.
+ * El descuento no entra porque un renglón sin descuento es perfectamente normal.
+ */
+export function leFalta(renglon: RenglonCandidato): string[] {
+  const falta: string[] = [];
+  if (!cantidadQueCuesta(renglon) && renglon.piezas === null) falta.push('la cantidad');
+  if (!renglon.precioUnitario && !renglon.precioConDescuento) falta.push('el precio');
+  if (!renglon.importe) falta.push('el importe');
+  return falta;
+}
+
+/**
+ * Hasta dónde puede llegar un comprobante con algún renglón sin comprobar.
+ *
+ * Por debajo del umbral automático a propósito: la lectura puede ser buena y
+ * perfectamente utilizable —por eso no se rechaza— pero no se acepta sin que la
+ * mire una persona.
+ */
+const TOPE_CON_RENGLON_INCOMPLETO = 0.8;
 
 export interface PieParaControlar {
   netTotal: Decimal | null;
@@ -538,6 +630,38 @@ export function puntuarTabla(
     penalizar('No hay neto impreso contra el cual comparar la suma.', 0.2);
   }
 
+  /*
+   * La compuerta: **un renglón incompleto no se compensa con el total**.
+   *
+   * Que la suma de los importes dé el neto impreso demuestra que la columna de
+   * importes está completa. No demuestra nada sobre las cantidades, los precios
+   * ni los descuentos: sobre la foto de Lácteos Barraza los dos importes sumaban
+   * exacto mientras el segundo renglón no tenía precio y arrastraba un 42 % que
+   * no cierra con nada. El comprobante se veía cuadrado y el costo por kilo de
+   * uno de los dos artículos habría salido inventado.
+   *
+   * Son dos controles y el segundo no reemplaza al primero: cada renglón cierra
+   * contra su propia aritmética, y después la suma cierra contra el pie. Un
+   * renglón al que le falta la cantidad, el precio o el importe no tiene con qué
+   * comprobarse, así que el comprobante **no puede aceptarse solo** por más que
+   * el total dé. Se topea el puntaje por debajo del umbral automático en vez de
+   * restar puntos: no es una penalización graduable, es una condición.
+   */
+  const incompletos = renglones.filter((renglon) => leFalta(renglon).length > 0);
+  if (incompletos.length > 0) {
+    const cuales = incompletos
+      .map((renglon) => leFalta(renglon).join(', '))
+      .slice(0, 3)
+      .join('; ');
+    penalizaciones.push({
+      motivo:
+        `${incompletos.length} renglón/es no tienen con qué comprobarse contra su propia ` +
+        `aritmética (falta ${cuales}). El cierre contra el pie no los reemplaza.`,
+      puntos: 0,
+    });
+    puntaje = Math.min(puntaje, TOPE_CON_RENGLON_INCOMPLETO);
+  }
+
   // --- Filas vistas contra filas interpretadas -----------------------------
   if (pie.filasVistas !== null && pie.filasVistas > renglones.length) {
     const faltan = pie.filasVistas - renglones.length;
@@ -661,7 +785,25 @@ export function decidir(
   candidatas: CandidataDeTabla[],
   encabezadosSinResolver: string[] = [],
 ): Veredicto {
-  const ordenadas = [...candidatas].sort((a, b) => b.puntaje - a.puntaje);
+  /*
+   * A igual puntaje gana la lectura que **menos números tuvo que reparar**.
+   *
+   * No es un desempate cosmético. Sobre la factura de Lácteos Barraza existe una
+   * lectura del comprobante entero en la que se ignoran todos los separadores
+   * decimales, y es internamente consistente: los dos renglones cierran y la
+   * suma da el pie leído de la misma manera, cien veces más grande. Puntúa igual
+   * que la buena porque cumple las mismas igualdades.
+   *
+   * Lo que la distingue es que necesita suponer que el OCR perdió el separador
+   * de cada número del papel, y la otra no necesita suponer nada. Entre dos
+   * explicaciones que cuadran, la que no inventa nada es la que hay que mostrar.
+   *
+   * Sigue siendo un empate de puntaje, así que el margen las manda a revisión
+   * igual: esto decide cuál se le muestra a la persona, no si se acepta sola.
+   */
+  const ordenadas = [...candidatas].sort(
+    (a, b) => b.puntaje - a.puntaje || a.reparaciones - b.reparaciones,
+  );
 
   // Dos caminos que llegan al mismo resultado son una sola respuesta.
   const vistas = new Set<string>();

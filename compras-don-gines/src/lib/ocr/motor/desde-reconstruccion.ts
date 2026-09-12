@@ -3,6 +3,7 @@ import {
   cantidadQueCuesta,
   candidatasDeRenglon,
   decidir,
+  leFalta,
   netoDelRenglon,
   puntuarTabla,
   type CandidataDeTabla,
@@ -14,6 +15,7 @@ import {
 import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
+  llevaNumeros,
   type ColumnaReconocida,
 } from '@/lib/ocr/motor/columnas';
 import {
@@ -26,7 +28,7 @@ import {
 } from '@/lib/ocr/motor/pendientes';
 
 export type { Pendiente, ResumenDePendientes } from '@/lib/ocr/motor/pendientes';
-import type { Celda, FilaDeDatos } from '@/lib/ocr/motor/tabla';
+import { lugarDe, type Celda, type FilaDeDatos } from '@/lib/ocr/motor/tabla';
 import { leerEmisor, leerPie, type EmisorLeido } from '@/lib/ocr/motor/motor';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import {
@@ -114,17 +116,31 @@ export function interpretarReconstruccion(
          */
         filasVistas: Math.max(candidata.filasEsperadas, candidata.tabla.renglones.length),
       });
-      lecturas.push({ convencion, pie, renglones, puntaje, penalizaciones, sumaDeRenglones, cierre });
+      lecturas.push({
+        convencion,
+        pie,
+        renglones,
+        puntaje,
+        penalizaciones,
+        sumaDeRenglones,
+        cierre,
+        reparaciones: renglones.reduce((total, r) => total + r.reparaciones, 0),
+      });
     }
 
     return { candidata, lecturas };
   });
 
-  const mejorDeCada = armados.map((armado) => ({
-    ...armado,
-    mejor: Math.max(...armado.lecturas.map((l) => l.puntaje)),
-  }));
-  const elegido = mejorDeCada.reduce((a, b) => (b.mejor > a.mejor ? b : a));
+  const mejorDeCada = armados.map((armado) => {
+    const ordenadas = [...armado.lecturas].sort(
+      (a, b) => b.puntaje - a.puntaje || a.reparaciones - b.reparaciones,
+    );
+    return { ...armado, mejor: ordenadas[0].puntaje, reparaciones: ordenadas[0].reparaciones };
+  });
+  // A igual puntaje gana la tabla cuya lectura repara menos números impresos.
+  const elegido = mejorDeCada.reduce((a, b) =>
+    b.mejor > a.mejor || (b.mejor === a.mejor && b.reparaciones < a.reparaciones) ? b : a,
+  );
 
   const tabla = elegido.candidata.tabla;
   const candidatas = elegido.lecturas;
@@ -188,17 +204,23 @@ export function interpretarReconstruccion(
 function variantesDeFila(
   renglon: RenglonReconstruido,
   indice: number,
+  /** Qué columnas llevan números, para no ofrecer un sobrante donde no cabe. */
+  esNumerica: (columna: number) => boolean,
   /** Lo que sobró en los renglones de arriba y de abajo. */
-  deLosVecinos: { texto: string }[] = [],
+  deLosVecinos: { texto: string; caja?: { x0: number; y0: number; x1: number; y1: number } }[] = [],
 ): FilaDeDatos[] {
-  const base = (elegida: (columna: number) => string | null): FilaDeDatos => {
+  const base = (
+    elegida: (columna: number) => string | null,
+    lugares: (columna: number) => string | undefined = (i) =>
+      renglon.celdas[i]?.procedencia ? lugarDe(renglon.celdas[i]!.procedencia!.caja) : undefined,
+  ): FilaDeDatos => {
     let x = 0;
     const celdas: (Celda | null)[] = renglon.celdas.map((celda, i) => {
       const texto = celda ? elegida(i) : null;
       if (texto === null) return null;
       const desde = x;
       x += texto.length + 2;
-      return { texto, desde, hasta: x - 2 };
+      return { texto, desde, hasta: x - 2, lugar: lugares(i) };
     });
     return {
       linea: indice,
@@ -233,10 +255,36 @@ function variantesDeFila(
    * se queda sin descuento. Sólo los vecinos inmediatos: un valor que aparece a
    * tres renglones del suyo no es un valor corrido, es otra cosa.
    */
-  for (const sobrante of [...renglon.sobrantes, ...deLosVecinos]) {
+  /*
+   * Sólo se ofrecen los sobrantes que **pueden ser un número corrido de fila**,
+   * y sólo en las celdas donde cabría un número.
+   *
+   * Un sobrante sin un dígito no es un importe que se fue de renglón: es una
+   * mancha del papel o una letra suelta, y ofrecerla en cada celda de cada
+   * renglón multiplica el trabajo por diez sin agregar una sola lectura que
+   * pueda cerrar una cuenta. Sobre la factura de Lácteos Barraza el segundo
+   * renglón arrastra once sobrantes —«To», «AL», «P», «ECN»…— y tres tienen
+   * dígitos.
+   *
+   * Lo que hace falta conservar es el caso real: el importe del primer renglón
+   * queda fuera de toda columna, y tiene que poder volver a su celda.
+   */
+  const utiles = [...renglon.sobrantes, ...deLosVecinos].filter((s) => /\d/.test(s.texto));
+  for (const sobrante of utiles) {
+    const suLugar = sobrante.caja ? lugarDe(sobrante.caja) : undefined;
     renglon.celdas.forEach((celda, i) => {
-      if (!celda) return;
-      filas.push(base((j) => (j === i ? sobrante.texto : renglon.celdas[j]?.texto ?? null)));
+      if (!celda || !esNumerica(i)) return;
+      filas.push(
+        base(
+          (j) => (j === i ? sobrante.texto : renglon.celdas[j]?.texto ?? null),
+          (j) =>
+            j === i
+              ? suLugar
+              : renglon.celdas[j]?.procedencia
+                ? lugarDe(renglon.celdas[j]!.procedencia!.caja)
+                : undefined,
+        ),
+      );
     });
   }
 
@@ -262,11 +310,13 @@ function elegirParaElDocumento(
   convencion: ConvencionDecimal,
   netoImpreso: Decimal | null,
 ): RenglonCandidato[] {
+  const esNumerica = (columna: number): boolean => llevaNumeros(columnas[columna]?.campo);
+
   const porFila = renglones.map((renglon, i) => {
     const vecinos = [renglones[i - 1], renglones[i + 1]]
       .filter((v): v is RenglonReconstruido => v !== undefined)
       .flatMap((v) => v.sobrantes);
-    const candidatas = variantesDeFila(renglon, i, vecinos).flatMap((fila) =>
+    const candidatas = variantesDeFila(renglon, i, esNumerica, vecinos).flatMap((fila) =>
       candidatasDeRenglon(fila, columnas, convencion),
     );
     /*
@@ -437,7 +487,7 @@ function alternativasDe(celda: { alternativas: LecturaDeCelda[] }): AlternativaD
  * ciento quince pedidos, casi todos ambigüedades de la descripción que no entran
  * en ninguna igualdad. Una lista así es lo mismo que volver a tipear la factura.
  */
-function queFaltaResolver(
+export function queFaltaResolver(
   tabla: TablaReconstruida,
   veredicto: Veredicto,
   sinResolver: string[],
@@ -498,14 +548,49 @@ function queFaltaResolver(
    * renglones no imprimen precio unitario, así que ninguno puede verificarse
    * solo, y todas sus ambigüedades quedaban marcadas como bloqueantes.
    */
-  const documentoCierra = veredicto.ganadora?.cierre?.compatible === true;
   const cierran = new Set<number>();
   (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
     if (renglon.controles.length > 0 && renglon.controles.every((c) => c.paso)) cierran.add(i);
   });
 
+  /*
+   * Y lo que le falta a cada renglón para poder comprobarse, que es lo que el
+   * cierre del comprobante **no** demuestra.
+   *
+   * Va como falta de celda y no como columna por confirmar, porque no es lo
+   * mismo ni para quien lo lee ni para lo que hay que hacer: una columna por
+   * confirmar se contesta una vez y vale para el formato; un renglón sin precio
+   * es un dato que falta en ese renglón y hay que mirarlo ahí.
+   */
+  (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
+    for (const falta of leFalta(renglon)) {
+      pendientes.push({
+        categoria: 'BLOCKING_MISSING_CELL',
+        renglon: i + 1,
+        campo: falta,
+        columna: null,
+        alternativas: [],
+        elegido: null,
+        motivo:
+          `Al renglón ${i + 1} le falta ${falta}, así que no se puede comprobar contra su ` +
+          'propia aritmética. Que la suma del comprobante dé el neto impreso no lo reemplaza.',
+      });
+    }
+  });
+
   tabla.renglones.forEach((renglon, i) => {
-    const cerro = documentoCierra || cierran.has(i);
+    /*
+     * Un renglón está confirmado cuando **su propia** aritmética cierra.
+     *
+     * Antes alcanzaba con que cerrara el comprobante entero, y eso era dar por
+     * buena una fila con el argumento equivocado: la suma de los importes prueba
+     * que la columna de importes está completa, no que las cantidades, los
+     * precios y los descuentos de cada fila estén donde corresponde. Sobre la
+     * foto de Lácteos Barraza los dos importes sumaban exacto mientras el
+     * segundo renglón tenía un 42 % que no cierra con nada, y todas sus
+     * ambigüedades salían como simples anotaciones.
+     */
+    const cerro = cierran.has(i);
 
     renglon.celdas.forEach((celda, j) => {
       const columna = tabla.columnas[j];
@@ -611,6 +696,20 @@ function queConfirmar(columna: ColumnaEspacial, nombre: string): string {
       (posibles.length > 0 ? `: puede ser ${posibles.join(' o ')}.` : '.') +
       ' Sus valores entran en las cuentas del comprobante, así que no se puede adivinar. ' +
       'Se resuelve una vez y queda para este formato.'
+    );
+  }
+
+  /*
+   * Y el caso intermedio: el encabezado se leyó, pero lo que hay debajo no
+   * alcanzó para confirmarlo. Decirle a alguien «se dedujo sin encabezado
+   * legible» cuando el encabezado está impreso y se lee es confundirlo sobre
+   * qué tiene que mirar.
+   */
+  if (columna.campo?.origen === 'EXACT_HEADER') {
+    return (
+      `Confirmar que «${nombre}» es ${campo}. El encabezado se lee, pero lo que hay debajo ` +
+      'salió demasiado borroneado para confirmarlo. Los renglones ya se reconstruyeron con ' +
+      'esa lectura.'
     );
   }
 
