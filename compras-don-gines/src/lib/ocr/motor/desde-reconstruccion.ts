@@ -460,6 +460,23 @@ function puntosDeRenglon(renglon: RenglonCandidato): number {
     renglon.piezas,
     renglon.importe,
   ].filter(Boolean).length;
+  /*
+   * PENDIENTE MEDIDO: acá debería desempatar a favor de la lectura que menos
+   * números repara, y hoy no lo hace.
+   *
+   * El caso es real: un renglón leído en la escala del papel y el mismo renglón
+   * leído cien veces más grande **cierran los dos**, porque la proporción se
+   * mantiene, así que entre ellos decide el orden en que se generaron. Se probó
+   * restar las reparaciones —con peso grande y con peso de desempate— y las dos
+   * veces **mide peor**: la elección por renglón cambia el punto de partida de
+   * la búsqueda contra el total y el comprobante termina más lejos del neto
+   * impreso, no más cerca.
+   *
+   * Que empeore no lo vuelve correcto. Lo que muestra es que la búsqueda contra
+   * el total y la elección por renglón están más acopladas de lo que deberían, y
+   * eso es lo que hay que separar antes. Queda anotado acá y no escondido en un
+   * cambio que degrada el resultado medido.
+   */
   return puntos;
 }
 
