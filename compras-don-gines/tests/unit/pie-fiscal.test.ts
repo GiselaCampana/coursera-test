@@ -275,6 +275,30 @@ describe('las percepciones: cero, una o varias', () => {
     expect(pie.percepciones).toHaveLength(0);
   });
 
+  it('el número de la resolución que crea la percepción no es la percepción', () => {
+    /*
+     * «Percepción IVA RG 5329» trae la palabra que importa y después el número
+     * de la resolución general que la crea. Sin distinguirlos, ese 5329 entra
+     * como una percepción de cinco mil trescientos veintinueve pesos y el total
+     * del comprobante se va de cauce por ese monto. Es una distinción de
+     * lenguaje y no de magnitud: lo que viene detrás de «RG» nombra una norma.
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('Percepcion IVA RG', 1, 0.45),
+        frag('5329', 1, 0.7),
+        frag('Percepcion IIBB', 2, 0.45),
+        frag('15,00', 2, 0.7),
+      ],
+      '1000.00',
+    );
+
+    expect(pie.percepciones.map((p) => p.valor.toFixed(2))).toEqual(['15.00']);
+    expect(pie.asignaciones.some((a) => a.valor.toFixed(2) === '5329.00')).toBe(false);
+  });
+
   it('el porcentaje impreso al lado de una percepción no es una percepción', () => {
     const pie = pieDe(
       [

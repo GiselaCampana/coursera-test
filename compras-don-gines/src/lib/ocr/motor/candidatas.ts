@@ -430,8 +430,6 @@ function combinarNumeros(
 
   const salida: RenglonCandidato[] = [];
   for (const { valores: numeros, reparaciones, severidad, incoherentes } of combinaciones) {
-    const descuento = numeros.get('descuentoPct') ?? null;
-
     /*
      * Un descuento de más de cien por ciento no es un descuento.
      *
@@ -442,11 +440,15 @@ function combinarNumeros(
      * cerrar contra el pie. Sobre una factura del banco eso dejaba cuatro
      * artículos con costo negativo y la suma a dos décimas del neto impreso.
      *
-     * No se corrige el valor ni se lo aproxima: la lectura se descarta. Si la
-     * celda de bonificación no dice un porcentaje posible, el renglón se
-     * interpreta sin descuento y, si hace falta, se pide.
+     * No se corrige el valor ni se lo aproxima: **se descarta la lectura, no el
+     * renglón**. La diferencia importa y la primera versión la tenía mal: al
+     * saltear la combinación entera, un renglón cuya única lectura de
+     * bonificación era imposible desaparecía del comprobante, que es peor que
+     * el problema. Si la celda no dice un porcentaje posible, el renglón se
+     * interpreta sin descuento y la celda se pide.
      */
-    if (descuento !== null && descuento.gt(100)) continue;
+    const leido = numeros.get('descuentoPct') ?? null;
+    const descuento = leido !== null && leido.gt(100) ? null : leido;
 
     /*
      * Cuando hay descuento y un importe impreso, pero no hay una columna con el

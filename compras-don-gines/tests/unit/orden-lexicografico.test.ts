@@ -4,6 +4,7 @@ import {
   candidatasDeRenglon,
   controlarRenglon,
   decidir,
+  netoDelRenglon,
   puntuarTabla,
   type CandidataDeTabla,
   type RenglonCandidato,
@@ -472,5 +473,71 @@ describe('el formato de columna llega hasta el renglón', () => {
     expect(cierran[0].precioUnitario?.toFixed(2)).toBe('522.93');
     // Y queda dicho que hubo que suponer algo: no se leyó tal como está impreso.
     expect(cierran[0].reparaciones).toBeGreaterThan(0);
+  });
+});
+
+describe('un descuento imposible no es un descuento', () => {
+  const columnas = [
+    columna('descripcion', 'Descripción'),
+    columna('cantidad', 'Cant'),
+    columna('precioUnitario', 'Precio'),
+    columna('descuentoPct', 'Bonif'),
+    columna('importe', 'Importe'),
+  ];
+
+  function filaCon(descuento: string): FilaDeDatos {
+    return {
+      linea: 0,
+      cruda: `ARTICULO 10 100,00 ${descuento} 1.000,00`,
+      celdas: [
+        { texto: 'ARTICULO', desde: 0, hasta: 8 },
+        { texto: '10', desde: 10, hasta: 12 },
+        { texto: '100,00', desde: 14, hasta: 20 },
+        { texto: descuento, desde: 22, hasta: 22 + descuento.length },
+        { texto: '1.000,00', desde: 30, hasta: 38 },
+      ],
+      sobrantes: [],
+    };
+  }
+
+  it('una celda de bonificación leída «629» no genera un descuento de 629 %', () => {
+    /*
+     * El error que esto impide es silencioso, que es lo que lo hace grave. Con
+     * 629 % de bonificación el neto del renglón sale **negativo** —importe ×
+     * (1 − 6,29)— y un negativo grande se compensa en la suma con otro renglón
+     * leído de más: el comprobante cierra contra el pie impreso con artículos
+     * de costo negativo adentro. Sobre una factura del banco eso dejaba la suma
+     * a dos décimas del neto y cuatro artículos con costo negativo.
+     *
+     * No se corrige el valor ni se lo aproxima: la lectura se descarta y el
+     * renglón se interpreta sin descuento.
+     */
+    const candidatas = candidatasDeRenglon(filaCon('629'), columnas, 'ar');
+    expect(candidatas.length).toBeGreaterThan(0);
+    for (const candidata of candidatas) {
+      expect(candidata.descuentoPct === null || candidata.descuentoPct.lte(1)).toBe(true);
+      const neto = netoDelRenglon(candidata);
+      expect(neto === null || neto.gte(0)).toBe(true);
+    }
+  });
+
+  it('un descuento normal sí entra', () => {
+    // El control de al lado: la regla no puede tirar los descuentos buenos.
+    const candidatas = candidatasDeRenglon(filaCon('16,00'), columnas, 'ar');
+    expect(candidatas.some((c) => c.descuentoPct?.toFixed(2) === '0.16')).toBe(true);
+  });
+
+  it('un renglón no puede valer menos que nada', () => {
+    /*
+     * La red de seguridad, probada por su cuenta. Con el descuento acotado esto
+     * no debería dispararse nunca, y está igual porque el daño de un neto
+     * negativo no rompe ninguna igualdad: se compensa y pasa inadvertido.
+     */
+    const imposible = renglon({
+      importe: new Decimal('1000'),
+      descuentoPct: new Decimal('6.29'),
+      descuentoEnElImporte: false,
+    });
+    expect(netoDelRenglon(imposible)).toBeNull();
   });
 });
