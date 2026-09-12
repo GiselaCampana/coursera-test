@@ -134,6 +134,29 @@ export interface OpcionesDelMotorReconstruido {
    * peor, pierde.
    */
   relectura?: EvidenciaDeRelectura;
+  /**
+   * Celdas que una persona ya confirmó mirando el papel.
+   *
+   * Es la mitad que le faltaba a la lista de bloqueos: sirve de poco decir
+   * «confirmá la cantidad del renglón cinco» si después no se puede volver a
+   * interpretar el comprobante con esa cantidad puesta. Con la confirmación
+   * aplicada, el renglón vuelve a entrar al **mismo** motor de candidatas —la
+   * misma aritmética, el mismo orden de preferencias— y sus consecuencias se
+   * recalculan: si el precio y el subtotal que estaban en duda ahora cierran
+   * con la cantidad confirmada, dejan de ser bloqueos solos.
+   *
+   * El número de renglón es el del informe, empezando en 1.
+   */
+  confirmaciones?: CeldaConfirmada[];
+}
+
+/** Una celda que una persona leyó del papel y dio por buena. */
+export interface CeldaConfirmada {
+  /** El renglón del informe, empezando en 1. */
+  renglon: number;
+  campo: CampoDeColumna;
+  /** El valor tal como lo tipeó, en el formato del papel. */
+  texto: string;
 }
 
 export function interpretarReconstruccion(
@@ -155,8 +178,18 @@ export function interpretarReconstruccion(
   );
   if (!convieneReleer(pedidas)) return primero;
 
+  /*
+   * Las confirmaciones viajan a la segunda pasada igual que a la primera.
+   *
+   * Se olvidaban, y era un error silencioso de los peores: una persona
+   * confirmaba una cantidad, la relectura ganaba —como gana en la factura larga
+   * del banco— y el informe volvía con la confirmación descartada y el mismo
+   * bloqueo pedido otra vez. Lo único que no se hereda es la relectura: la
+   * segunda pasada **es** la relectura.
+   */
   const segundo = interpretarUnaVez(sumarRelectura(evidencia, opciones.relectura), {
     cuitDelReceptor: opciones.cuitDelReceptor,
+    confirmaciones: opciones.confirmaciones,
   });
 
   /*
@@ -243,14 +276,18 @@ function interpretarUnaVez(
    * comprobante, gana con la suma contra el pie; si lo empeora, pierde y no tocó
    * nada. Ninguna de las dos muta a la otra.
    */
-  const armados = candidatasDeTabla(evidencia).map((candidata) => {
-    const columnas = candidata.tabla.columnas.map((c) => c.campo);
+  /** Interpreta una tabla con las dos convenciones decimales del documento. */
+  const interpretarTabla = (
+    tabla: TablaReconstruida,
+    filasEsperadas: number,
+  ): CandidataDeTabla[] => {
+    const columnas = tabla.columnas.map((c) => c.campo);
     const lecturas: CandidataDeTabla[] = [];
 
     for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
       const pie = leerPie(textos.completo, convencion);
       const renglones = elegirParaElDocumento(
-        candidata.tabla.renglones,
+        tabla.renglones,
         columnas,
         convencion,
         pie.netTotal,
@@ -262,7 +299,7 @@ function interpretarUnaVez(
          * fuente. Si tres columnas sostienen dos renglones y una sostiene uno
          * porque el OCR perdió un valor, hay dos.
          */
-        filasVistas: Math.max(candidata.filasEsperadas, candidata.tabla.renglones.length),
+        filasVistas: Math.max(filasEsperadas, tabla.renglones.length),
       });
       lecturas.push({
         convencion,
@@ -276,8 +313,13 @@ function interpretarUnaVez(
       });
     }
 
-    return { candidata, lecturas };
-  });
+    return lecturas;
+  };
+
+  const armados = candidatasDeTabla(evidencia).map((candidata) => ({
+    candidata,
+    lecturas: interpretarTabla(candidata.tabla, candidata.filasEsperadas),
+  }));
 
   /*
    * Dentro de cada reconstrucción se elige con el **orden lexicográfico**: ahí
@@ -307,8 +349,24 @@ function interpretarUnaVez(
     b.mejor > a.mejor || (b.mejor === a.mejor && b.reparaciones < a.reparaciones) ? b : a,
   );
 
-  const tabla = elegido.candidata.tabla;
-  const candidatas = elegido.lecturas;
+  /*
+   * Y recién acá se aplican las confirmaciones de una persona.
+   *
+   * Después de elegir la estructura y antes de decidir los pendientes, que es
+   * el único lugar donde tiene sentido: la confirmación se refiere al renglón
+   * **tal como el informe lo numeró**, así que hace falta que la tabla ya esté
+   * elegida. Lo que se hace con ella no es escribir el valor en el resultado:
+   * se reemplaza el texto de la celda y el renglón vuelve a pasar por el mismo
+   * motor de candidatas. Si con la cantidad confirmada el precio y el subtotal
+   * que estaban en duda cierran, dejan de estar en duda solos; y si no cierran,
+   * siguen pedidos. Confirmar una celda no confirma las demás.
+   */
+  let tabla = elegido.candidata.tabla;
+  let candidatas = elegido.lecturas;
+  if (opciones.confirmaciones?.length) {
+    tabla = conCeldasConfirmadas(tabla, opciones.confirmaciones);
+    candidatas = interpretarTabla(tabla, elegido.candidata.filasEsperadas);
+  }
 
   /*
    * Qué columnas frenan el comprobante.
@@ -728,6 +786,8 @@ export function queFaltaResolver(
     if (!columna.campo?.requiereConfirmacion || columna.apoyos === 0) continue;
     const nombre = nombreDeColumna(columna, tabla);
     pendientes.push({
+      id: `columna:${nombre}`,
+      dependeDe: null,
       categoria: 'BLOCKING_UNKNOWN_COLUMN',
       renglon: null,
       campo: null,
@@ -740,6 +800,8 @@ export function queFaltaResolver(
 
   if (!veredicto.ganadora?.pie.netTotal) {
     pendientes.push({
+      id: 'pie:netTotal',
+      dependeDe: null,
       categoria: 'BLOCKING_UNKNOWN_COLUMN',
       renglon: null,
       campo: 'netTotal',
@@ -794,12 +856,27 @@ export function queFaltaResolver(
    */
   const sugerencias = sugerenciasDerivadas(veredicto.ganadora?.renglones ?? []);
 
+  /*
+   * La raíz de cada renglón, decidida **antes** de emitir un solo bloqueo.
+   *
+   * Es la corrección que convierte un informe ilegible en uno accionable. En
+   * una factura del banco, cuatro cantidades dañadas producían treinta y dos
+   * ambigüedades: el precio de ese renglón, su descuento, su subtotal y su
+   * cierre no se pueden decidir hasta resolver la cantidad. No son treinta y
+   * dos problemas, son cuatro con sus consecuencias, y contarlos todos le dice
+   * a una persona que tiene media hora de trabajo cuando tiene cuatro números
+   * que mirar.
+   */
+  const raices = raicesPorRenglon(tabla, veredicto);
+
   (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
     for (const falta of leFalta(renglon)) {
       const sugerencia = sugerencias.find(
         (s) => s.renglon === i + 1 && COMO_LO_LLAMA_LE_FALTA[s.campo] === falta,
       );
       pendientes.push({
+        id: `r${i + 1}:falta:${falta}`,
+        dependeDe: null,
         categoria: 'BLOCKING_MISSING_CELL',
         renglon: i + 1,
         campo: falta,
@@ -817,6 +894,71 @@ export function queFaltaResolver(
             : ''),
       });
     }
+  });
+
+  /*
+   * Y un bloqueo por cada renglón reconstruido que no llegó a interpretarse.
+   *
+   * Es la raíz de la que dependen todas sus celdas: una sola pregunta, «¿esto
+   * es un artículo del papel o es una línea de basura?», en vez de una por
+   * columna.
+   */
+  const interpretados = veredicto.ganadora?.renglones.length ?? 0;
+
+  /*
+   * Y un bloqueo por cada renglón que no cierra sin que ninguna celda haya
+   * quedado ambigua: la raíz existe aunque el motor no pueda señalar cuál de
+   * las tres celdas está mal.
+   */
+  for (const [i, raiz] of raices) {
+    if (!raiz.endsWith(':no-cierra')) continue;
+    const candidato = veredicto.ganadora?.renglones[i];
+    if (!candidato) continue;
+    pendientes.push({
+      id: raiz,
+      dependeDe: null,
+      categoria: 'BLOCKING_AMBIGUOUS_CELL',
+      renglon: i + 1,
+      campo: null,
+      /*
+       * Un bloqueo de renglón entero no tiene campo, y tiene que decir igual de
+       * qué se trata: todo pendiente con renglón nombra un campo o una columna,
+       * porque si no, en la pantalla queda un ítem sin encabezado.
+       */
+      columna: 'el renglón entero',
+      alternativas: [],
+      elegido: null,
+      motivo:
+        `El renglón ${i + 1} tiene sus tres valores y la cuenta no cierra: ` +
+        `${(candidato.kilos ?? candidato.cantidad ?? candidato.piezas) ?? '?'} × ` +
+        `${candidato.precioConDescuento ?? candidato.precioUnitario ?? '?'} no da ` +
+        `${candidato.importe ?? '?'}. El OCR no dudó de ninguna de las tres, así que ` +
+        'hay que mirar el papel y decir cuál está mal.',
+    });
+  }
+
+  tabla.renglones.forEach((renglon, i) => {
+    if (i < interpretados) return;
+    const conTexto = renglon.celdas
+      .filter((c) => c?.texto)
+      .map((c) => c!.texto)
+      .join(' ')
+      .trim();
+    pendientes.push({
+      id: `r${i + 1}:sin-interpretar`,
+      dependeDe: null,
+      categoria: 'BLOCKING_MISSING_CELL',
+      renglon: i + 1,
+      campo: null,
+      columna: 'el renglón entero',
+      alternativas: [],
+      elegido: conTexto || null,
+      motivo:
+        `El renglón ${i + 1} se vio en la foto pero no alcanzó para ser un artículo: ` +
+        `no tiene descripción ni código ni una cuenta propia` +
+        (conTexto ? ` (se leyó «${conTexto}»)` : '') +
+        '. Hay que decir si es un artículo del comprobante o una línea de basura de la foto.',
+    });
   });
 
   tabla.renglones.forEach((renglon, i) => {
@@ -842,6 +984,8 @@ export function queFaltaResolver(
 
       if (!celda) {
         pendientes.push({
+          id: `r${i + 1}:${campo}:sin-celda`,
+          dependeDe: cerro ? null : (raices.get(i) ?? null),
           categoria: cerro ? 'WARNING_OPTIONAL_FIELD' : 'BLOCKING_MISSING_CELL',
           renglon: i + 1,
           campo,
@@ -857,7 +1001,11 @@ export function queFaltaResolver(
 
       if (celda.estado !== 'ambigua') return;
 
+      const suId = `r${i + 1}:${campo}`;
+      const raiz = raices.get(i) ?? null;
       pendientes.push({
+        id: suId,
+        dependeDe: cerro || raiz === suId ? null : raiz,
         categoria: cerro ? 'WARNING_DISCARDED_ALTERNATIVE' : 'BLOCKING_AMBIGUOUS_CELL',
         renglon: i + 1,
         campo,
@@ -872,8 +1020,10 @@ export function queFaltaResolver(
       });
     });
 
-    for (const sobrante of renglon.sobrantes) {
+    renglon.sobrantes.forEach((sobrante, k) => {
       pendientes.push({
+        id: `r${i + 1}:sobrante:${k}`,
+        dependeDe: cerro ? null : (raices.get(i) ?? null),
         categoria: cerro ? 'WARNING_OCR_NOISE' : 'BLOCKING_AMBIGUOUS_CELL',
         renglon: i + 1,
         campo: null,
@@ -888,10 +1038,139 @@ export function queFaltaResolver(
           : `«${sobrante.texto}» no cae en ninguna columna del renglón ${i + 1}, ` +
             'que además no cierra: puede ser un valor de otra fila.',
       });
-    }
+    });
   });
 
   return pendientes;
+}
+
+/**
+ * Cuál es el bloqueo **raíz** de cada renglón que no cierra.
+ *
+ * Devuelve, por índice de renglón, el `id` del pendiente del que dependen todos
+ * los demás de esa fila. Dos casos:
+ *
+ *  - **le falta una celda**: la raíz es esa celda. No hay nada que decidir
+ *    sobre el precio de un renglón cuya cantidad no existe;
+ *  - **están las tres y la cuenta no cierra**: alguna de las tres se leyó mal y
+ *    la igualdad no dice cuál. La raíz es la celda con la evidencia más débil:
+ *    la que se apartó más de la escala de su columna, después la que necesitó
+ *    más reparaciones, y a igualdad de todo, la que el OCR leyó con menos
+ *    confianza. Es una conjetura y está dicho que lo es: se ofrece como el
+ *    primer lugar donde mirar, no como un diagnóstico.
+ *
+ * Un renglón que cierra no tiene raíz: lo que le quede es una anotación.
+ */
+/**
+ * Una copia de la tabla con las celdas confirmadas reemplazadas.
+ *
+ * **Copia**, no mutación: la tabla reconstruida es la evidencia de cómo se leyó
+ * la foto y tiene que seguir diciendo lo mismo después de que alguien corrija
+ * una celda. Lo que cambia es la interpretación, no la lectura.
+ *
+ * La celda confirmada queda en estado `confirmada`, con el texto de la persona
+ * como única alternativa: no vuelve a competir con lo que el OCR había leído
+ * —ya se decidió— y las demás celdas del renglón quedan intactas, con todas sus
+ * alternativas, para que la aritmética las vuelva a elegir con el dato nuevo.
+ */
+function conCeldasConfirmadas(
+  tabla: TablaReconstruida,
+  confirmaciones: CeldaConfirmada[],
+): TablaReconstruida {
+  const renglones = tabla.renglones.map((renglon, i) => {
+    const suyas = confirmaciones.filter((c) => c.renglon === i + 1);
+    if (suyas.length === 0) return renglon;
+
+    const celdas = renglon.celdas.map((celda, j) => {
+      const campo = tabla.columnas[j]?.campo?.campo;
+      const confirmada = suyas.find((c) => c.campo === campo);
+      if (!confirmada) return celda;
+      return {
+        columna: j,
+        texto: confirmada.texto,
+        alternativas: [
+          {
+            texto: confirmada.texto,
+            caja: celda?.alternativas[0]?.caja ?? renglon.caja,
+            pasada: 'confirmada por una persona',
+            confianza: 1,
+          },
+        ],
+        estado: 'confirmada' as const,
+        procedencia: celda?.procedencia ?? null,
+      };
+    });
+
+    return { ...renglon, celdas };
+  });
+
+  return { ...tabla, renglones };
+}
+
+function raicesPorRenglon(tabla: TablaReconstruida, veredicto: Veredicto): Map<number, string> {
+  const salida = new Map<number, string>();
+  const renglones = veredicto.ganadora?.renglones ?? [];
+
+  /*
+   * Un renglón reconstruido que **no llegó a interpretarse** es un solo
+   * problema, no uno por celda.
+   *
+   * Pasa cuando la fila se vio en la foto pero no alcanza para ser un artículo:
+   * no tiene descripción, ni código, ni una cuenta propia. Sus cinco celdas
+   * dudosas no son cinco preguntas: la pregunta es una, «¿esto es un artículo o
+   * es basura de la foto?», y hasta contestarla no hay nada que decidir sobre
+   * su precio.
+   */
+  tabla.renglones.forEach((_, i) => {
+    if (i >= renglones.length) salida.set(i, `r${i + 1}:sin-interpretar`);
+  });
+
+  renglones.forEach((candidato, i) => {
+    const cierra = candidato.controles.length > 0 && candidato.controles.every((c) => c.paso);
+    if (cierra) return;
+
+    const falta = leFalta(candidato);
+    if (falta.length > 0) {
+      salida.set(i, `r${i + 1}:falta:${falta[0]}`);
+      return;
+    }
+
+    // Están las tres y la cuenta no cierra: la celda con la evidencia más débil.
+    const fila = tabla.renglones[i];
+    if (!fila) return;
+
+    /*
+     * Y la raíz tiene que ser un bloqueo que **exista**: sólo las celdas
+     * ambiguas emiten pendiente propio, así que elegir la celda de menor
+     * confianza entre todas dejaba consecuencias apuntando a una raíz que nunca
+     * se informaba. Una dependencia colgada es peor que ninguna: el informe
+     * dice que algo se destraba solo y no hay nada que resolver para
+     * destrabarlo.
+     */
+    let peor: { campo: CampoDeColumna; puntos: number } | null = null;
+    fila.celdas.forEach((celda, j) => {
+      const campo = tabla.columnas[j]?.campo?.campo;
+      if (!campo || !CAMPOS_NUMERICOS.has(campo) || !celda) return;
+      if (celda.estado !== 'ambigua') return;
+      const confianza = celda.alternativas[0]?.confianza ?? 0;
+      const puntos = (celda.alternativas.length - 1) * 10 + (1 - confianza) * 5;
+      if (!peor || puntos > peor.puntos) peor = { campo, puntos };
+    });
+
+    /*
+     * Si ninguna celda quedó ambigua y la cuenta igual no cierra, la raíz es el
+     * renglón entero: están las tres celdas, cada una con una sola lectura, y
+     * alguna está mal sin que el OCR haya dudado. Es el caso en que el motor no
+     * puede señalar la celda culpable, y decirlo es mejor que repartir la culpa
+     * entre las tres.
+     */
+    salida.set(
+      i,
+      peor ? `r${i + 1}:${(peor as { campo: CampoDeColumna }).campo}` : `r${i + 1}:no-cierra`,
+    );
+  });
+
+  return salida;
 }
 
 /** Cómo se llama una columna en el informe, tenga título legible o no. */

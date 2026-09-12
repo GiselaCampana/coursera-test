@@ -71,6 +71,28 @@ export interface AlternativaDePendiente {
 }
 
 export interface Pendiente {
+  /**
+   * Un identificador estable dentro del informe, para poder encadenarlos.
+   *
+   * No es una clave de base de datos: es lo que permite decir «este bloqueo
+   * existe **por** aquel otro» sin repetir el texto.
+   */
+  id: string;
+  /**
+   * De qué otro bloqueo depende éste, cuando es una consecuencia.
+   *
+   * Es la corrección que convirtió un informe ilegible en uno accionable.
+   * Cuatro cantidades dañadas producían treinta y dos ambigüedades: el precio
+   * de ese renglón, su descuento, su subtotal y su cierre **no se pueden
+   * decidir hasta resolver la cantidad**, así que no son treinta y dos
+   * problemas, son cuatro con sus consecuencias. Contarlas todas le dice a una
+   * persona que tiene media hora de trabajo cuando tiene cuatro números que
+   * mirar.
+   *
+   * `null` es un bloqueo **raíz**: algo que una persona puede resolver ahora,
+   * mirando el papel, sin depender de nada.
+   */
+  dependeDe: string | null;
   categoria: CategoriaPendiente;
   /** Contando desde 1, o null cuando es del comprobante entero. */
   renglon: number | null;
@@ -106,7 +128,13 @@ export interface Pendiente {
  * reparte ese mismo total.
  */
 export interface ResumenDePendientes {
-  /** Cuántas cosas distintas tiene que resolver una persona. */
+  /**
+   * Cuántas acciones tiene que hacer una persona.
+   *
+   * Son los bloqueos **raíz** y nada más. Las consecuencias no se suman: se
+   * resuelven solas cuando se resuelve su raíz, y contarlas es contar dos veces
+   * el mismo problema.
+   */
   bloqueosUnicos: number;
   /** En qué se reparte ese total. Las cinco suman `bloqueosUnicos`. */
   desglose: {
@@ -116,13 +144,24 @@ export interface ResumenDePendientes {
     unidadesPendientes: number;
     asociacionesDeProductoPendientes: number;
   };
+  /**
+   * Cuántos bloqueos dependen de una raíz.
+   *
+   * Se informa aparte y **no se suma** a los anteriores: es lo que se va a
+   * destrabar solo. Sirve para poder decir «cuatro cantidades por confirmar, y
+   * con ellas se resuelven veintiocho celdas más».
+   */
+  consecuencias: number;
   /** Evidencia anotada que no impide aceptar el comprobante. */
   advertenciasNoBloqueantes: number;
 }
 
 export function resumir(pendientes: Pendiente[]): ResumenDePendientes {
+  const bloqueantes = pendientes.filter((p) => bloquea(p.categoria));
+  const raices = bloqueantes.filter((p) => p.dependeDe === null);
+
   const contar = (categoria: CategoriaPendiente) =>
-    pendientes.filter((p) => p.categoria === categoria).length;
+    raices.filter((p) => p.categoria === categoria).length;
 
   const desglose = {
     celdasObligatoriasFaltantes: contar('BLOCKING_MISSING_CELL'),
@@ -137,8 +176,19 @@ export function resumir(pendientes: Pendiente[]): ResumenDePendientes {
   return {
     bloqueosUnicos,
     desglose,
-    advertenciasNoBloqueantes: pendientes.length - bloqueosUnicos,
+    consecuencias: bloqueantes.length - raices.length,
+    advertenciasNoBloqueantes: pendientes.length - bloqueantes.length,
   };
+}
+
+/** Los bloqueos que una persona puede resolver ahora, sin esperar a otro. */
+export function soloRaices(pendientes: Pendiente[]): Pendiente[] {
+  return pendientes.filter((p) => bloquea(p.categoria) && p.dependeDe === null);
+}
+
+/** Qué se destraba al resolver un bloqueo raíz. */
+export function consecuenciasDe(pendientes: Pendiente[], raiz: string): Pendiente[] {
+  return pendientes.filter((p) => p.dependeDe === raiz);
 }
 
 /** Los que frenan la aceptación. */

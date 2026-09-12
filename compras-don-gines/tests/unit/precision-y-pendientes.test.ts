@@ -192,6 +192,8 @@ describe('cierre compatible por precisión y truncamiento', () => {
 
 describe('pendiente bloqueante contra alternativa descartada', () => {
   const bloqueante: Pendiente = {
+    id: 'r3:importe',
+    dependeDe: null,
     categoria: 'BLOCKING_AMBIGUOUS_CELL',
     renglon: 3,
     campo: 'importe',
@@ -202,6 +204,8 @@ describe('pendiente bloqueante contra alternativa descartada', () => {
   };
 
   const descartada: Pendiente = {
+    id: 'r3:importe:descartada',
+    dependeDe: null,
     categoria: 'WARNING_DISCARDED_ALTERNATIVE',
     renglon: 3,
     campo: 'importe',

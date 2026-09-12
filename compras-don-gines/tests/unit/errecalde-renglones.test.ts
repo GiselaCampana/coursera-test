@@ -239,10 +239,15 @@ describe('los renglones recuperados', () => {
       (p) => p.categoria === 'BLOCKING_MISSING_CELL' && p.renglon !== null,
     );
     expect(faltantes.length).toBeGreaterThan(0);
-    // Cada uno dice **qué** renglón y **qué** campo: nada se deriva en silencio.
+    /*
+     * Cada uno dice **qué** renglón y **de qué** se trata: nada se deriva en
+     * silencio. Un bloqueo de renglón entero —«esta fila se vio y no alcanzó
+     * para ser un artículo»— no tiene campo y lo dice en la columna, porque un
+     * ítem sin encabezado en la pantalla no se puede resolver.
+     */
     for (const pendiente of faltantes) {
       expect(pendiente.renglon).toBeGreaterThan(0);
-      expect(pendiente.campo).toBeTruthy();
+      expect(pendiente.campo ?? pendiente.columna).toBeTruthy();
     }
     // Y los que le faltan a la aritmética del renglón lo dicen explícitamente.
     expect(faltantes.some((p) => p.motivo.includes('no lo reemplaza'))).toBe(true);

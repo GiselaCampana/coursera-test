@@ -10,6 +10,7 @@ import {
   reconciliarPie,
   type PieFiscal,
 } from '@/lib/ocr/motor/pie-fiscal';
+import { DERIVED_SUGGESTION } from '@/lib/ocr/motor/sugerencias';
 
 /**
  * El pie fiscal como sistema de igualdades.
@@ -362,6 +363,117 @@ describe('las percepciones: cero, una o varias', () => {
   });
 });
 
+describe('el estado del pie: leído, inferido, calculado o faltante', () => {
+  it('un pie leído entero que cierra está completo', () => {
+    /*
+     * Las tres etiquetas enteras y sin dígitos pegados, que es el caso en que
+     * las tres asignaciones son del papel: el número **y** el concepto.
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('IVA', 1, 0.4),
+        frag('210,00', 1, 0.7),
+        frag('Total', 2, 0.4),
+        frag('1.210,00', 2, 0.7),
+      ],
+      '1000.00',
+    );
+    expect(pie.estado).toBe('completo');
+    expect(pie.faltantes).toEqual([]);
+    expect(pie.residuo).toBeNull();
+    expect(pie.asignaciones.every((a) => a.procedencia === 'READ_FROM_DOCUMENT')).toBe(true);
+  });
+
+  it('un total calculado NO completa el pie', () => {
+    /*
+     * La corrección que pidió medirse: un total que sale de una cuenta puede
+     * ayudar a revisar y no convierte el pie en completo, y sobre todo no se
+     * informa como importe impreso. Es el número contra el que se paga.
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('IVA 21%', 1, 0.4),
+        frag('210,00', 1, 0.7),
+      ],
+      '1000.00',
+    );
+    expect(pie.totalCalculado).toBe(true);
+    expect(pie.estado).toBe('parcial');
+    expect(pie.faltantes.join(' ')).toContain(DERIVED_SUGGESTION);
+    // Y no hay ninguna asignación de total: no existe el fragmento.
+    expect(pie.asignaciones.some((a) => a.concepto === 'total')).toBe(false);
+  });
+
+  it('un concepto que no se leyó deja el pie parcial y se informa el hueco, sin crearlo', () => {
+    /*
+     * El total impreso dice mil trescientos y la suma de lo leído da mil
+     * doscientos diez: los noventa pesos de diferencia **permiten sospechar**
+     * que hay una percepción que el OCR no pudo leer, y no autorizan a crearla.
+     * Ni concepto, ni importe, ni etiqueta: sólo el hueco, medido.
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('IVA 21%', 1, 0.4),
+        frag('210,00', 1, 0.7),
+        frag('Total', 3, 0.4),
+        frag('1.300,00', 3, 0.7),
+      ],
+      '1000.00',
+    );
+
+    expect(pie.estado).toBe('parcial');
+    expect(pie.residuo?.toFixed(2)).toBe('90.00');
+    expect(pie.faltantes.join(' ')).toContain('90.00');
+    expect(pie.faltantes.join(' ')).toContain('sospechar');
+
+    // Y no apareció ninguna percepción de noventa pesos de la nada.
+    expect(pie.percepciones).toHaveLength(0);
+    expect(pie.asignaciones.some((a) => a.valor.toFixed(2) === '90.00')).toBe(false);
+    expect(pie.total?.toFixed(2)).toBe('1300.00');
+  });
+
+  it('distingue el valor leído del concepto inferido por una igualdad', () => {
+    /*
+     * Las dos procedencias que se parecen y no son lo mismo. El IVA sin
+     * etiqueta es del papel en su **valor** y del motor en su **concepto**: lo
+     * que dice que ese número es el IVA es la igualdad, no una palabra impresa.
+     * Si la igualdad se sostenía en un neto mal leído, el concepto está mal
+     * asignado aunque el número sea correcto, y eso hay que poder verlo.
+     */
+    const pie = pieDe(
+      [
+        frag('Neto Gravado', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('210,00', 1, 0.7),
+        frag('Total', 2, 0.4),
+        frag('1.210,00', 2, 0.7),
+      ],
+      '1000.00',
+    );
+
+    const porEtiqueta = pie.asignaciones.filter((a) => a.procedencia === 'READ_FROM_DOCUMENT');
+    const porIgualdad = pie.asignaciones.filter(
+      (a) => a.procedencia === 'INFERRED_FROM_DOCUMENT_RELATIONS',
+    );
+    expect(porEtiqueta.map((a) => a.concepto)).toContain('netoGravado');
+    expect(porIgualdad.map((a) => a.concepto)).toEqual(['iva']);
+    // Y el inferido tiene el fragmento del papel igual: lo inferido es el
+    // concepto, no el número.
+    expect(porIgualdad[0].origen.texto).toBe('210,00');
+  });
+
+  it('sin ninguna asignación el pie está ausente, no completo', () => {
+    const pie = pieDe([frag('Comprobante Autorizado', 0, 0.4)], null);
+    expect(pie.estado).toBe('ausente');
+  });
+});
+
 describe('lo que no se puede decidir, y lo que no se puede inventar', () => {
   it('dos asignaciones sin margen suficiente mandan a revisión', () => {
     /*
@@ -491,6 +603,31 @@ describe('sobre las cuatro facturas reales', () => {
     expect(delTotal.igualdad).toContain('= total');
   });
 
+  it('Errecalde: el pie está PARCIAL, y se dice de cuánto es el hueco', () => {
+    /*
+     * El estado honesto de este comprobante. Están leídos el neto, una
+     * percepción y el total; el IVA está inferido por la igualdad; y la
+     * percepción de IIBB **no se recuperó**, así que la suma de los conceptos
+     * queda por debajo del total impreso.
+     *
+     * Esa diferencia no se convierte en una percepción. Se informa de cuánto
+     * es y queda pedida: si el motor la creara, el pie cerraría y el
+     * comprobante se cargaría con un impuesto de importe inventado.
+     */
+    const pie = ERRECALDE.pieFiscal;
+    expect(pie.estado).toBe('parcial');
+    expect(pie.residuo).not.toBeNull();
+    expect(pie.faltantes.join(' ')).toContain('sospechar');
+
+    // El hueco tiene el tamaño de un concepto entero, no de un redondeo.
+    expect(pie.residuo!.abs().gt(1000)).toBe(true);
+
+    // Y no hay ninguna percepción cuyo importe sea justo el hueco.
+    for (const percepcion of pie.percepciones) {
+      expect(percepcion.valor.eq(pie.residuo!.abs())).toBe(false);
+    }
+  });
+
   it('Errecalde: el IVA sale de la igualdad, sin una etiqueta que lo diga', () => {
     /*
      * Es el pie que el lector por etiquetas no podía leer: «UBTOTA» por
@@ -526,9 +663,11 @@ describe('sobre las cuatro facturas reales', () => {
     ] as const) {
       const pie = informe.pieFiscal;
       if (pie.totalCalculado) {
-        // Si se calculó, tiene que estar dicho y no puede tener asignación.
+        // Si se calculó, tiene que estar dicho, no puede tener asignación, y el
+        // pie **no** puede quedar completo.
         expect(pie.enRevision.join(' '), nombre).toContain('calculado y no leído');
         expect(pie.asignaciones.some((a) => a.concepto === 'total'), nombre).toBe(false);
+        expect(pie.estado, nombre).not.toBe('completo');
       } else if (pie.total) {
         // Si no se calculó, tiene que venir de un fragmento del papel.
         const delTotal = pie.asignaciones.find((a) => a.concepto === 'total');

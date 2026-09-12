@@ -7,6 +7,7 @@ import {
   type LecturaNumerica,
 } from '@/lib/ocr/motor/formato-de-columna';
 import { repararDigitos } from '@/lib/ocr/parsers/tipos';
+import { DERIVED_SUGGESTION } from '@/lib/ocr/motor/sugerencias';
 import { decimalesDe } from '@/lib/ocr/motor/precision';
 
 /**
@@ -48,6 +49,40 @@ import { decimalesDe } from '@/lib/ocr/motor/precision';
  * cosas. Y no se elige por magnitud: que un número se parezca a lo que falta
  * para cerrar no lo convierte en ese concepto.
  */
+
+/**
+ * De dónde salió un dato del pie. Son cuatro y **no se mezclan**.
+ *
+ * La distinción existe porque las cuatro se ven iguales en una pantalla y no
+ * valen lo mismo. Un total calculado ayuda a revisar; presentarlo como el
+ * importe impreso es decirle a alguien que el papel dice algo que no dice, y
+ * ése es el número contra el que se paga.
+ *
+ *  - `READ_FROM_DOCUMENT`: el número está en la foto y su etiqueta lo nombra.
+ *    Es el único caso en que el dato se puede tratar como impreso;
+ *  - `INFERRED_FROM_DOCUMENT_RELATIONS`: el número está en la foto pero lo que
+ *    lo identifica es una igualdad fiscal, porque su etiqueta salió ilegible o
+ *    no existe. El **valor** es del papel; el **concepto** lo puso el motor;
+ *  - `DERIVED_SUGGESTION`: el número no está en la foto y sale de una cuenta.
+ *    No es un dato: es una ayuda para revisar;
+ *  - `MISSING`: no está y no se puede calcular.
+ */
+export type ProcedenciaFiscal =
+  | 'READ_FROM_DOCUMENT'
+  | 'INFERRED_FROM_DOCUMENT_RELATIONS'
+  | 'DERIVED_SUGGESTION'
+  | 'MISSING';
+
+/**
+ * Cuán completo está el pie.
+ *
+ * `completo` quiere decir algo muy preciso: **todo lo que hace falta está leído
+ * del papel y el sistema cierra**. No alcanza con tener un número para cada
+ * concepto, y no alcanza con que la cuenta dé: un pie donde el total se calculó
+ * está parcial, y un pie donde la suma de los conceptos no llega al total
+ * impreso también, porque esa diferencia es un concepto que no se leyó.
+ */
+export type EstadoDelPie = 'completo' | 'parcial' | 'ausente';
 
 export type ConceptoFiscal =
   /** El neto gravado, que es lo que totaliza el detalle. */
@@ -197,6 +232,16 @@ export interface AsignacionFiscal {
   segunda: { concepto: ConceptoFiscal; valor: Decimal; porQue: string } | null;
   /** Cuánta ventaja tiene la elegida sobre la segunda, de 0 a 1. */
   margen: number;
+  /**
+   * De dónde salió este dato.
+   *
+   * `READ_FROM_DOCUMENT` cuando el número está en la foto **y** su etiqueta lo
+   * nombra; `INFERRED_FROM_DOCUMENT_RELATIONS` cuando está en la foto y lo que
+   * lo identifica es una igualdad. Las dos son datos del papel y la segunda es
+   * más frágil: si la igualdad se sostenía en un neto mal leído, el concepto
+   * está mal asignado aunque el número sea correcto.
+   */
+  procedencia: ProcedenciaFiscal;
 }
 
 export interface PieFiscal {
@@ -218,6 +263,29 @@ export interface PieFiscal {
   asignaciones: AsignacionFiscal[];
   /** Qué quedó sin decidir y necesita que lo mire una persona. */
   enRevision: string[];
+  /**
+   * Cuán completo está: leído entero y cerrando, o parcial, o ausente.
+   *
+   * No se informa `completo` por tener un número en cada casillero. Un total
+   * calculado no completa el pie.
+   */
+  estado: EstadoDelPie;
+  /**
+   * Qué falta, en castellano y sin inventarlo.
+   *
+   * Cuando el total impreso no coincide con la suma de los conceptos, la
+   * diferencia **permite sospechar** que falta un concepto y no autoriza a
+   * crearlo: acá se dice de cuánto es el hueco y nada más. Asignarle un nombre
+   * y un importe sería cerrar el pie con un dato inventado.
+   */
+  faltantes: string[];
+  /**
+   * La diferencia entre el total leído y la suma de los conceptos.
+   *
+   * Null cuando no hay total leído o cuando cierra. Distinto de cero es la
+   * medida exacta de lo que no se leyó.
+   */
+  residuo: Decimal | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -640,6 +708,9 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
     totalCalculado: false,
     asignaciones: [],
     enRevision: [],
+    estado: 'ausente',
+    faltantes: [],
+    residuo: null,
   };
 
   const usadas = new Set<Fragmento>();
@@ -795,16 +866,80 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
     );
   }
 
+  calificar(pie, opciones.renglonesDelDetalle ?? 1);
   return pie;
+}
+
+/**
+ * Decide si el pie está completo, y **qué falta** cuando no lo está.
+ *
+ * La regla es la que importa de todo el módulo: `completo` quiere decir que
+ * todo lo que hace falta está **leído del papel** y que el sistema cierra. No
+ * alcanza con tener un número por casillero.
+ *
+ * Los tres motivos por los que un pie queda parcial:
+ *
+ *  - el total se **calculó**. Ayuda a revisar y no completa nada: el papel no
+ *    lo dice;
+ *  - el total está leído y la suma de los conceptos **no llega**. Esa
+ *    diferencia es un concepto que no se leyó, y acá se informa de cuánto es y
+ *    nada más. Ponerle nombre e importe sería cerrar el pie inventando el dato
+ *    que falta, que es exactamente lo que este motor no hace;
+ *  - falta el neto, el total o el IVA de un comprobante que discrimina.
+ */
+function calificar(pie: PieFiscal, renglones: number): void {
+  if (!pie.netoGravado) {
+    pie.faltantes.push('No se identificó el neto gravado.');
+  }
+
+  const leido = pie.asignaciones.find((a) => a.concepto === 'total');
+  if (!leido) {
+    pie.faltantes.push(
+      pie.totalCalculado
+        ? `El total no está impreso en la evidencia: el que se muestra sale de sumar los ` +
+          `conceptos (${DERIVED_SUGGESTION}).`
+        : 'No se identificó el total del comprobante.',
+    );
+  }
+
+  /*
+   * El residuo: la diferencia entre el total leído y la suma de lo asignado.
+   *
+   * Se calcula sólo contra un total **leído**; contra un total calculado da
+   * cero por construcción y no diría nada.
+   */
+  if (leido && pie.netoGravado) {
+    const suma = sumaDeLosConceptos(pie);
+    const residuo = leido.valor.minus(suma);
+    if (!dentroDeLaPrecision(leido.valor, suma, renglones)) {
+      pie.residuo = residuo;
+      pie.faltantes.push(
+        `La suma de los conceptos da ${suma.toFixed(2)} y el total impreso dice ` +
+          `${leido.valor.toFixed(2)}: hay ${residuo.abs().toFixed(2)} sin explicar. ` +
+          'Permite sospechar que falta un concepto del pie —una percepción, un no gravado— ' +
+          'y no alcanza para crearlo: no se le puede asignar concepto ni importe sin leerlo.',
+      );
+    }
+  }
+
+  if (pie.asignaciones.length === 0) {
+    pie.estado = 'ausente';
+    return;
+  }
+  pie.estado = pie.faltantes.length === 0 ? 'completo' : 'parcial';
+}
+
+function sumaDeLosConceptos(pie: PieFiscal): Decimal {
+  let suma = (pie.netoGravado ?? new Decimal(0)).plus(pie.noGravado ?? 0);
+  for (const iva of pie.iva) suma = suma.plus(iva.valor);
+  for (const percepcion of pie.percepciones) suma = suma.plus(percepcion.valor);
+  return suma.toDecimalPlaces(2);
 }
 
 /** Cuánto tendría que dar el total, con lo que se asignó. */
 function totalEsperado(pie: PieFiscal): Decimal | null {
   if (!pie.netoGravado) return null;
-  let suma = pie.netoGravado.plus(pie.noGravado ?? 0);
-  for (const iva of pie.iva) suma = suma.plus(iva.valor);
-  for (const percepcion of pie.percepciones) suma = suma.plus(percepcion.valor);
-  return suma.toDecimalPlaces(2);
+  return sumaDeLosConceptos(pie);
 }
 
 function origenDe(fragmento: Fragmento): OrigenFiscal {
@@ -929,6 +1064,10 @@ function elegirNeto(
         }
       : null,
     margen,
+    procedencia:
+      gana.candidata.porEtiqueta?.concepto === 'netoGravado'
+        ? 'READ_FROM_DOCUMENT'
+        : 'INFERRED_FROM_DOCUMENT_RELATIONS',
   };
 }
 
@@ -1041,6 +1180,14 @@ function asignarIva(
       ? { concepto: 'iva', valor: otras[0].valor, porQue: otras[0].comoSeLeyo }
       : null,
     margen: mejor.igualdad ? 1 : otras.length ? 0 : 1,
+    /*
+     * Un IVA sin etiqueta es del papel en su valor y del motor en su concepto:
+     * lo que dice que ese número es el IVA es la igualdad, no una palabra
+     * impresa. Se informa distinto a propósito.
+     */
+    procedencia: candidata.porEtiqueta
+      ? 'READ_FROM_DOCUMENT'
+      : 'INFERRED_FROM_DOCUMENT_RELATIONS',
   };
 }
 
@@ -1086,6 +1233,8 @@ function asignarSimple(candidata: Candidata, concepto: ConceptoFiscal): Asignaci
       ? { concepto, valor: otras[0].valor, porQue: otras[0].comoSeLeyo }
       : null,
     margen: literal && otras.length ? 1 / 3 : otras.length ? 0 : 1,
+    // Acá siempre hay etiqueta: es lo único que sostiene estos conceptos.
+    procedencia: 'READ_FROM_DOCUMENT',
   };
 }
 
@@ -1162,6 +1311,10 @@ function elegirTotal(
         }
       : null,
     margen,
+    procedencia:
+      gana.candidata.porEtiqueta?.concepto === 'total'
+        ? 'READ_FROM_DOCUMENT'
+        : 'INFERRED_FROM_DOCUMENT_RELATIONS',
   };
 }
 

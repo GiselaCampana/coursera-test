@@ -59,7 +59,15 @@ export type EstadoDeCelda =
   /** Hay más de una lectura posible y ninguna manda. */
   | 'ambigua'
   /** No hay nada en esa posición del renglón. */
-  | 'no-leida';
+  | 'no-leida'
+  /**
+   * Una persona la leyó del papel y la dio por buena.
+   *
+   * No vuelve a competir con lo que el OCR había leído: eso ya se decidió, y
+   * mirando el original, que es más de lo que el motor puede hacer. Lo que sí
+   * se recalcula es todo lo que **dependía** de ella.
+   */
+  | 'confirmada';
 
 export interface Procedencia {
   pasada: string;
