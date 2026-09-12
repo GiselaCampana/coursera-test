@@ -1,7 +1,12 @@
 import { Decimal } from '@/lib/money';
 import type { Caja, Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
 import { parecido } from '@/lib/ocr/motor/semantica-de-columnas';
-import { lecturasDeCelda, type LecturaNumerica } from '@/lib/ocr/motor/formato-de-columna';
+import {
+  bienEscrito,
+  lecturasDeCelda,
+  type LecturaNumerica,
+} from '@/lib/ocr/motor/formato-de-columna';
+import { repararDigitos } from '@/lib/ocr/parsers/tipos';
 import { decimalesDe } from '@/lib/ocr/motor/precision';
 
 /**
@@ -114,6 +119,19 @@ const ANTES_DE_UN_IDENTIFICADOR = new Set([
   'caea',
 ]);
 
+/**
+ * Con cuántos decimales está **escrito** un número, no cuántos tiene su valor.
+ *
+ * La diferencia importa: «1,00» y «1» valen lo mismo y no están escritos igual,
+ * y el valor `Decimal` de los dos pierde el cero. Lo que hace falta para
+ * comparar formatos es lo que dice el papel.
+ */
+export function decimalesEscritos(texto: string): number {
+  const limpio = repararDigitos(texto).replace(/[^\d.,]/g, '').trim();
+  const forma = bienEscrito(limpio);
+  return forma.si ? forma.decimales : -1;
+}
+
 /** ¿Es este número el identificador que anuncia la última palabra de su etiqueta? */
 export function esIdentificador(etiqueta: string): boolean {
   const palabras = enPalabras(etiqueta);
@@ -225,7 +243,22 @@ interface LineaFiscal {
    * acumulado de cuenta corriente pasa a competir como total del comprobante.
    */
   etiquetaCercaDe: (numero: Fragmento) => string;
+  /**
+   * ¿Es este número el identificador que anuncia la palabra pegada a su
+   * izquierda?
+   *
+   * Se pregunta por la palabra **pegada** y no por la etiqueta entera, y la
+   * diferencia se midió: «Percepción IVA RG» termina en «RG» y el importe de
+   * esa percepción está a media pulgada a la derecha, así que mirando la última
+   * palabra de la etiqueta el importe verdadero se descartaba junto con el
+   * número de la resolución. Lo que hace a un número un identificador es estar
+   * inmediatamente después del marcador, no compartir línea con él.
+   */
+  esIdentificadorDe: (numero: Fragmento) => boolean;
 }
+
+/** Qué tan cerca tiene que estar el marcador para que el número sea su identificador. */
+const PEGADO = 0.03;
 
 /**
  * Hasta dónde se busca la etiqueta de un número, hacia la izquierda.
@@ -331,6 +364,14 @@ export function lineasDelPie(fragmentos: Fragmento[], alturaTipica: number): Lin
       etiquetaDe: (numero: Fragmento) => etiquetaEntre(enOrden, numero, Infinity),
       etiquetaCercaDe: (numero: Fragmento) =>
         etiquetaEntre(ordenados, numero, holguraVertical),
+      esIdentificadorDe: (numero: Fragmento) => {
+        const aLaIzquierda = enOrden.filter(
+          (f) => !/\d/.test(f.texto) && f.caja.x1 <= numero.caja.x0 + 0.001,
+        );
+        const pegada = aLaIzquierda[aLaIzquierda.length - 1];
+        if (!pegada || numero.caja.x0 - pegada.caja.x1 > PEGADO) return false;
+        return esIdentificador(pegada.texto);
+      },
     };
   });
 }
@@ -576,8 +617,8 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
           porEtiqueta = deCerca;
         }
       }
-      // Lo que viene detrás de «RG» o de «Res.» es el número de una norma.
-      if (esIdentificador(etiqueta)) continue;
+      // Lo que viene pegado detrás de «RG» o de «Res.» es el número de una norma.
+      if (linea.esIdentificadorDe(fragmento)) continue;
 
       candidatas.push({
         linea,
@@ -690,10 +731,29 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
     pie.asignaciones.push(asignacion);
   }
 
+  /*
+   * Cómo escribe **este papel** los importes del pie.
+   *
+   * Se toma del neto, que es el concepto mejor comprobado de todos, y sirve
+   * para lo mismo que la hipótesis de formato de una columna del detalle: un
+   * número escrito de otra manera que sus vecinos es un número mal leído.
+   *
+   * Hace falta justo donde la evidencia es más débil. Una percepción no tiene
+   * igualdad propia que la verifique, así que si además se acepta con cualquier
+   * formato, cualquier cifra suelta que caiga cerca de la palabra «percepción»
+   * entra al pie: sobre una de las fotos malas del banco entraban ocho, de un
+   * peso, de dos y de setenta y siete, y sobre una buena entraba un «1» que era
+   * parte de otra cosa. Un pie que imprime «3.830.467,37» no imprime «1».
+   */
+  const decimalesDelPie = neto ? decimalesEscritos(neto.origen.texto) : -1;
+  const comoElPie = (candidata: Candidata) =>
+    decimalesDelPie < 0 || decimalesEscritos(candidata.fragmento.texto) === decimalesDelPie;
+
   // --- 3. Las percepciones: cero, una o varias -----------------------------
   for (const candidata of candidatas) {
     if (candidata.porEtiqueta?.concepto !== 'percepcion') continue;
     if (usadas.has(candidata.fragmento)) continue;
+    if (!comoElPie(candidata)) continue;
     const asignacion = asignarSimple(candidata, 'percepcion');
     if (!asignacion) continue;
     usadas.add(candidata.fragmento);
@@ -706,6 +766,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
   for (const candidata of candidatas) {
     if (candidata.porEtiqueta?.concepto !== 'noGravado') continue;
     if (usadas.has(candidata.fragmento)) continue;
+    if (!comoElPie(candidata)) continue;
     const asignacion = asignarSimple(candidata, 'noGravado');
     if (!asignacion) continue;
     usadas.add(candidata.fragmento);
@@ -900,14 +961,21 @@ function tieneIvaEnLaPagina(neto: Decimal, candidatas: Candidata[], renglones: n
  * mismo como evidencia, y eso es lo que manda a revisión.
  */
 function margenEntre(
-  gana: { lectura: LecturaNumerica; cierra: boolean },
-  otra: { lectura: LecturaNumerica; cierra: boolean } | null,
+  gana: { lectura: LecturaNumerica; cierra: boolean; conIva?: boolean },
+  otra: { lectura: LecturaNumerica; cierra: boolean; conIva?: boolean } | null,
 ): number {
   if (!otra) return 1;
   let ventaja = 0;
   if (gana.lectura.literal && !otra.lectura.literal) ventaja += 1;
   if (gana.cierra && !otra.cierra) ventaja += 1;
   if (gana.lectura.reparaciones < otra.lectura.reparaciones) ventaja += 1;
+  /*
+   * Y la corroboración por otra relación del grafo cuenta como apoyo, igual
+   * que cuenta para elegir. Si no contara, el neto de una factura cuyo detalle
+   * todavía tiene celdas ilegibles iría a revisión contra cualquier número con
+   * una etiqueta parecida —un «74» suelto— teniendo su IVA impreso al lado.
+   */
+  if (gana.conIva && !otra.conIva) ventaja += 1;
   return Math.min(1, ventaja / 3);
 }
 

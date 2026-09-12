@@ -299,6 +299,51 @@ describe('las percepciones: cero, una o varias', () => {
     expect(pie.asignaciones.some((a) => a.valor.toFixed(2) === '5329.00')).toBe(false);
   });
 
+  it('un importe escrito de otra manera que el resto del pie no entra', () => {
+    /*
+     * La misma idea que la hipótesis de formato de una columna del detalle,
+     * aplicada al pie: un número escrito de otra manera que sus vecinos es un
+     * número mal leído. Hace falta justo donde la evidencia es más débil,
+     * porque una percepción no tiene igualdad propia que la verifique: si
+     * además se acepta con cualquier formato, cualquier cifra suelta que caiga
+     * cerca de la palabra «percepción» entra al pie. Un pie que imprime
+     * «1.000,00» no imprime «1».
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('Percepcion IIBB', 1, 0.45),
+        frag('1', 1, 0.7),
+        frag('Percepcion CABA', 2, 0.45),
+        frag('15,00', 2, 0.7),
+      ],
+      '1000.00',
+    );
+    expect(pie.percepciones.map((p) => p.valor.toFixed(2))).toEqual(['15.00']);
+  });
+
+  it('el importe de la percepción no se descarta por compartir línea con «RG»', () => {
+    /*
+     * El otro lado de la regla de los identificadores, y el error que costó
+     * medirlo: «Percepción IVA RG» termina en «RG» y el importe de esa
+     * percepción está a media pulgada a la derecha. Mirando la última palabra
+     * de la etiqueta, el importe verdadero se descartaba junto con el número de
+     * la resolución. Lo que hace a un número un identificador es estar
+     * **pegado** al marcador, no compartir línea con él.
+     */
+    const pie = pieDe(
+      [
+        frag('Subtotal', 0, 0.4),
+        frag('1.000,00', 0, 0.7),
+        frag('Percepcion IVA RG', 1, 0.3),
+        frag('15,00', 1, 0.7),
+      ],
+      '1000.00',
+    );
+    expect(pie.percepciones.map((p) => p.valor.toFixed(2))).toEqual(['15.00']);
+  });
+
   it('el porcentaje impreso al lado de una percepción no es una percepción', () => {
     const pie = pieDe(
       [
