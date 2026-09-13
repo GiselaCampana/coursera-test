@@ -11,3 +11,7 @@
 !.gitignore
 !COMO-SE-USA.md
 !MOTOR-CONGELADO.md
+# Y qué comprobante del lote repite a cuál del banco: hace falta para poder
+# reproducir la separación entre generalización y reproducibilidad, y no dice
+# nada que no esté ya en los nombres de los fixtures versionados.
+!reproducibilidad.json

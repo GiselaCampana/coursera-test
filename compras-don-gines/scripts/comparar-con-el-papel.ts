@@ -10,16 +10,27 @@
  *
  *   npx tsx scripts/comparar-con-el-papel.ts [nombre ...]
  */
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { comparar } from '@/lib/ocr/validacion/comparar';
+import { comparar, VERSION_DEL_COMPARADOR } from '@/lib/ocr/validacion/comparar';
 import type { VerdadDelPapel } from '@/lib/ocr/validacion/comparar';
 import type { ActaDePrimeraLectura } from '@/lib/ocr/validacion/lectura-ciega';
 
 const RAIZ = process.cwd();
 const ACTAS = path.join(RAIZ, 'validacion/ciega');
 const VERDAD = path.join(RAIZ, 'validacion/verdad');
-const SALIDA = path.join(RAIZ, 'validacion/comparacion');
+const SALIDA = path.join(RAIZ, `validacion/comparacion-${VERSION_DEL_COMPARADOR}`);
+
+/**
+ * El hash del comparador, para que el resultado sea atribuible.
+ *
+ * La primera comparación de un lote le anotó un error al motor que era de la
+ * herramienta. Sin este hash, una medición vieja y una nueva se ven iguales.
+ */
+const SHA_DEL_COMPARADOR = createHash('sha256')
+  .update(readFileSync(path.join(RAIZ, 'src/lib/ocr/validacion/comparar.ts')))
+  .digest('hex');
 
 const pedidos = process.argv.slice(2);
 const nombres = pedidos.length
@@ -55,14 +66,18 @@ for (const nombre of nombres) {
 
   const acta: ActaDePrimeraLectura = JSON.parse(readFileSync(rutaDelActa, 'utf8'));
   const verdad: VerdadDelPapel = JSON.parse(readFileSync(rutaDeLaVerdad, 'utf8'));
-  const resultado = comparar(acta, verdad);
+  const resultado = comparar(acta, verdad, SHA_DEL_COMPARADOR);
 
   writeFileSync(
     path.join(SALIDA, `${nombre}.json`),
     `${JSON.stringify(resultado, null, 1)}\n`,
   );
 
-  console.log(`\n=== ${nombre}  (motor ${resultado.motor.commit.slice(0, 8)}${resultado.motor.arbolSucio ? ', árbol sucio' : ''})`);
+  console.log(
+    `\n=== ${nombre}  (motor ${resultado.motor.commit.slice(0, 8)}` +
+      `${resultado.motor.arbolSucio ? ', árbol sucio' : ''}` +
+      `, comparador ${VERSION_DEL_COMPARADOR} ${SHA_DEL_COMPARADOR.slice(0, 8)})`,
+  );
   if (!resultado.coinciden) {
     console.log('  !! el acta y la transcripción no son de la misma foto');
     continue;

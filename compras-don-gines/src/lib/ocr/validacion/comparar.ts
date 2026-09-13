@@ -95,6 +95,16 @@ export interface CampoComparado {
 export interface Comparacion {
   imagen: string;
   motor: { commit: string; sha256: string; arbolSucio: boolean };
+  /**
+   * Qué versión del comparador produjo este resultado.
+   *
+   * Hace falta por la misma razón que el hash del motor, y se aprendió del
+   * peor modo: la primera comparación de un lote le anotó un error al motor que
+   * era de la herramienta —«4.874,380» leído como cuatro millones— y sin un
+   * hash acá no habría manera de decir cuál de las dos mediciones es cuál. Una
+   * comparación vieja y una nueva se ven idénticas.
+   */
+  comparador: { version: string; sha256: string };
   /** El acta y la verdad tienen que ser de la misma foto. */
   coinciden: boolean;
 
@@ -130,23 +140,56 @@ export interface Comparacion {
  * Lleva un número escrito a su valor, sin decidir mal la convención.
  *
  * Hace falta porque los dos lados se escriben distinto: el acta usa punto
- * decimal —es lo que produce `Decimal.toString()`— y una transcripción a mano
- * usa coma, como el papel. Y el error de tirar todos los puntos como si fueran
- * separadores de miles es grave y silencioso: convierte «10361.45» en 1.036.145
- * y hace que la comparación declare **iguales** dos valores que difieren en un
- * factor de cien, que es exactamente la clase de falla que esto viene a medir.
+ * decimal —es lo que produce `Decimal.toString()`, sin separador de miles— y
+ * una transcripción a mano usa la convención del papel, punto de miles y coma
+ * decimal.
  *
- * La regla: cuando hay un solo separador y detrás quedan una o dos cifras, es
- * decimal. Con tres cifras detrás y ningún otro separador la escritura es
- * genuinamente ambigua —«1.234»— y se toma la convención argentina, que es la
- * del papel.
+ * Las reglas, en orden, y cada una decide sola:
+ *
+ *  1. **si hay coma, la coma es el decimal** y los puntos son de miles. Vale
+ *     para «4.874,380», «4.874,38» y «1.036.145,00»;
+ *  2. sin coma, **más de un punto son separadores de miles**: «1.036.145» es un
+ *     millón y pico, no puede ser otra cosa;
+ *  3. sin coma y con **un solo punto, el punto es el decimal**: «10361.45» y
+ *     «4874.380» son las dos formas en que sale un `Decimal.toString()`.
+ *
+ * La regla 3 deja fuera un caso genuinamente ambiguo: «1.234» escrito a mano
+ * con punto de miles y sin decimales. Acá se lee 1,234 y no mil doscientos
+ * treinta y cuatro, y es deliberado: el lado del acta **nunca** escribe miles
+ * con punto, así que la ambigüedad sólo puede venir de la transcripción, donde
+ * se resuelve escribiendo «1.234,00». Es preferible un criterio fijo y dicho a
+ * uno que adivine.
+ *
+ * La primera versión de esta función tiraba todos los puntos como si fueran de
+ * miles, y eso declaraba **iguales** «4874.38» y «4874.380» —el motor tenía
+ * razón y la medición le anotaba un error— y, peor, habría declarado iguales
+ * «10361.45» y «1.036.145», que difieren en un factor de cien: justo la clase
+ * de falla que esta validación existe para detectar.
  */
-function comoNumero(texto: string): number {
+export function comoNumero(texto: string): number {
   const limpio = texto.replace(/[$%\s]/g, '').trim();
-  const uno = limpio.match(/^-?\d+([.,])(\d{1,2})$/);
-  if (uno) return Number(limpio.replace(uno[1], '.'));
-  // Varios separadores, o tres cifras detrás: punto de miles, coma decimal.
-  return Number(limpio.replace(/\./g, '').replace(',', '.'));
+  if (!/\d/.test(limpio)) return NaN;
+
+  const signo = limpio.startsWith('-') ? -1 : 1;
+  const cuerpo = limpio.replace(/^[+-]/, '');
+  if (!/^[\d.,]+$/.test(cuerpo)) return NaN;
+
+  // 1. Con coma, la coma manda: los puntos son de miles.
+  if (cuerpo.includes(',')) {
+    const ultima = cuerpo.lastIndexOf(',');
+    const enteros = cuerpo.slice(0, ultima).replace(/[.,]/g, '');
+    const decimales = cuerpo.slice(ultima + 1).replace(/[.,]/g, '');
+    if (enteros === '' && decimales === '') return NaN;
+    return signo * Number(`${enteros || '0'}.${decimales || '0'}`);
+  }
+
+  const puntos = (cuerpo.match(/\./g) ?? []).length;
+
+  // 2. Sin coma y con varios puntos: todos de miles.
+  if (puntos > 1) return signo * Number(cuerpo.replace(/\./g, ''));
+
+  // 3. Sin coma y con un punto: el punto es el decimal.
+  return signo * Number(cuerpo);
 }
 
 function igual(a: string | null | undefined, b: string | null | undefined): boolean {
@@ -239,7 +282,20 @@ function deEscala(
   return [10, 100, 1000, 0.1, 0.01, 0.001].some((p) => Math.abs(veces - p) < 0.001);
 }
 
-export function comparar(acta: ActaDePrimeraLectura, verdad: VerdadDelPapel): Comparacion {
+/**
+ * La versión del comparador, que va en cada resultado.
+ *
+ * `v1` tiraba todos los puntos como separadores de miles. `v2` distingue las
+ * cinco escrituras que aparecen entre el acta y una transcripción a mano.
+ */
+export const VERSION_DEL_COMPARADOR = 'v2';
+
+export function comparar(
+  acta: ActaDePrimeraLectura,
+  verdad: VerdadDelPapel,
+  /** sha256 de este archivo, calculado por quien lo ejecuta. */
+  sha256DelComparador = 'sin-calcular',
+): Comparacion {
   const coinciden = acta.imagen.sha256 === verdad.imagenSha256;
   const campos: CampoComparado[] = [];
 
@@ -364,6 +420,7 @@ export function comparar(acta: ActaDePrimeraLectura, verdad: VerdadDelPapel): Co
       sha256: acta.motor.sha256,
       arbolSucio: acta.motor.arbolSucio,
     },
+    comparador: { version: VERSION_DEL_COMPARADOR, sha256: sha256DelComparador },
     coinciden,
 
     renglonesEnElPapel: verdad.renglones.length,
