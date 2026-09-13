@@ -33,7 +33,7 @@ import type { FragmentoEnderezado } from '@/lib/ocr/reconstruccion/inclinacion';
  * versiones que trajo cada pasada.
  */
 export interface Observacion {
-  /** La caja de consenso, que es la de la lectura más confiable. */
+  /** La caja de consenso: la mediana de las pasadas que leyeron lo mismo. */
   caja: Caja;
   lecturas: Lectura[];
 }
@@ -42,6 +42,7 @@ export interface Lectura {
   texto: string;
   confianza: number;
   pasada: string;
+  /** Dónde está en la foto original, sin enderezar: es lo que se le señala a una persona. */
   caja: Caja;
   /** Las otras lecturas que el propio OCR consideró para esta palabra. */
   alternativas: string[];
@@ -51,6 +52,26 @@ export interface Lectura {
 export function textoPreferido(observacion: Observacion): string {
   return mejorLectura(observacion).texto;
 }
+
+/**
+ * Cuánto respaldo tiene una observación: cuántas pasadas la vieron y con cuánta
+ * confianza.
+ *
+ * No es lo mismo que la confianza de su mejor lectura. Un dato que cinco
+ * pasadas leyeron —aunque ninguna con mucha seguridad— es mejor evidencia que
+ * uno que apareció una sola vez, y es esa diferencia la que decide, más abajo,
+ * entre «el OCR partió este importe en dos» y «acá hay dos palabras».
+ *
+ * El piso importa: Tesseract devuelve confianza cero para palabras que están
+ * perfectamente bien —«MANI» sale en cero en una pasada y en 0,96 en otras
+ * tres— y sin piso una observación así valdría exactamente lo mismo que no
+ * existir. Que una pasada la haya visto ya es evidencia.
+ */
+export function apoyo(observacion: Observacion): number {
+  return observacion.lecturas.reduce((suma, l) => suma + Math.max(l.confianza, PISO_DE_APOYO), 0);
+}
+
+const PISO_DE_APOYO = 0.05;
 
 export function mejorLectura(observacion: Observacion): Lectura {
   /*
@@ -171,7 +192,16 @@ export function agruparPorLugar(fragmentos: FragmentoEnderezado[]): Observacion[
 
     if (candidata) {
       candidata.lecturas.push(lectura);
-      // La caja de consenso se queda con la de la lectura que manda.
+      /*
+       * La caja de consenso se queda con la de la lectura que manda.
+       *
+       * Ojo: es la caja **sin enderezar**, mientras que la comparación de
+       * arriba usa la enderezada. Está medido que corregirlo cambia la
+       * reconstrucción entera —sobre la foto ilegible de Los Calvos 212356 pasa
+       * de un renglón y rechazo a dieciséis renglones inventados y revisión—,
+       * así que la corrección va junto con el control de filas inventadas y no
+       * suelta acá.
+       */
       candidata.caja = mejorLectura(candidata).caja;
     } else {
       observaciones.push({ caja: fragmento.caja, lecturas: [lectura] });
@@ -179,6 +209,39 @@ export function agruparPorLugar(fragmentos: FragmentoEnderezado[]): Observacion[
   }
 
   return observaciones;
+}
+
+/**
+ * La caja de la observación **sin la pasada que se le fue de ancho**: la
+ * mediana de las cajas de las lecturas cuyo texto ganó.
+ *
+ * No reemplaza a `caja` —esa es la que se señala en la foto y con la que se
+ * arman los renglones y el pie, y moverla cambia la reconstrucción entera— sino
+ * que se usa donde hace falta preguntar **qué lugar ocupa** un dato: al decidir
+ * si dos observaciones son la misma cosa leída dos veces.
+ *
+ * Sin esto, una sola pasada con el recorte corrido decide por las otras cuatro:
+ * en la factura de Errecalde las cinco leen «PUNTA», cuatro le dan su ancho real
+ * y la quinta se lo estira hasta tapar «DE AGUA», con lo que «PUNTA» y «AGUA»
+ * pasan a ocupar el mismo lugar, una de las dos sobra y la descripción sale
+ * «BARRA DANBO DE AGUA». La mediana aguanta hasta la mitad de cajas mal puestas.
+ *
+ * Se toman sólo las lecturas cuyo texto ganó. Mezclar las cajas de lecturas que
+ * dicen cosas distintas sería promediar dos hipótesis, y acá no se promedia
+ * nada: se elige una y se conserva la otra.
+ */
+export function cajaRobusta(observacion: Observacion): Caja {
+  const gana = mejorLectura(observacion).texto;
+  const suyas = observacion.lecturas.filter((l) => l.texto === gana);
+  const mediana = (valores: number[]) => {
+    const orden = [...valores].sort((a, b) => a - b);
+    return orden[Math.floor(orden.length / 2)];
+  };
+  const x0 = mediana(suyas.map((l) => l.caja.x0));
+  const x1 = mediana(suyas.map((l) => l.caja.x1));
+  const y0 = mediana(suyas.map((l) => l.caja.y0));
+  const y1 = mediana(suyas.map((l) => l.caja.y1));
+  return { x0: Math.min(x0, x1), x1: Math.max(x0, x1), y0: Math.min(y0, y1), y1: Math.max(y0, y1) };
 }
 
 /**
@@ -326,8 +389,95 @@ export function unirPartidas(renglon: RenglonVisual, alturaTipica: number): Obse
 
 /** ¿Los dos tramos son de la misma naturaleza? */
 function mismaClase(a: string, b: string): boolean {
-  const numerico = (t: string) => /^[\d.,%$-]+$/.test(t);
-  return numerico(a) === numerico(b);
+  return esNumerico(a) === esNumerico(b);
+}
+
+/** ¿Es un pedazo de número, o de texto? */
+export function esNumerico(texto: string): boolean {
+  return /^[\d.,%$-]+$/.test(texto);
+}
+
+// ---------------------------------------------------------------------------
+// Cómo se reparte una celda entre varias observaciones
+// ---------------------------------------------------------------------------
+
+/**
+ * Cómo queda repartida una celda a la que llegaron varias observaciones.
+ *
+ * `partes` son las que se leen una al lado de la otra —las palabras de una
+ * descripción, los dos pedazos de un importe que el OCR cortó por la coma— y
+ * `alternativas` las que **ocupaban el mismo lugar** que alguna de ellas: no son
+ * un pedazo más, son otra manera de leer lo mismo.
+ */
+export interface RepartoDeCelda {
+  partes: Observacion[];
+  alternativas: Observacion[];
+}
+
+/**
+ * Separa lo que va uno al lado del otro de lo que es la misma cosa leída dos veces.
+ *
+ * Es la corrección del defecto más transversal que dejó la validación ciega. La
+ * regla anterior era pegar todo lo que cayera en la misma columna del mismo
+ * renglón, y eso produce texto que no existe en ningún papel:
+ * «27.937,3527937,35» —una pasada leyó el importe entero y otra lo partió en
+ * «27» y «937,35»—, «MANI SAL SAL PELADO», «300052820300052820».
+ *
+ * Lo que distingue un caso del otro es geométrico y no textual: **dos pedazos de
+ * una descripción no se pisan**, están uno después del otro. Dos lecturas de la
+ * misma cosa sí se pisan, y se pisan en los dos ejes: dos importes de renglones
+ * distintos comparten la columna entera sin ser el mismo dato, así que el
+ * solapamiento horizontal solo no alcanza para decidirlo.
+ *
+ * Entre las que se pisan gana la de más **apoyo** —cuántas pasadas la vieron y
+ * con cuánta confianza—, y eso es lo que resuelve los dos casos simétricos, que
+ * sin él serían indistinguibles: «MANI» y «SAL» los vieron cuatro pasadas cada
+ * uno y «MANISAL» una sola, así que gana el par; «27.937,35» lo vieron tres y el
+ * corte «27»+«937,35» una, así que gana el entero. Lo que pierde no se tira:
+ * queda como alternativa de la celda, con su pasada y su caja.
+ */
+export function repartirCelda(competidoras: Observacion[]): RepartoDeCelda {
+  if (competidoras.length <= 1) return { partes: [...competidoras], alternativas: [] };
+
+  /*
+   * La tolerancia sale del alto de las propias cajas, como todo lo demás acá:
+   * la misma factura fotografiada más de cerca tiene que repartirse igual. Se
+   * toma la mediana y no el promedio porque una mota de tinta o un borde leído
+   * como letra son cajas de alto absurdo, y arrastrarían el umbral.
+   */
+  const cajas = new Map(competidoras.map((o) => [o, cajaRobusta(o)]));
+  const altos = [...cajas.values()].map((c) => alto(c)).sort((a, b) => a - b);
+  const tolerancia = altos[Math.floor(altos.length / 2)] * 0.3;
+
+  const sePisan = (a: Observacion, b: Observacion) => {
+    const ca = cajas.get(a)!;
+    const cb = cajas.get(b)!;
+    return (
+      solapeHorizontal(ca, cb) > tolerancia &&
+      solapeVertical(ca, cb) > Math.min(alto(ca), alto(cb)) * 0.5
+    );
+  };
+
+  /*
+   * Se recorren de mayor a menor apoyo y entra la que no se pisa con ninguna de
+   * las ya elegidas. Los desempates son por posición y por texto para que el
+   * reparto sea el mismo en cada corrida.
+   */
+  const porApoyo = [...competidoras].sort(
+    (a, b) =>
+      apoyo(b) - apoyo(a) ||
+      a.caja.x0 - b.caja.x0 ||
+      textoPreferido(a).localeCompare(textoPreferido(b)),
+  );
+
+  const partes: Observacion[] = [];
+  const alternativas: Observacion[] = [];
+  for (const candidata of porApoyo) {
+    if (partes.some((elegida) => sePisan(elegida, candidata))) alternativas.push(candidata);
+    else partes.push(candidata);
+  }
+
+  return { partes: partes.sort((a, b) => a.caja.x0 - b.caja.x0), alternativas };
 }
 
 export { centroX, centroY };

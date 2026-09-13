@@ -19,7 +19,9 @@ import {
 import {
   agruparPorLugar,
   armarRenglones,
+  esNumerico,
   mejorLectura,
+  repartirCelda,
   textoPreferido,
   lecturasAlternativas,
   unirPartidas,
@@ -349,15 +351,17 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
   }
 
   /*
-   * Dos observaciones distintas en la misma columna del mismo renglón.
+   * Varias observaciones en la misma columna del mismo renglón.
    *
-   * Puede ser una celda con dos palabras —una descripción— o puede ser un valor
-   * de otro renglón que se coló. Se junta el texto en orden horizontal y se
-   * ofrecen también las partes por separado: si la aritmética no cierra con el
-   * todo, puede cerrar con una de las partes.
+   * Antes de juntar nada hay que decidir **qué es cada una**: los pedazos de una
+   * descripción van uno al lado del otro y se juntan; las lecturas que ocupan el
+   * mismo lugar son la misma cosa vista por pasadas distintas y no se juntan
+   * nunca, compiten. Pegar las dos cosas es lo que producía celdas que no
+   * existen en ningún papel, como «27.937,3527937,35».
    */
-  const ordenadas = [...competidoras].sort((a, b) => a.caja.x0 - b.caja.x0);
-  const partes = ordenadas.map((o) => textoPreferido(o));
+  const reparto = repartirCelda(competidoras);
+  const partes = reparto.partes.map((o) => textoPreferido(o));
+
   /*
    * Los pedazos de un número se pegan sin espacio; las palabras, con.
    *
@@ -366,26 +370,44 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
    * un número y deja el renglón sin importe. Una descripción de dos palabras,
    * en cambio, necesita el espacio.
    */
-  const todosNumericos = partes.every((t) => /^[\d.,%$-]+$/.test(t));
-  const juntas = partes.join(todosNumericos ? '' : ' ');
-  const lectura = mejorLectura(ordenadas[0]);
-  const cajaDeTodas = ordenadas.map((o) => mejorLectura(o).caja).reduce(unirCajas);
+  const juntas = partes.join(partes.every(esNumerico) ? '' : ' ');
+  const lectura = mejorLectura(reparto.partes[0]);
+  const cajaDeTodas = reparto.partes.map((o) => mejorLectura(o).caja).reduce(unirCajas);
 
-  const alternativas: LecturaDeCelda[] = [
-    { texto: juntas, caja: cajaDeTodas, pasada: lectura.pasada, confianza: lectura.confianza },
-    ...ordenadas.map((o) => {
-      const suya = mejorLectura(o);
-      return { texto: suya.texto, caja: suya.caja, pasada: suya.pasada, confianza: suya.confianza };
-    }),
-  ];
+  /*
+   * Lo descartado no se pierde: queda como alternativa de la celda, con su
+   * pasada y su caja. Si el reparto elegido no hace cerrar el renglón, la otra
+   * manera de leerlo sigue estando, y una persona puede verla señalada en la
+   * foto en vez de tener que volver al papel.
+   */
+  const deLasQueCompetian = reparto.alternativas.flatMap((o) => lecturasAlternativas(o));
+
+  const alternativas: LecturaDeCelda[] =
+    reparto.partes.length === 1
+      ? [...lecturasAlternativas(reparto.partes[0]), ...deLasQueCompetian]
+      : [
+          { texto: juntas, caja: cajaDeTodas, pasada: lectura.pasada, confianza: lectura.confianza },
+          ...reparto.partes.map((o) => {
+            const suya = mejorLectura(o);
+            return {
+              texto: suya.texto,
+              caja: suya.caja,
+              pasada: suya.pasada,
+              confianza: suya.confianza,
+            };
+          }),
+          ...deLasQueCompetian,
+        ];
+
+  const sinRepetidas = alternativas.filter(
+    (a, i) => alternativas.findIndex((b) => b.texto === a.texto) === i,
+  );
 
   return {
     columna,
     texto: juntas,
-    alternativas: alternativas.filter(
-      (a, i) => alternativas.findIndex((b) => b.texto === a.texto) === i,
-    ),
-    estado: 'ambigua',
+    alternativas: sinRepetidas,
+    estado: sinRepetidas.length > 1 ? 'ambigua' : 'leida',
     procedencia: { pasada: lectura.pasada, confianza: lectura.confianza, caja: lectura.caja },
   };
 }

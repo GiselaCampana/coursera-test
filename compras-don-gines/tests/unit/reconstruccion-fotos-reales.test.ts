@@ -77,7 +77,15 @@ describe('la reconstrucción de la tabla', () => {
      * son los que dice el papel.
      */
     const renglones = EZRA.veredicto.ganadora!.renglones;
-    expect(renglones.map((r) => r.codigo)).toEqual(['47', '49', '48', '10', '2514', '4249E']);
+    /*
+     * El sexto código es «4249» y no «4249E». La «E» no está en el papel: la
+     * pasada de la franja de artículos parte esos mismos glifos en «42» y «E»
+     * —dos cajas que se pisan con la que la pasada de la página entera lee
+     * completa como «4249», con 0,95 contra 0,53 y 0,18— y la celda las venía
+     * pegando en vez de tratarlas como lo que son, dos maneras de leer lo
+     * mismo. Los otros cinco códigos son dígitos puros.
+     */
+    expect(renglones.map((r) => r.codigo)).toEqual(['47', '49', '48', '10', '2514', '4249']);
     expect(renglones[0].cantidad?.toString()).toBe('4.24');
     expect(renglones[0].precioUnitario?.toString()).toBe('6723.279');
     expect(renglones[0].descuentoPct?.toString()).toBe('0.05');
