@@ -201,6 +201,27 @@ export interface ActaDePrimeraLectura {
   reconstruccionElegida: string;
   reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
 
+  /**
+   * En qué escala se leyó cada columna numérica, y con qué evidencia.
+   *
+   * Va en el acta porque una escala es la decisión más cara del motor: mueve el
+   * costo de cada artículo un factor de cien sin que ninguna cuenta lo delate.
+   * Para poder auditarla hace falta ver las cuatro cosas juntas —qué valores la
+   * muestran impresa, cuánto costó sostenerla, qué otra hipótesis quedó en pie y
+   * por cuánto perdió— y un acta que dijera sólo el resultado no permitiría
+   * distinguir una escala anclada en cinco valores legibles de una adivinada.
+   */
+  escalas: {
+    columna: string;
+    separador: string;
+    decimales: number;
+    anclas: string[];
+    reparaciones: number;
+    segunda: { separador: string; decimales: number; reparaciones: number } | null;
+    margen: number;
+    indecidible: boolean;
+  }[];
+
   /** El tiempo, separado: la primera pasada y la relectura focalizada. */
   tiempos: {
     ocrMs: number;
@@ -416,6 +437,7 @@ export function actaDePrimeraLectura(entrada: {
       : null,
     reconstruccionElegida: informe.reconstruccionElegida,
     reconstruccionesProbadas: informe.reconstruccionesProbadas,
+    escalas: informe.escalas,
 
     tiempos: {
       ocrMs: entrada.ocrMs,

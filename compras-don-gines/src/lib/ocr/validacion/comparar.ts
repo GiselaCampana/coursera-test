@@ -408,9 +408,19 @@ export function comparar(
     return suyos.length > 0 && suyos.every((c) => c.acierto === true);
   }).length;
 
-  const columnasPorConfirmar = acta.bloqueosRaiz.filter(
-    (b) => b.categoria === 'BLOCKING_UNKNOWN_COLUMN',
-  ).length;
+  /*
+   * Lo que se contesta una vez para toda la columna, contra lo que hay que
+   * mirar celda por celda. La diferencia es la que decide si un comprobante se
+   * resuelve con un perfil guardado o hay que volver a tipearlo.
+   *
+   * Se mide por el **alcance** del bloqueo y no por su categoría: un bloqueo
+   * que no nombra ningún renglón es una pregunta sobre la columna —qué
+   * significa, en qué escala está escrita— y se contesta una sola vez para las
+   * veintidós celdas de abajo. Preguntar por la categoría dejaba afuera cada
+   * pregunta de columna nueva, que aparecía contada como celdas por corregir y
+   * hundía el veredicto de una factura sobre la que no hay nada mal afirmado.
+   */
+  const columnasPorConfirmar = acta.bloqueosRaiz.filter((b) => b.renglon === null).length;
   const celdasPorCorregir = acta.bloqueosRaiz.length - columnasPorConfirmar;
 
   return {

@@ -104,9 +104,16 @@ describe('los dos renglones cierran contra su propia aritmética', () => {
     expect(BARRAZA.veredicto.decision).toBe('revision-de-estructura');
     expect(BARRAZA.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
     expect(BARRAZA.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
-    expect(BARRAZA.resumen.desglose.columnasSinReconocer).toBe(
-      BARRAZA.resumen.bloqueosUnicos,
-    );
+    /*
+     * Todo lo que frena es una pregunta sobre una **columna**: qué significa, o
+     * en qué escala están escritos sus valores. Las dos se contestan una vez y
+     * valen para las celdas de abajo; ninguna es volver a tipear un número.
+     */
+    expect(
+      BARRAZA.resumen.desglose.columnasSinReconocer +
+        BARRAZA.resumen.desglose.escalasSinDecidir,
+    ).toBe(BARRAZA.resumen.bloqueosUnicos);
+    expect(BARRAZA.resumen.desglose.renglonesSinProbar).toBe(0);
     const textual = BARRAZA.pendientes.find((p) =>
       p.motivo.startsWith('Confirmar que la columna textual corresponde a Descripción'),
     );
@@ -247,6 +254,7 @@ describe('el cierre contra el pie no tapa una fila incorrecta', () => {
       reparaciones: 0,
       severidad: 0,
       incoherentes: 0,
+      escalasAjenas: 0,
       controles: [],
       ...campos,
     };
@@ -514,6 +522,7 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       reparaciones: 0,
       severidad: 0,
       incoherentes: 0,
+      escalasAjenas: 0,
       controles: [],
     };
     conControl.controles = controlarRenglon(conControl);

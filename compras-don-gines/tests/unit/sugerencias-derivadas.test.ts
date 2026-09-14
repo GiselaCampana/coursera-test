@@ -43,6 +43,7 @@ function renglon(parcial: Partial<RenglonCandidato>): RenglonCandidato {
     reparaciones: 0,
     severidad: 0,
     incoherentes: 0,
+    escalasAjenas: 0,
     controles: [],
     ...parcial,
   };

@@ -220,12 +220,22 @@ describe('la evidencia de la relectura entra al mismo motor', () => {
      * columna escribe los subtotales así, y lo único que lo arregla es volver a
      * mirar el papel: releída la banda, el subtotal aparece con su coma.
      */
+    /*
+     * «Se parece al resto de su columna» se medía con `incoherentes`, que era
+     * la mejor aproximación que había: cuántas celdas se leyeron de una manera
+     * que ninguno de sus vecinos de columna escribe. Ahora existe la pregunta
+     * exacta —`escalasAjenas`, cuántas se leyeron en una escala que los valores
+     * impresos de la columna desmienten— y es la que corresponde usar. La
+     * aproximación era además demasiado estricta: una celda que escribe sus
+     * decimales distinto de sus vecinas no está leída en otra escala, y excluir
+     * su renglón dejaba esta garantía apoyada en un solo artículo.
+     */
     const literalesQueCerraban = ERRECALDE.veredicto.ganadora!.renglones.filter(
       (r) =>
         r.controles.length > 0 &&
         r.controles.every((c) => c.paso) &&
         r.reparaciones === 0 &&
-        r.incoherentes === 0 &&
+        r.escalasAjenas === 0 &&
         r.descripcion.trim() !== '',
     );
     const despues = new Map(

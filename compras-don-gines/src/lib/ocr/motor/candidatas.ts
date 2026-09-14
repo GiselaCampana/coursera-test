@@ -95,6 +95,15 @@ export interface RenglonCandidato {
    * escribe sus precios sin coma.
    */
   incoherentes: number;
+  /**
+   * Cuántos de sus números se leyeron en una escala que el papel desmiente.
+   *
+   * Pesa más que todo lo demás salvo no perder renglones, y por eso va aparte
+   * de las reparaciones: una reparación es suponer que el OCR se comió un
+   * separador, y eso pasa en cada factura; leer en otra escala que la que los
+   * valores impresos de la columna muestran es contradecir al papel.
+   */
+  escalasAjenas: number;
   /** Qué controles pasó y cuáles no. */
   controles: ControlDeRenglon[];
 }
@@ -405,7 +414,8 @@ function combinarNumeros(
     reparaciones: number;
     severidad: number;
     incoherentes: number;
-  }[] = [{ valores: new Map(), reparaciones: 0, severidad: 0, incoherentes: 0 }];
+    escalasAjenas: number;
+  }[] = [{ valores: new Map(), reparaciones: 0, severidad: 0, incoherentes: 0, escalasAjenas: 0 }];
   for (const { campo, valores } of lecturas) {
     if (valores.length === 0) continue;
     const siguiente: typeof combinaciones = [];
@@ -420,6 +430,7 @@ function combinarNumeros(
           // celda cien veces fuera de escala no se compensa con cinco correctas.
           severidad: Math.max(parcial.severidad, lectura.severidad),
           incoherentes: parcial.incoherentes + (lectura.coherente ? 0 : 1),
+          escalasAjenas: parcial.escalasAjenas + (lectura.ajenaALaEscala ? 1 : 0),
         });
       }
     }
@@ -429,7 +440,7 @@ function combinarNumeros(
   }
 
   const salida: RenglonCandidato[] = [];
-  for (const { valores: numeros, reparaciones, severidad, incoherentes } of combinaciones) {
+  for (const { valores: numeros, reparaciones, severidad, incoherentes, escalasAjenas } of combinaciones) {
     /*
      * Un descuento de más de cien por ciento no es un descuento.
      *
@@ -481,6 +492,7 @@ function combinarNumeros(
         reparaciones,
         severidad,
         incoherentes,
+        escalasAjenas,
         controles: [],
       };
       renglon.controles = controlarRenglon(renglon);
@@ -744,9 +756,31 @@ export function puntuarTabla(
         conImporte: netos.length,
       });
       if (!cierre.compatible) {
+        /*
+         * Tope de medio punto, y no de siete décimos.
+         *
+         * Que la suma no dé contra el pie es **una** comprobación fallada, y no
+         * puede valer más que todas las demás juntas. Con el tope viejo pasaba:
+         * sobre la factura de Errecalde, una lectura con catorce renglones
+         * comprobados contra su propia aritmética —uno más que la anterior—
+         * caía por debajo del piso de utilizable y el comprobante pasaba de
+         * revisión a rechazo, o sea que se le decía a una persona que sacara la
+         * foto de nuevo porque el total no cerraba.
+         *
+         * El cierre sigue impidiendo la aceptación automática, que es lo que
+         * tiene que hacer: medio punto deja el puntaje en 0,5 y el umbral
+         * automático es 0,85. Lo que deja de hacer es **rechazar solo**.
+         *
+         * El tope se levanta cuando lo que falta es más grande que el propio
+         * neto impreso. Ahí ya no hay un cierre que falló por poco: los dos
+         * números no son versiones de la misma cosa. Sobre la foto ilegible de
+         * Los Calvos el pie sale «122» contra renglones que suman un millón y
+         * medio, y eso tiene que seguir siendo rechazo.
+         */
+        const fueraDeEscala = cierre.ajusteResidual.div(pie.netTotal).gt(2);
         penalizar(
           cierre.explicacion,
-          Math.min(0.7, 0.3 + cierre.ajusteResidual.div(pie.netTotal).toNumber()),
+          Math.min(fueraDeEscala ? 0.7 : 0.5, 0.3 + cierre.ajusteResidual.div(pie.netTotal).toNumber()),
         );
       }
     }
@@ -922,6 +956,19 @@ function firmaDeLectura(candidata: CandidataDeTabla): string {
 export function decidir(
   candidatas: CandidataDeTabla[],
   encabezadosSinResolver: string[] = [],
+  /**
+   * Lo que impide aceptar el comprobante **aunque los números cierren**.
+   *
+   * Es una compuerta y no una penalización, y la diferencia es todo el punto.
+   * Un puntaje se compensa: una fila que no probó ser un artículo baja unos
+   * décimos y un pie que cuadra los devuelve, así que el comprobante termina
+   * aceptado solo con una fila que nadie confirmó que existiera. Acá no hay
+   * nada que compensar: mientras quede uno de estos, la respuesta es revisión.
+   *
+   * Cada elemento es el motivo en castellano, porque lo que frena tiene que
+   * poder decirse. Un freno que no se puede explicar no se puede resolver.
+   */
+  frenos: string[] = [],
 ): Veredicto {
   /*
    * El orden es **lexicográfico**, no una suma: primero no perder renglones,
@@ -993,6 +1040,34 @@ export function decidir(
           ? `Hay una columna que no se supo qué era: ${cuales}. `
           : `Hay columnas que no se supo qué eran: ${cuales}. `) +
         `Hay que configurarlas antes de usar el comprobante ` +
+        `(la lectura tiene ${ganadora.puntaje.toFixed(2)} de confianza).`,
+    };
+  }
+
+  /*
+   * La compuerta: lo que no se probó no se acepta porque la cuenta dé.
+   *
+   * Va después de las columnas —que son más fáciles de resolver y conviene
+   * nombrar primero— y **antes** del umbral, porque «0,91 de confianza» no
+   * explica por qué el comprobante no pasó y «hay un renglón que no probó ser
+   * un artículo» sí.
+   *
+   * Que esté acá arriba y no restando puntos es deliberado. Las dos cosas que
+   * frenan por este camino —una fila cuya identidad no está probada, una
+   * columna donde quedan dos escalas posibles— tienen en común que **ninguna
+   * cuenta las contesta**: la fila de más multiplica igual de bien que las
+   * verdaderas, y las dos escalas cierran las dos. Dejar que el cierre las
+   * compense sería usar la aritmética para responder una pregunta que la
+   * aritmética no puede responder.
+   */
+  if (frenos.length > 0) {
+    return {
+      decision: 'revision-de-estructura',
+      ganadora,
+      segunda,
+      margen,
+      motivo:
+        `${frenos.join(' ')} No se puede aceptar solo hasta resolverlo ` +
         `(la lectura tiene ${ganadora.puntaje.toFixed(2)} de confianza).`,
     };
   }

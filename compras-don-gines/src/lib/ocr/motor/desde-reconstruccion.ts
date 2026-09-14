@@ -76,6 +76,61 @@ import {
  *    sólo la suma contra el neto impreso lo delata.
  */
 
+/**
+ * La escala que se eligió para una columna, con todo lo que la sostiene.
+ *
+ * Va en el informe porque una escala es una decisión, no un detalle de parseo:
+ * decide el orden de magnitud de la factura entera. Quien la revise tiene que
+ * poder ver qué valores la anclan, cuánto costó, qué otra quedó en pie y por
+ * cuánto perdió.
+ */
+export interface EscalaInformada {
+  columna: CampoDeColumna;
+  separador: string;
+  decimales: number;
+  /** Los valores que la muestran impresa. Sin éstos no hay evidencia de escala. */
+  anclas: string[];
+  reparaciones: number;
+  segunda: { separador: string; decimales: number; reparaciones: number } | null;
+  margen: number;
+  /** Dos escalas siguen en pie y ninguna tiene anclas: no se elige, se informa. */
+  indecidible: boolean;
+}
+
+/**
+ * La escala de cada columna numérica de una tabla ya armada.
+ *
+ * Se recalcula sobre la tabla elegida para poder informarla; es la misma cuenta
+ * que hace la interpretación, sobre los mismos textos.
+ */
+export function escalasDeLaTabla(tabla: TablaReconstruida): EscalaInformada[] {
+  const salida: EscalaInformada[] = [];
+  tabla.columnas.forEach((columna, i) => {
+    const campo = columna?.campo?.campo;
+    if (!campo || !CAMPOS_NUMERICOS.has(campo)) return;
+    const textos = tabla.renglones.map((r) => r.celdas[i]?.texto ?? '');
+    const formato = formatoDeColumna(textos);
+    if (!formato) return;
+    salida.push({
+      columna: campo,
+      separador: formato.escala.separador,
+      decimales: formato.escala.decimales,
+      anclas: formato.escala.anclas,
+      reparaciones: formato.escala.reparaciones,
+      segunda: formato.segunda
+        ? {
+            separador: formato.segunda.separador,
+            decimales: formato.segunda.decimales,
+            reparaciones: formato.segunda.reparaciones,
+          }
+        : null,
+      margen: Number.isFinite(formato.margen) ? formato.margen : -1,
+      indecidible: formato.indecidible,
+    });
+  });
+  return salida;
+}
+
 /** Lo medido de una corrida entera, etapa por etapa. */
 export interface Instrumentacion extends MedicionDeCandidatas {
   /** Cuántas filas del haz semántico salieron de cada candidata de tabla. */
@@ -105,6 +160,8 @@ export interface InformeReconstruido {
    * cuántas combinaciones se probaron, y cuánto costó cada parte.
    */
   instrumentacion: Instrumentacion;
+  /** Qué escala se eligió para cada columna numérica, y con qué evidencia. */
+  escalas: EscalaInformada[];
   /**
    * El pie fiscal reconciliado, asignación por asignación.
    *
@@ -411,13 +468,29 @@ function interpretarUnaVez(
    * renglones cierran, y con eso se arma la lista de pendientes; después el
    * veredicto definitivo, que sólo frena por las **bloqueantes**.
    */
+  const escalas = escalasDeLaTabla(tabla);
   const provisorio = decidir(candidatas, sinResolver);
-  const pendientes = queFaltaResolver(tabla, provisorio, sinResolver);
+  const pendientes = queFaltaResolver(tabla, provisorio, sinResolver, escalas);
   const columnasQueFrenan = soloBloqueantes(pendientes)
     .filter((p) => p.categoria === 'BLOCKING_UNKNOWN_COLUMN')
     .map((p) => p.columna!);
 
-  const veredicto = decidir(candidatas, columnasQueFrenan);
+  /*
+   * Las compuertas permanentes, que no dependen del puntaje.
+   *
+   * Se arman de la misma lista de pendientes que ve una persona, así que lo que
+   * frena el comprobante y lo que se le muestra a quien tiene que resolverlo
+   * son lo mismo. No hay forma de que el informe diga «revisar el renglón 5» y
+   * el veredicto sea «automática», ni al revés.
+   */
+  const frenos = soloBloqueantes(pendientes)
+    .filter(
+      (p) =>
+        p.categoria === 'BLOCKING_UNPROVEN_ROW' || p.categoria === 'BLOCKING_UNDECIDED_SCALE',
+    )
+    .map((p) => p.motivo);
+
+  const veredicto = decidir(candidatas, columnasQueFrenan, frenos);
 
   /*
    * Y al final el pie fiscal, reconciliado como un grafo de relaciones.
@@ -446,6 +519,7 @@ function interpretarUnaVez(
     pendientes,
     resumen: resumir(pendientes),
     reconstruccionElegida: elegido.candidata.origen,
+    escalas,
     instrumentacion: {
       ...medicion,
       lecturasPorCandidata: armados.map((a) => a.lecturas.length),
@@ -724,6 +798,31 @@ function elegirParaElDocumento(
         if (!alternativaCierra) continue;
       }
 
+      /*
+       * **El total impreso confirma una escala; no la crea.**
+       *
+       * Éste es el agujero por el que se colaba el error de escala entero, y no
+       * estaba en la lectura de la celda —que elegía bien— sino acá. Sobre una
+       * de las fotos del lote el neto del pie salió leído sin su separador
+       * decimal, cien veces más grande. Con ese objetivo, esta búsqueda
+       * encontraba para cada renglón una lectura cien veces más grande que se
+       * le acercaba —existe siempre, porque la columna la ofrece marcada como
+       * ajena— y la iba tomando renglón por renglón hasta que el comprobante
+       * cerraba perfecto con **todos** los costos cien veces mal. Cada cambio
+       * mejoraba la distancia al total, y el total era el equivocado.
+       *
+       * Así que la búsqueda no puede empeorar la posición de un renglón frente
+       * a la escala de sus columnas: puede cambiar una lectura por otra que su
+       * columna sostiene igual o mejor, y ninguna que su columna desmienta más.
+       * Lo que está impreso en la celda y en el resto de la columna decide el
+       * orden de magnitud antes que cualquier cuenta, y una cuenta que cierra
+       * cien veces fuera de escala no es evidencia de nada.
+       *
+       * No hay umbral ni excepción: si el pie está mal leído, el comprobante no
+       * cierra y va a revisión, que es exactamente lo que tiene que pasar.
+       */
+      if (alternativa.escalasAjenas > incumbente.escalasAjenas) continue;
+
       const neto = netoDelRenglon(alternativa);
       if (!neto) continue;
       const diferencia = neto.minus(objetivo).abs();
@@ -800,8 +899,82 @@ export function queFaltaResolver(
   tabla: TablaReconstruida,
   veredicto: Veredicto,
   sinResolver: string[],
+  /**
+   * Qué escala se eligió para cada columna. Sólo se mira si alguna quedó
+   * indecidible, que es el único caso que frena.
+   */
+  escalas: EscalaInformada[] = [],
 ): Pendiente[] {
   const pendientes: Pendiente[] = [];
+
+  /*
+   * **Una fila que no probó ser un artículo frena el comprobante.**
+   *
+   * Es una deuda del motor, escrita como tal. La clasificación de renglones
+   * deja una línea como `pendiente` cuando tiene apoyo de sus vecinos pero no
+   * llegó a las dos familias de evidencia independientes que hacen falta para
+   * darla por buena. Sobre una de las fotos del lote quedó una así, y no se la
+   * puede borrar: la misma evidencia que la sostiene sostiene a un artículo
+   * verdadero, y el corte que la elimina elimina a los dos.
+   *
+   * Mientras esté, el comprobante no se acepta solo. Y no se acepta **aunque
+   * después cierren los números y el pie**, que es justamente el riesgo: una
+   * fila de más cuyo importe se lea de una manera que haga cuadrar la suma
+   * pasaría inadvertida para siempre, con un artículo que nadie compró en el
+   * historial de precios. Ninguna cuenta puede contestar si esa fila estaba
+   * impresa; eso lo contesta una persona mirando la foto.
+   */
+  tabla.renglones.forEach((renglon, i) => {
+    if (renglon.clase !== 'pendiente') return;
+    if (renglon.apoyos.includes('identidad')) return;
+    pendientes.push({
+      id: `renglon:${i + 1}:existe`,
+      dependeDe: null,
+      categoria: 'BLOCKING_UNPROVEN_ROW',
+      renglon: i + 1,
+      campo: null,
+      columna: null,
+      alternativas: [],
+      elegido: null,
+      motivo:
+        `Confirmar si el renglón ${i + 1} es un artículo impreso en el papel. ` +
+        `Se conservó porque sus vecinos lo sostienen (${renglon.apoyos.join(', ') || 'sin apoyos propios'}), ` +
+        `pero no se leyó nada que lo identifique, y la aritmética no puede decidir si existe. ` +
+        `${renglon.motivo}`,
+    });
+  });
+
+  /*
+   * **Una columna con dos escalas posibles y ninguna ancla frena el comprobante.**
+   *
+   * Cuando ningún valor de la columna tiene un separador impreso, «1500» es mil
+   * quinientos o quince con la misma legitimidad, y las dos lecturas son
+   * coherentes con la columna entera. Lo que **no** se puede hacer es elegir la
+   * que haga cerrar el total: el total leído con la misma convención cierra con
+   * las dos, así que no desempata nada, y usarlo es dejar que la aritmética
+   * invente un orden de magnitud que el papel no dice. Va a revisión con las
+   * dos hipótesis a la vista y decide una persona.
+   */
+  for (const escala of escalas) {
+    if (!escala.indecidible || !escala.segunda) continue;
+    const como = (e: { separador: string; decimales: number }) =>
+      e.separador === 'ninguno' ? 'sin decimales' : `con ${e.decimales} decimales`;
+    pendientes.push({
+      id: `escala:${escala.columna}`,
+      dependeDe: null,
+      categoria: 'BLOCKING_UNDECIDED_SCALE',
+      renglon: null,
+      campo: escala.columna,
+      columna: escala.columna,
+      alternativas: [],
+      elegido: null,
+      motivo:
+        `La columna «${escala.columna}» no tiene ningún valor con separadores impresos, ` +
+        `así que se puede leer ${como(escala)} o ${como(escala.segunda)} y las dos son ` +
+        `coherentes con toda la columna. Hay que mirar el papel: el total no sirve para ` +
+        `decidirlo porque cierra con las dos.`,
+    });
+  }
 
   /*
    * Una columna sin reconocer frena **sólo si hace falta para las cuentas**.

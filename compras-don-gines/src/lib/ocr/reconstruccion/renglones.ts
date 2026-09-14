@@ -658,10 +658,19 @@ export function cortePierdeUnArticulo(
   const afuera = renglones.filter((r) => centroY(r.caja) > hastaY);
   if (dentro.length === 0 || afuera.length === 0) return false;
 
+  /*
+   * Se miran **todos** los renglones que el corte deja afuera cerca del último
+   * que queda, no sólo el primero.
+   *
+   * Mirar el primero solo tiene un agujero que costó un artículo: si entre el
+   * último renglón bueno y el siguiente se cuela una línea de ruido, el primero
+   * que queda afuera es la basura, el corte parece inofensivo y se lleva puesto
+   * el artículo que venía detrás.
+   */
   const ultimo = dentro[dentro.length - 1];
-  const primeroAfuera = afuera[0];
-  if (centroY(primeroAfuera.caja) - centroY(ultimo.caja) > paso * 2) return false;
-  return familiasDeApoyo(primeroAfuera, columnas).length >= MINIMO_DE_FAMILIAS;
+  return afuera
+    .filter((r) => centroY(r.caja) - centroY(ultimo.caja) <= paso * 3)
+    .some((r) => familiasDeApoyo(r, columnas).length >= MINIMO_DE_FAMILIAS);
 }
 
 export interface CandidataDeBanda {

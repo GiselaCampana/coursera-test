@@ -182,25 +182,80 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     expect(suyos).toHaveLength(0);
   });
 
-  it('no modifica ninguna otra fila', () => {
+  it('no vuelve a leer ninguna otra celda de la foto', () => {
     /*
-     * La garantía que hace que esto sea seguro. Confirmar una celda vuelve a
-     * pasar el comprobante por el mismo motor, y el motor elige de nuevo: si
-     * eso reacomodara los valores de los otros veintidós renglones, confirmar
-     * una cantidad sería rehacer la factura entera y nadie podría auditar qué
-     * cambió por qué.
+     * La garantía que hace que esto sea seguro, dicha donde corresponde.
+     *
+     * Confirmar una celda vuelve a pasar el comprobante por el mismo motor, y el
+     * motor elige de nuevo. Lo que **no** puede pasar es que vuelva a leer la
+     * foto: si confirmar una cantidad cambiara los textos reconstruidos de los
+     * otros veintidós renglones, confirmar un número sería rehacer la factura
+     * entera y nadie podría auditar qué cambió por qué.
+     *
+     * Los textos son lo que no se toca. Los **valores** sí pueden cambiar, y hay
+     * una sola razón por la que pueden: el valor confirmado es un ancla de la
+     * escala de su columna, y la escala es de la columna entera, no de la celda.
+     * Un papel donde el OCR se comió casi todas las comas de una columna tiene
+     * su escala sostenida por dos o tres valores legibles; agregar uno cierto
+     * puede cambiarla, y entonces cada celda mutilada de esa columna se lee de
+     * nuevo. Eso es precisamente para lo que sirve confirmar.
+     */
+    const caso = primeraRaizDeCantidad();
+    const { raiz, despues } = caso!;
+
+    expect(despues.tabla.renglones).toHaveLength(ERRECALDE.tabla.renglones.length);
+
+    // Ni un solo texto reconstruido distinto fuera de la celda confirmada.
+    ERRECALDE.tabla.renglones.forEach((fila, i) => {
+      if (i + 1 === raiz.renglon) return;
+      const ahora = despues.tabla.renglones[i];
+      expect(fila.celdas.map((c) => c?.texto ?? ''), `renglón ${i + 1}`).toEqual(
+        ahora.celdas.map((c) => c?.texto ?? ''),
+      );
+    });
+  });
+
+  it('los renglones que cambian de valor lo hacen para cerrar, no para reacomodarse', () => {
+    /*
+     * El otro lado de lo mismo: que la escala de una columna pueda cambiar no es
+     * permiso para que los números se muevan a cualquier lado. Todo renglón que
+     * cambió de valor tiene que quedar **mejor** —comprobándose contra su propia
+     * aritmética— porque si no, confirmar una celda sería empeorar la factura en
+     * otro lado y el informe no tendría cómo decirlo.
      */
     const caso = primeraRaizDeCantidad();
     const { raiz, despues } = caso!;
 
     const antes = retrato(ERRECALDE);
     const ahora = retrato(despues);
-    expect(ahora).toHaveLength(antes.length);
+    const cierra = (informe: InformeReconstruido, i: number) => {
+      const r = informe.veredicto.ganadora?.renglones[i];
+      return !!r && r.controles.length > 0 && r.controles.every((c) => c.paso);
+    };
 
+    let cambiados = 0;
     antes.forEach((fila, i) => {
-      if (i + 1 === raiz.renglon) return;
-      expect(ahora[i], `renglón ${i + 1}`).toBe(fila);
+      if (i + 1 === raiz.renglon || ahora[i] === fila) return;
+      cambiados++;
+      expect(cierra(despues, i), `renglón ${i + 1} cambió sin cerrar`).toBe(true);
+
+      /*
+       * Y un renglón que **ya** cerraba no pierde ni cambia nada de lo que
+       * tenía: a lo sumo se le completa un campo que estaba vacío. Cambiarle un
+       * valor a un renglón que ya se comprobaba solo sería deshacer una
+       * respuesta buena, y ninguna confirmación de otra celda lo justifica.
+       */
+      if (!cierra(ERRECALDE, i)) return;
+      const viejos = fila.split('~');
+      const nuevos = ahora[i].split('~');
+      viejos.forEach((valor, campo) => {
+        if (valor === '') return;
+        expect(nuevos[campo], `renglón ${i + 1}, campo ${campo}`).toBe(valor);
+      });
     });
+
+    // Y que efectivamente se miró algo: si no cambió nada, esto no prueba nada.
+    expect(cambiados).toBeGreaterThan(0);
   });
 
   it('la celda confirmada no vuelve a competir con lo que había leído el OCR', () => {

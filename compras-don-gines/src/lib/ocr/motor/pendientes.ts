@@ -34,6 +34,27 @@ export type CategoriaPendiente =
   | 'BLOCKING_UNIT'
   /** El renglón no se puede asociar a un producto del catálogo. */
   | 'BLOCKING_PRODUCT'
+  /**
+   * Hay una línea conservada como renglón que **no probó ser un artículo**.
+   *
+   * Es una deuda declarada del motor, no una ambigüedad de una celda. Sobre una
+   * de las fotos del lote quedó una hipótesis de renglón de más que no se puede
+   * borrar sin borrar también un artículo verdadero: las dos se sostienen con
+   * la misma evidencia. Mientras eso sea así, el comprobante no se acepta solo
+   * **aunque cierre**, porque lo que está en duda no es un número sino si esa
+   * fila existe, y ninguna cuenta contesta eso.
+   */
+  | 'BLOCKING_UNPROVEN_ROW'
+  /**
+   * Una columna numérica donde quedan dos escalas posibles y nada que elija.
+   *
+   * Sin un solo valor escrito con separadores, «1500» puede ser mil quinientos
+   * o quince, y las dos lecturas son coherentes con toda la columna. El papel
+   * no alcanza, y elegir por lo que cierre contra el total es dejar que la
+   * aritmética invente la escala. Va a revisión **con las dos hipótesis a la
+   * vista**.
+   */
+  | 'BLOCKING_UNDECIDED_SCALE'
   /** Una lectura alternativa perdió contra otra: queda anotada. */
   | 'WARNING_DISCARDED_ALTERNATIVE'
   /** Texto o número que no pertenece a la tabla. */
@@ -54,6 +75,8 @@ export const CATEGORIAS_BLOQUEANTES: ReadonlySet<CategoriaPendiente> = new Set([
   'BLOCKING_UNKNOWN_COLUMN',
   'BLOCKING_UNIT',
   'BLOCKING_PRODUCT',
+  'BLOCKING_UNPROVEN_ROW',
+  'BLOCKING_UNDECIDED_SCALE',
 ]);
 
 export function bloquea(categoria: CategoriaPendiente): boolean {
@@ -136,13 +159,15 @@ export interface ResumenDePendientes {
    * el mismo problema.
    */
   bloqueosUnicos: number;
-  /** En qué se reparte ese total. Las cinco suman `bloqueosUnicos`. */
+  /** En qué se reparte ese total. Las siete suman `bloqueosUnicos`. */
   desglose: {
     celdasObligatoriasFaltantes: number;
     ambiguedadesBloqueantes: number;
     columnasSinReconocer: number;
     unidadesPendientes: number;
     asociacionesDeProductoPendientes: number;
+    renglonesSinProbar: number;
+    escalasSinDecidir: number;
   };
   /**
    * Cuántos bloqueos dependen de una raíz.
@@ -169,6 +194,8 @@ export function resumir(pendientes: Pendiente[]): ResumenDePendientes {
     columnasSinReconocer: contar('BLOCKING_UNKNOWN_COLUMN'),
     unidadesPendientes: contar('BLOCKING_UNIT'),
     asociacionesDeProductoPendientes: contar('BLOCKING_PRODUCT'),
+    renglonesSinProbar: contar('BLOCKING_UNPROVEN_ROW'),
+    escalasSinDecidir: contar('BLOCKING_UNDECIDED_SCALE'),
   };
 
   const bloqueosUnicos = Object.values(desglose).reduce((a, b) => a + b, 0);

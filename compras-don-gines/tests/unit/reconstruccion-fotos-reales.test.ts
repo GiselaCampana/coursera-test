@@ -302,7 +302,15 @@ describe('qué le queda por resolver a una persona', () => {
     for (const [nombre, informe] of TODAS) {
       for (const pendiente of informe.pendientes) {
         expect(pendiente.motivo.length, nombre).toBeGreaterThan(10);
-        if (pendiente.renglon !== null) expect(pendiente.campo ?? pendiente.columna).not.toBeNull();
+        /*
+         * Todo bloqueo dice dónde mirar. Para casi todos eso es una celda —un
+         * renglón y un campo— pero el que pregunta **si el renglón existe** no
+         * es sobre ninguna celda suya: es sobre la línea entera, y el número de
+         * renglón ya alcanza para encontrarla en la foto.
+         */
+        if (pendiente.renglon !== null && pendiente.categoria !== 'BLOCKING_UNPROVEN_ROW') {
+          expect(pendiente.campo ?? pendiente.columna, nombre).not.toBeNull();
+        }
         for (const alternativa of pendiente.alternativas) {
           expect(alternativa.texto.length).toBeGreaterThan(0);
           expect(alternativa.caja.x1).toBeGreaterThanOrEqual(alternativa.caja.x0);
@@ -415,9 +423,16 @@ describe('qué le queda por resolver a una persona', () => {
      */
     expect(BARRAZA.resumen.desglose.celdasObligatoriasFaltantes).toBe(0);
     expect(BARRAZA.resumen.desglose.ambiguedadesBloqueantes).toBe(0);
-    expect(BARRAZA.resumen.desglose.columnasSinReconocer).toBe(
-      BARRAZA.resumen.bloqueosUnicos,
-    );
+    /*
+     * Todo lo que frena es una pregunta sobre una **columna**: qué significa, o
+     * en qué escala están escritos sus valores. Las dos se contestan una vez y
+     * valen para las celdas de abajo; ninguna es volver a tipear un número.
+     */
+    expect(
+      BARRAZA.resumen.desglose.columnasSinReconocer +
+        BARRAZA.resumen.desglose.escalasSinDecidir,
+    ).toBe(BARRAZA.resumen.bloqueosUnicos);
+    expect(BARRAZA.resumen.desglose.renglonesSinProbar).toBe(0);
 
     // Y la pregunta por la columna de texto está redactada como corresponde.
     const textual = BARRAZA.pendientes.find((p) =>

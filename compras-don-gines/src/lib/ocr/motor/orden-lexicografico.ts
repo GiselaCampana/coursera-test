@@ -18,17 +18,20 @@ import type { CandidataDeTabla, RenglonCandidato } from '@/lib/ocr/motor/candida
  *  1. **conservar todos los renglones reales.** Un artículo impreso que se
  *     pierde es un artículo que la persona no ve y no carga. Ninguna cuenta que
  *     cierre lo compensa;
- *  2. **maximizar los renglones comprobados solos.** Cantidad × precio =
+ *  2. **no leer en una escala que el papel desmiente.** Los separadores que la
+ *     celda tiene impresos, y las anclas de su columna, deciden el orden de
+ *     magnitud antes que cualquier cuenta;
+ *  3. **maximizar los renglones comprobados solos.** Cantidad × precio =
  *     importe es la única verificación que no depende de nada más;
- *  3. **minimizar la cantidad y la severidad de las reparaciones.** Suponer que
+ *  4. **minimizar la cantidad y la severidad de las reparaciones.** Suponer que
  *     el papel dice algo distinto de lo que se leyó es legítimo, y es lo último
  *     que hay que hacer;
- *  4. **preferir las lecturas literales**, contadas una por una;
- *  5. **respetar un formato coherente por columna.** Una columna de precios
+ *  5. **preferir las lecturas literales**, contadas una por una;
+ *  6. **respetar un formato coherente por columna.** Una columna de precios
  *     donde diecinueve valores tienen dos decimales y uno tiene cero no es una
  *     columna con un valor raro: es un valor mal leído;
- *  6. **cerrar contra el pie**;
- *  7. y recién al final **la confianza del OCR y la geometría**.
+ *  7. **cerrar contra el pie**;
+ *  8. y recién al final **la confianza del OCR y la geometría**.
  *
  * El punto de que el cierre esté sexto y no primero es el que arregla el error
  * que dio origen a todo esto. El cierre es una comprobación potentísima —usarla
@@ -44,19 +47,31 @@ import type { CandidataDeTabla, RenglonCandidato } from '@/lib/ocr/motor/candida
 export interface RasgosDeCandidata {
   /** Nivel 1: cuántos renglones reales conserva. */
   renglones: number;
-  /** Nivel 2: cuántos se comprueban contra su propia aritmética. */
+  /**
+   * Nivel 2: cuántos números leyó en una escala que el papel desmiente.
+   *
+   * Va **antes** que la aritmética y ése es todo el punto. Cuando una columna
+   * pierde sus separadores, el precio y el importe se corren juntos: la cuenta
+   * del renglón cierra igual de bien cien veces más grande, porque la
+   * proporción se mantiene. Dejar que el cierre decidiera entre las dos escalas
+   * era dejar que la aritmética creara evidencia que no tiene. La escala la
+   * decide lo que está impreso —los separadores de la celda, las anclas de su
+   * columna— y la aritmética la confirma o la deja en duda, nunca la inventa.
+   */
+  escalasAjenas: number;
+  /** Nivel 3: cuántos se comprueban contra su propia aritmética. */
   comprobados: number;
-  /** Nivel 3: cuántos números no se leyeron tal como están impresos. */
+  /** Nivel 4: cuántos números no se leyeron tal como están impresos. */
   reparaciones: number;
-  /** Nivel 3: cuán grave es la peor suposición, de 0 a 3. */
+  /** Nivel 4: cuán grave es la peor suposición, de 0 a 3. */
   severidadMaxima: number;
-  /** Nivel 4: cuántos renglones se leyeron enteros al pie de la letra. */
+  /** Nivel 5: cuántos renglones se leyeron enteros al pie de la letra. */
   literales: number;
-  /** Nivel 5: cuánto se aparta en total del formato de sus columnas. */
+  /** Nivel 6: cuánto se aparta en total del formato de sus columnas. */
   incoherencia: number;
-  /** Nivel 6: si la suma cierra contra el pie impreso. */
+  /** Nivel 7: si la suma cierra contra el pie impreso. */
   cierra: boolean;
-  /** Nivel 7: lo que queda, que es confianza y geometría. */
+  /** Nivel 8: lo que queda, que es confianza y geometría. */
   puntaje: number;
 }
 
@@ -95,6 +110,7 @@ export function rasgosDe(candidata: CandidataDeTabla): RasgosDeCandidata {
   const renglones = candidata.renglones;
   return {
     renglones: renglones.filter(esReal).length,
+    escalasAjenas: renglones.reduce((n, r) => n + r.escalasAjenas, 0),
     comprobados: renglones.filter(seComprueba).length,
     reparaciones: renglones.reduce((n, r) => n + r.reparaciones, 0),
     severidadMaxima: renglones.reduce((n, r) => Math.max(n, r.severidad), 0),
@@ -121,16 +137,18 @@ export function compararLexicografico(a: RasgosDeCandidata, b: RasgosDeCandidata
   return (
     // 1. Conservar todos los renglones reales.
     b.renglones - a.renglones ||
-    // 2. Maximizar los renglones comprobados solos.
+    // 2. No leer en una escala que el papel desmiente.
+    a.escalasAjenas - b.escalasAjenas ||
+    // 3. Maximizar los renglones comprobados solos.
     b.comprobados - a.comprobados ||
-    // 3. Minimizar la cantidad y la severidad de las reparaciones.
+    // 4. Minimizar la cantidad y la severidad de las reparaciones.
     a.reparaciones - b.reparaciones ||
     a.severidadMaxima - b.severidadMaxima ||
-    // 4. Preferir las lecturas literales.
+    // 5. Preferir las lecturas literales.
     b.literales - a.literales ||
-    // 5. Respetar un formato coherente por columna.
+    // 6. Respetar un formato coherente por columna.
     a.incoherencia - b.incoherencia ||
-    // 6. Cerrar contra el pie.
+    // 7. Cerrar contra el pie.
     Number(b.cierra) - Number(a.cierra) ||
     // 7. Confianza del OCR y geometría, que es lo que quedó en el puntaje.
     b.puntaje - a.puntaje
