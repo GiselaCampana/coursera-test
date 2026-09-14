@@ -75,6 +75,11 @@ export interface RasgosDeCandidata {
   puntaje: number;
 }
 
+/** ¿Se comprueba solo? Al menos un control hecho y ninguno fallado. */
+function seComprueba(renglon: RenglonCandidato): boolean {
+  return renglon.controles.length > 0 && renglon.controles.every((c) => c.paso);
+}
+
 /**
  * ¿Es éste un renglón que estaba impreso en el papel?
  *
@@ -98,12 +103,26 @@ function esReal(renglon: RenglonCandidato): boolean {
     renglon.importe !== null ||
     renglon.precioUnitario !== null ||
     renglon.precioConDescuento !== null;
-  return nombrado && conMonto;
-}
 
-/** ¿Se comprueba solo? Al menos un control hecho y ninguno fallado. */
-function seComprueba(renglon: RenglonCandidato): boolean {
-  return renglon.controles.length > 0 && renglon.controles.every((c) => c.paso);
+  /*
+   * Y la plata tiene que ser plata que el papel sostenga.
+   *
+   * Un renglón cuya peor suposición es un salto de escala —un valor que su
+   * columna dice que no puede estar ahí— no demuestra nada por tener un número:
+   * ese número es la lectura mala, no la evidencia. Cuenta igual si **se
+   * comprueba solo**, porque cantidad × precio = importe no depende de ninguna
+   * columna y es mejor evidencia que cualquier sospecha de escala.
+   *
+   * Sin esta condición, el primer nivel del orden se podía comprar con basura, y
+   * se midió así: seis fragmentos de ocho nueves tirados encima de la columna de
+   * precios le daban importe a una fila que no lo tenía, subían el conteo de
+   * renglones reales y ganaban el primer nivel, que no lo compensa nada. El
+   * nivel existe para no **perder** un artículo impreso, no para premiar al que
+   * le inventa un número a una fila incompleta.
+   */
+  const plataCreible = renglon.severidad < 3 || seComprueba(renglon);
+
+  return nombrado && conMonto && plataCreible;
 }
 
 export function rasgosDe(candidata: CandidataDeTabla): RasgosDeCandidata {

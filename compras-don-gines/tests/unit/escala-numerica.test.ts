@@ -20,6 +20,7 @@ import {
   Y_TITULOS,
   evidencia,
   fila,
+  palabra,
 } from '@/../tests/fixtures/evidencia-sintetica';
 import type { Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
 
@@ -540,3 +541,163 @@ function candidataQueCierra(): CandidataDeTabla {
     reparaciones: 0,
   };
 }
+
+// ---------------------------------------------------------------------------
+// 9. Cuánta evidencia hace falta para dar una escala por resuelta
+// ---------------------------------------------------------------------------
+
+describe('una ancla puede proponer un formato, no declararlo resuelto', () => {
+  it('una ancla con el resto de la columna compatible decide', () => {
+    /*
+     * «Puede fijar» quiere decir esto: un solo valor muestra sus separadores y
+     * ninguna otra celda lo desmiente. Los enteros pelados de seis cifras no
+     * votan —se leen igual de bien con coma o sin ella— pero tampoco contradicen
+     * nada, así que la única evidencia impresa que hay decide.
+     */
+    const formato = formatoDe(['186249', '186249', '1.862,49', '186249']);
+    expect(formato.escala.anclas).toHaveLength(1);
+    expect(formato.escala.contradicen).toBe(0);
+    expect(formato.indecidible).toBe(false);
+    expect(preferida('186249', formato).valor.toString()).toBe('1862.49');
+  });
+
+  it('una ancla contra muchas celdas que no caben en su escala queda indecidible', () => {
+    /*
+     * El caso que obligó a separar «callar» de «contradecir». Una sola celda con
+     * un punto propone dos decimales; siete celdas de una y dos cifras dicen que
+     * no, porque leerlas así les inventaría un cero adelante que el papel no
+     * imprime. Ese punto puede ser perfectamente un punto que el OCR puso de
+     * más, y una columna entera no se decide con eso.
+     *
+     * No se elige la que cierre ni la que tenga más celdas: se conservan las dos
+     * y se pide **una** decisión de columna.
+     */
+    const formato = formatoDe(['6', '4', '10', '9', '3', '22', '4.75']);
+    expect(formato.escala.anclas).toHaveLength(1);
+    expect(formato.escala.contradicen).toBeGreaterThanOrEqual(formato.escala.anclas.length);
+    expect(formato.indecidible).toBe(true);
+    expect(formato.segunda).not.toBeNull();
+  });
+
+  it('varias anclas concordantes deciden aunque alguna celda esté dañada', () => {
+    /*
+     * Y el otro lado: pedir cero contradicciones sería demasiado. Una sola celda
+     * que el OCR rompió mandaría a revisión una columna que el papel muestra
+     * bien escrita muchas veces. Lo que se compara es el balance.
+     */
+    const formato = formatoDe([
+      '6.723,279',
+      '4.040,189',
+      '8.612,184',
+      '12.508,959',
+      '3.838,180',
+      '7',
+    ]);
+    expect(formato.escala.anclas.length).toBeGreaterThan(formato.escala.contradicen);
+    expect(formato.indecidible).toBe(false);
+    expect(formato.escala.decimales).toBe(3);
+  });
+
+  it('la misma celda leída por veinte pasadas es una sola ancla', () => {
+    /*
+     * La evidencia de escala son **lugares del papel**, no repeticiones de una
+     * lectura. Si veinte pasadas del OCR miran la misma celda y las veinte leen
+     * «4.75», eso no es un formato sostenido veinte veces: es un valor visto
+     * veinte veces, y sigue siendo uno solo contra las celdas que lo desmienten.
+     *
+     * Se prueba de punta a punta, porque es la reconstrucción la que tiene que
+     * resolver las veinte lecturas a una celda por renglón: comprobarlo sobre
+     * una lista de textos ya armada no probaría nada.
+     */
+    const veintePasadas = Array.from({ length: 20 }, (_, p) =>
+      palabra('4.75', 0.52, Y_TITULOS + SALTO, { pasada: `pasada-${p}:directo` }),
+    );
+    const informe = interpretarReconstruccion(
+      evidencia([
+        ...fila(Y_TITULOS, TITULOS),
+        ...fila(Y_TITULOS + SALTO, [
+          ['70', 0.05],
+          ['ARTICULO', 0.20],
+          ['5.700,00', 0.65],
+          ['22.800,00', 0.82],
+        ]),
+        ...veintePasadas,
+        ...fila(Y_TITULOS + SALTO * 2, [
+          ['71', 0.05],
+          ['OTRO', 0.20],
+          ['6', 0.52],
+          ['9.600,00', 0.65],
+          ['19.200,00', 0.82],
+        ]),
+        ...fila(Y_TITULOS + SALTO * 3, [
+          ['72', 0.05],
+          ['TERCERO', 0.20],
+          ['3', 0.52],
+          ['9.800,00', 0.65],
+          ['29.400,00', 0.82],
+        ]),
+      ]),
+      { cuitDelReceptor: CUIT_DEL_RECEPTOR },
+    );
+
+    const cantidad = informe.escalas.find((e) => e.columna === 'cantidad');
+    expect(cantidad, 'no se reconoció la columna de cantidad').toBeDefined();
+    expect(cantidad!.anclas.length).toBeLessThanOrEqual(1);
+  });
+
+  it('confirmar el formato relee la columna sin tocar ningún texto', () => {
+    /*
+     * Lo que una persona contesta es **la columna**, y contestarla relee sus
+     * celdas mutiladas: para eso sirve. Las dos garantías que lo hacen auditable
+     * son que ninguna celda cambia de texto —no se vuelve a leer la foto— y que
+     * todo renglón que cambió de valor vuelve a pasar sus propios controles.
+     */
+    /*
+     * Las cantidades salieron del OCR sin su coma; los importes, enteros. Con
+     * los importes impresos, la escala verdadera de la columna de cantidades es
+     * la de dos decimales —15,00 × 5.700,00 da 85.500,00— pero eso lo dice la
+     * aritmética, y la aritmética confirma una escala, no la crea: sin una sola
+     * ancla impresa la columna queda indecidible hasta que alguien conteste.
+     */
+    const sinSeparadores: [string, string, string][] = [
+      ['1500', '5.700,00', '85.500,00'],
+      ['2300', '9.600,00', '220.800,00'],
+      ['3500', '9.800,00', '343.000,00'],
+    ];
+    const antes = interpretarReconstruccion(evidencia(tablaConNumeros(sinSeparadores)), {
+      cuitDelReceptor: CUIT_DEL_RECEPTOR,
+    });
+    // Sin una sola ancla en la columna de cantidades, no se elige escala.
+    expect(antes.escalas.find((e) => e.columna === 'cantidad')?.indecidible).toBe(true);
+
+    const despues = interpretarReconstruccion(evidencia(tablaConNumeros(sinSeparadores)), {
+      cuitDelReceptor: CUIT_DEL_RECEPTOR,
+      confirmaciones: [{ renglon: 1, campo: 'cantidad', texto: '15,00' }],
+    });
+
+    // Ningún texto de ninguna otra celda cambió.
+    antes.tabla.renglones.forEach((fila, i) => {
+      if (i === 0) return;
+      expect(fila.celdas.map((c) => c?.texto ?? ''), `renglón ${i + 1}`).toEqual(
+        despues.tabla.renglones[i].celdas.map((c) => c?.texto ?? ''),
+      );
+    });
+
+    // Y con el ancla puesta, la columna ya no está indecidible.
+    expect(despues.escalas.find((e) => e.columna === 'cantidad')?.indecidible).toBe(false);
+
+    // Todo renglón que cambió de valor vuelve a pasar sus controles.
+    const valores = (informe: typeof antes) =>
+      (informe.veredicto.ganadora?.renglones ?? []).map(
+        (r) => `${r.cantidad?.toString() ?? ''}~${r.importe?.toString() ?? ''}`,
+      );
+    const v0 = valores(antes);
+    const v1 = valores(despues);
+    v1.forEach((ahora, i) => {
+      if (ahora === v0[i]) return;
+      const r = despues.veredicto.ganadora!.renglones[i];
+      expect(r.controles.length, `renglón ${i + 1} cambió sin control`).toBeGreaterThan(0);
+      expect(r.controles.every((c) => c.paso), `renglón ${i + 1} cambió sin cerrar`).toBe(true);
+    });
+  });
+});

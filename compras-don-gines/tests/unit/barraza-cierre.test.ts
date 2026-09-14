@@ -387,19 +387,33 @@ describe('las columnas se resuelven juntas, no una por una', () => {
     ).toBe(true);
   });
 
-  it('y donde el haz todavía decide, gana el reparto que hace cerrar renglones', () => {
+  it('el haz de repartos compite en toda factura con columnas dudosas', () => {
     /*
-     * La otra mitad de la misma garantía, sobre el comprobante donde el haz
-     * sigue siendo decisivo: con la banda de precios releída, la candidata que
-     * gana en Errecalde usa repartos que **no** son los más baratos de su
-     * columna, y gana porque hace cerrar renglones que si no no cerraban.
+     * La otra mitad de la misma garantía: el haz no es una particularidad de un
+     * comprobante. Donde una columna admite más de un reparto, las variantes se
+     * generan y compiten.
+     *
+     * Lo que esta prueba **ya no** afirma es cuál gana en esta factura. Ganaba
+     * un reparto, y dejó de ganar sin que el haz cambie: al decidirse bien la
+     * escala de cada columna, la reconstrucción por cercanía pasó a comprobar
+     * más renglones que cualquiera de los repartos. Que gane el que verifica más
+     * es exactamente lo que tiene que pasar; atar la prueba al origen del
+     * ganador sería atarla a que la lectura simple siga siendo peor.
      */
+    const candidatas = candidatasDeTabla(leer('errecalde'));
+    expect(candidatas.some((c) => c.origen.includes('repartos'))).toBe(true);
+
     const errecalde = interpretarReconstruccion(leer('errecalde'), {
       cuitDelReceptor: CUIT_DEL_RECEPTOR,
       relectura: relecturaDe('errecalde'),
     });
-    expect(errecalde.reconstruccionElegida).toContain('repartos');
-    expect(errecalde.reconstruccionElegida).toContain('renglón/es cierran');
+
+    // Y la elegida comprueba la mayoría de sus renglones contra su propia cuenta.
+    const renglones = errecalde.veredicto.ganadora!.renglones;
+    const cierran = renglones.filter(
+      (r) => r.controles.length > 0 && r.controles.every((c) => c.paso),
+    ).length;
+    expect(cierran * 2).toBeGreaterThan(renglones.length);
   });
 
   it('9.453,76 termina en el segundo renglón y lo deja cerrado', () => {

@@ -55,6 +55,16 @@ export interface EscalaDeColumna {
    * las comas de una columna.
    */
   anclas: string[];
+  /**
+   * Cuántas celdas de la columna **no pueden** estar escritas en esta escala.
+   *
+   * Es el contrapeso de las anclas y sin él la evidencia estaba contada a medias:
+   * se sumaba lo que sostiene una hipótesis y no lo que la desmiente. Una celda
+   * con un separador que la escala no explica, o una de una o dos cifras bajo una
+   * escala de dos decimales —que obligaría a inventarle un cero adelante— vota en
+   * contra. Un entero pelado de seis cifras no vota ni a favor ni en contra.
+   */
+  contradicen: number;
   /** Cuántas reparaciones de separador cuesta leer la columna entera así. */
   reparaciones: number;
   /** Cuántos separadores impresos conserva. */
@@ -302,8 +312,26 @@ function valorLiteral(texto: string, separador: SeparadorDecimal): Decimal | nul
 interface CostoDeCelda {
   /** 0 si está impresa así, 1 si hay que poner un separador, 2 si hay que moverlo. */
   reparaciones: number;
-  /** La sostiene con sus separadores impresos. */
+  /** La sostiene con sus separadores impresos: vota **a favor**. */
   ancla: boolean;
+  /**
+   * Vota **en contra**: esta celda no puede estar escrita en esta escala.
+   *
+   * Es la distinción que faltaba, y sin ella una columna entera se decidía mal.
+   * Había dos clases de celda metidas en la misma bolsa de «reparaciones»:
+   *
+   *  - la que **calla**: un entero pelado de seis cifras es compatible con leerse
+   *    con coma y dos decimales o sin ninguno, y no es evidencia de nada. Cuesta
+   *    una reparación y no vota;
+   *  - la que **contradice**: una celda con un separador impreso que la escala no
+   *    explica, o —y éste es el caso que se perdía— una de una o dos cifras bajo
+   *    una escala de dos decimales, que obligaría a leer «6» como 0,06 con un
+   *    cero adelante que el papel no imprime.
+   *
+   * Contarlas juntas dejaba que una sola celda puntuada fijara una columna de
+   * veintitrés contra la que siete celdas votaban en contra.
+   */
+  contradice: boolean;
   separadoresConservados: number;
 }
 
@@ -313,6 +341,15 @@ function costoBajoLaEscala(
   escala: { separador: SeparadorDecimal; decimales: number },
 ): CostoDeCelda {
   const separadores = (texto.match(/[.,]/g) ?? []).length;
+  const digitos = texto.replace(/[^\d]/g, '').length;
+
+  /*
+   * Una celda con tantos dígitos como decimales pide la escala —o menos— no cabe
+   * en ella: leerla así le inventa la parte entera. Es universal, no comercial:
+   * no dice nada sobre qué valores son razonables, dice que ese número no está
+   * escrito de esa manera.
+   */
+  const noEntraEnLaEscala = escala.decimales > 0 && separadores === 0 && digitos <= escala.decimales;
 
   // Escrita exactamente como dice la escala: no hay nada que reparar.
   if (forma.si && forma.separador === escala.separador && forma.decimales === escala.decimales) {
@@ -321,17 +358,23 @@ function costoBajoLaEscala(
       // Sólo ancla lo que tiene un separador decimal impreso. Un entero pelado
       // es compatible con cualquier escala, así que no es evidencia de ninguna.
       ancla: escala.separador !== 'ninguno' && separadores > 0,
+      contradice: false,
       separadoresConservados: separadores,
     };
   }
 
   // Un entero pelado: alcanza con suponer un separador que el OCR no escribió.
   if (forma.si && forma.separador === 'ninguno' && forma.decimales === 0 && separadores === 0) {
-    return { reparaciones: 1, ancla: false, separadoresConservados: 0 };
+    return {
+      reparaciones: 1,
+      ancla: false,
+      contradice: noEntraEnLaEscala,
+      separadoresConservados: 0,
+    };
   }
 
   // Cualquier otra cosa: hay separadores impresos que esta escala contradice.
-  return { reparaciones: 2, ancla: false, separadoresConservados: 0 };
+  return { reparaciones: 2, ancla: false, contradice: true, separadoresConservados: 0 };
 }
 
 /** Cuántos dígitos seguidos trae la celda más larga, sin separadores. */
@@ -383,32 +426,54 @@ export function escalasDeColumna(celdas: string[]): EscalaDeColumna[] {
   const evaluadas: EscalaDeColumna[] = [...candidatas.values()].map((candidata) => {
     let reparaciones = 0;
     let conservados = 0;
+    let contradicen = 0;
     const anclas: string[] = [];
     textos.forEach((texto, i) => {
       const costo = costoBajoLaEscala(texto, formas[i], candidata);
       reparaciones += costo.reparaciones;
       conservados += costo.separadoresConservados;
+      if (costo.contradice) contradicen += 1;
+      /*
+       * Cada ancla es **una celda física**, contada una sola vez.
+       *
+       * Va por posición y no por texto a propósito, en los dos sentidos. Dos
+       * celdas distintas que dicen lo mismo son dos anclas —una columna de
+       * porcentajes donde nueve renglones imprimen «16,00» tiene nueve valores
+       * sosteniendo su formato, no uno—; y una misma celda leída por siete
+       * pasadas del OCR llega acá como un solo texto, porque la reconstrucción
+       * ya la resolvió a una celda por renglón. La evidencia de escala son
+       * lugares del papel, no repeticiones de una lectura.
+       */
       if (costo.ancla) anclas.push(texto);
     });
     return {
       separador: candidata.separador,
       decimales: candidata.decimales,
       anclas,
+      contradicen,
       reparaciones,
       separadoresConservados: conservados,
       porQue:
         anclas.length > 0
           ? `${anclas.length} de ${textos.length} valores la muestran impresa ` +
             `(${anclas.slice(0, 3).join(', ')}${anclas.length > 3 ? '…' : ''}), ` +
-            `y leer la columna entera así cuesta ${reparaciones} reparación/es.`
-          : `Ningún valor la muestra impresa; leer la columna entera así cuesta ` +
-            `${reparaciones} reparación/es y conserva ${conservados} separador/es.`,
+            `${contradicen} la contradice/n, y leer la columna entera así cuesta ` +
+            `${reparaciones} reparación/es.`
+          : `Ningún valor la muestra impresa; ${contradicen} la contradice/n, leer la ` +
+            `columna entera así cuesta ${reparaciones} reparación/es y conserva ` +
+            `${conservados} separador/es.`,
     };
   });
 
+  /*
+   * El orden: primero cuántas celdas la muestran impresa, y **enseguida cuántas
+   * la desmienten**. Las dos son evidencia literal y van juntas, antes que
+   * cualquier medida de comodidad.
+   */
   return evaluadas.sort(
     (a, b) =>
       b.anclas.length - a.anclas.length ||
+      a.contradicen - b.contradicen ||
       a.reparaciones - b.reparaciones ||
       b.separadoresConservados - a.separadoresConservados ||
       a.decimales - b.decimales,
@@ -448,16 +513,44 @@ export function formatoDeColumna(celdas: string[]): FormatoDeColumna | null {
     : Infinity;
 
   /*
-   * Indecidible: ninguna escala tiene anclas y hay más de una en pie sobre
-   * valores lo bastante largos como para que la diferencia importe.
+   * Cuándo la escala queda **resuelta**, y cuándo hay que preguntar.
    *
-   * Lo último no es un detalle: una columna de piezas que dice «1», «2», «3» no
-   * tiene anclas tampoco, y no hay ninguna duda que resolver. La ambigüedad
-   * aparece cuando un valor de cuatro o más cifras puede ser él mismo o él
-   * mismo dividido por cien.
+   * «Una minoría de literales bien puntuados puede fijar el formato» no es lo
+   * mismo que «una ancla siempre manda», y la diferencia se midió: en una de las
+   * facturas del banco, una única celda con un punto decidía una columna de
+   * veintitrés contra la que siete celdas de una y dos cifras votaban en contra
+   * —bajo esa escala habría que leerlas con un cero adelante que el papel no
+   * imprime—. La columna quedaba «resuelta» por un solo valor que puede
+   * perfectamente ser un punto que el OCR puso de más.
+   *
+   * Así que hacen falta las dos cosas y ninguna alcanza sola:
+   *
+   *  - **algo que la muestre impresa**: sin una sola ancla no hay evidencia
+   *    literal de escala, y dos hipótesis sobre valores largos siguen en pie.
+   *    Una columna de piezas que dice «1», «2», «3» tampoco tiene anclas y no
+   *    tiene ninguna duda que resolver: la ambigüedad aparece recién cuando un
+   *    valor de cuatro o más cifras puede ser él mismo o él mismo dividido por
+   *    cien;
+   *  - **más a favor que en contra**: una celda que no cabe en la escala vale
+   *    tanto como una que la muestra impresa, así que se comparan. No es un
+   *    umbral, es el balance de la misma evidencia contada de los dos lados:
+   *    veintidós valores puntuados contra dos celdas dañadas deciden, y una
+   *    ancla contra siete celdas que no caben, no. Pedir **cero** en contra
+   *    sería demasiado: una sola celda que el OCR rompió mandaría a revisión una
+   *    columna que el papel muestra veintidós veces.
+   *
+   * Y cuando no se resuelve no se elige la que cierre: se conservan las dos, se
+   * informa el conflicto y se pide **una sola decisión de columna**.
    */
-  const indecidible =
+  const sinAnclasYConDosEscalas =
     escala.anclas.length === 0 && segunda !== null && digitosMasLargos(textos) >= 4;
+
+  // Siempre con otra hipótesis en pie: un conflicto sin segunda opción no es una
+  // pregunta que alguien pueda contestar, es la única lectura que hay.
+  const anclaContradicha =
+    escala.anclas.length > 0 && escala.contradicen >= escala.anclas.length && segunda !== null;
+
+  const indecidible = sinAnclasYConDosEscalas || anclaContradicha;
 
   const valores = textos
     .map((texto) => {

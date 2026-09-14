@@ -189,8 +189,25 @@ describe('la evidencia de la relectura entra al mismo motor', () => {
 
   it('recupera celdas sin alterar los renglones que ya estaban comprobados', () => {
     const informe = ERRECALDE_RELEIDO.relectura!;
-    expect(informe.gano).toBe(true);
-    expect(informe.comprobadosDespues).toBeGreaterThan(informe.comprobadosAntes);
+    expect(informe.celdasPedidas).toBeGreaterThan(0);
+
+    /*
+     * La relectura **compite**; no gana por ser la segunda.
+     *
+     * Durante un tiempo ganaba siempre en esta factura, y la prueba lo daba por
+     * sentado. Dejó de ganar, y no porque los fragmentos nuevos empeoraran: la
+     * lectura de la página entera mejoró tanto al decidirse bien las escalas de
+     * las columnas que ahora verifica más renglones que la releída. Exigir que
+     * la relectura gane sería exigir que la primera pasada siga siendo mala.
+     *
+     * Lo que tiene que valer siempre es esto: se elige la que **verifica más**,
+     * y la elegida nunca verifica menos de lo que verificaba la original.
+     */
+    const elegidaVerifica = informe.gano
+      ? informe.comprobadosDespues
+      : informe.comprobadosAntes;
+    expect(elegidaVerifica).toBeGreaterThanOrEqual(informe.comprobadosAntes);
+    expect(elegidaVerifica).toBeGreaterThanOrEqual(informe.comprobadosDespues);
 
     /*
      * Los bloqueos **pueden subir**, y que suban no es una regresión: son los
@@ -387,14 +404,20 @@ describe('cuánto cuesta y cuánto recupera', () => {
     expect(informe.celdasPedidas).toBeGreaterThan(0);
   });
 
-  it('con la relectura la suma del detalle llega al neto impreso', () => {
+  it('pedir la relectura nunca aleja la suma del neto impreso', () => {
     /*
-     * La medida de para qué sirve todo esto. Sin relectura la suma queda a unos
-     * diecinueve puntos del neto, porque varios precios y varias cantidades
-     * salieron mutilados de la foto de la página entera. Con cuatro bandas
-     * releídas —las de las cuatro columnas que la igualdad del renglón
-     * necesita— la distancia baja a un punto y medio, y baja con **evidencia
-     * nueva**, no con una cuenta que complete el faltante.
+     * Lo que la relectura tiene que garantizar es que **no puede empeorar**.
+     *
+     * Su aporte cambia con el motor: hubo un momento en que era lo único que
+     * bajaba la distancia al neto de un diecinueve por ciento a un punto y
+     * medio, porque la primera pasada dejaba mutilados casi todos los precios y
+     * casi todas las cantidades. Decidir bien la escala de cada columna recuperó
+     * eso mismo sin releer nada, así que hoy la relectura pierde en esta factura
+     * y el resultado es el de no haber releído.
+     *
+     * Atar la prueba a aquella mejora sería atarla a que la primera pasada siga
+     * fallando. Lo que se exige es lo que no puede dejar de valer: pedirla nunca
+     * deja el comprobante más lejos del papel que no pedirla.
      */
     const suma = ERRECALDE_RELEIDO.veredicto.ganadora!.sumaDeRenglones;
     const neto = ERRECALDE_RELEIDO.pie.netTotal!;
@@ -403,8 +426,7 @@ describe('cuánto cuesta y cuánto recupera', () => {
     const distancia = suma.minus(neto).abs().div(neto).toNumber();
     const distanciaAntes = antes.minus(neto).abs().div(neto).toNumber();
 
-    // Se acerca, y mucho: de un 19 % a un 1,5 %.
-    expect(distancia).toBeLessThan(distanciaAntes / 5);
+    expect(distancia).toBeLessThanOrEqual(distanciaAntes);
     expect(distancia).toBeLessThan(0.02);
   });
 });

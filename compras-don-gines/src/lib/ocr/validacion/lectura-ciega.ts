@@ -216,6 +216,7 @@ export interface ActaDePrimeraLectura {
     separador: string;
     decimales: number;
     anclas: string[];
+    contradicen: number;
     reparaciones: number;
     segunda: { separador: string; decimales: number; reparaciones: number } | null;
     margen: number;

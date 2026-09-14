@@ -90,6 +90,8 @@ export interface EscalaInformada {
   decimales: number;
   /** Los valores que la muestran impresa. Sin éstos no hay evidencia de escala. */
   anclas: string[];
+  /** Cuántas celdas de la columna no pueden estar escritas en esta escala. */
+  contradicen: number;
   reparaciones: number;
   segunda: { separador: string; decimales: number; reparaciones: number } | null;
   margen: number;
@@ -116,6 +118,7 @@ export function escalasDeLaTabla(tabla: TablaReconstruida): EscalaInformada[] {
       separador: formato.escala.separador,
       decimales: formato.escala.decimales,
       anclas: formato.escala.anclas,
+      contradicen: formato.escala.contradicen,
       reparaciones: formato.escala.reparaciones,
       segunda: formato.segunda
         ? {
@@ -278,7 +281,47 @@ export function interpretarReconstruccion(
    */
   const a = primero.veredicto.ganadora;
   const b = segundo.veredicto.ganadora;
-  const gano = a !== null && b !== null ? compararCandidatas(b, a) < 0 : b !== null;
+
+  /*
+   * Y además **no puede verificar menos renglones que antes**.
+   *
+   * El orden lexicográfico compara dos interpretaciones de la misma evidencia, y
+   * acá la evidencia no es la misma: la segunda tiene fragmentos que la primera
+   * no tenía. Eso rompe el supuesto del primer nivel. «Conservar todos los
+   * renglones reales» quiere decir no perder un artículo impreso; con fragmentos
+   * nuevos pasa a premiar al que **le puso un número a una fila que no lo
+   * tenía**, y un número inventado sirve igual que uno bueno para eso.
+   *
+   * Se midió con basura: seis fragmentos de ocho nueves tirados encima de la
+   * columna de precios le daban importe a una fila que estaba sin él, subían el
+   * primer nivel y ganaban, aunque tres renglones dejaran de cumplir su propia
+   * cuenta.
+   *
+   * La aritmética del renglón es el único control que no depende de nada más, y
+   * unos fragmentos que **agregan** información no pueden hacer que se verifique
+   * menos que antes. Si eso pasa, lo que trajeron no es información.
+   */
+  const noVerificaMenos = comprobados(segundo) >= comprobados(primero);
+
+  /*
+   * Y tampoco puede **empeorar la peor suposición** del comprobante.
+   *
+   * Unos fragmentos que vienen a recuperar valores impresos no pueden dejar la
+   * lectura apoyada en una suposición más grave que la que había. Cuando pasa,
+   * lo que trajeron no es un valor que faltaba: es ruido que corrió las cosas de
+   * lugar. La basura de la prueba no gana por ponerle plata a una fila —no le
+   * pone ninguna— sino por mover el reparto hasta que la continuación de una
+   * descripción queda con nombre propio y cuenta como artículo; lo que la
+   * delata es que, con ella, un valor que estaba en la escala de su columna pasa
+   * a estar cien veces afuera.
+   */
+  const peor = (informe: InformeReconstruido) =>
+    (informe.veredicto.ganadora?.renglones ?? []).reduce((n, r) => Math.max(n, r.severidad), 0);
+  const noSuponePeor = peor(segundo) <= peor(primero);
+
+  const mejora = noVerificaMenos && noSuponePeor;
+  const gano =
+    a !== null && b !== null ? compararCandidatas(b, a) < 0 && mejora : b !== null && mejora;
 
   const informe: InformeDeRelectura = {
     celdasPedidas: pedidas.length,
@@ -969,10 +1012,21 @@ export function queFaltaResolver(
       alternativas: [],
       elegido: null,
       motivo:
-        `La columna «${escala.columna}» no tiene ningún valor con separadores impresos, ` +
-        `así que se puede leer ${como(escala)} o ${como(escala.segunda)} y las dos son ` +
-        `coherentes con toda la columna. Hay que mirar el papel: el total no sirve para ` +
-        `decidirlo porque cierra con las dos.`,
+        escala.anclas.length === 0
+          ? `La columna «${escala.columna}» no tiene ningún valor con separadores impresos, ` +
+            `así que se puede leer ${como(escala)} o ${como(escala.segunda)} y las dos son ` +
+            `coherentes con toda la columna. Hay que mirar el papel: el total no sirve para ` +
+            `decidirlo porque cierra con las dos.`
+          : /*
+             * El otro conflicto: hay evidencia impresa, pero no toda apunta al
+             * mismo lado. Una ancla puede proponer un formato y no declararlo
+             * resuelto contra las celdas que no caben en él.
+             */
+            `La columna «${escala.columna}» tiene ${escala.anclas.length} valor/es que la ` +
+            `muestran ${como(escala)} (${escala.anclas.slice(0, 3).join(', ')}) y ` +
+            `${escala.contradicen} celda/s que no pueden estar escritas así. La otra lectura ` +
+            `posible es ${como(escala.segunda)}. Es una sola decisión de columna: cuál de las ` +
+            `dos es, y todas sus celdas se releen con ésa.`,
     });
   }
 

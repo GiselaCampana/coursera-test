@@ -13,6 +13,14 @@ import {
   soloBloqueantes,
   soloRaices,
 } from '@/lib/ocr/motor/pendientes';
+import {
+  SALTO,
+  TITULOS,
+  Y_TITULOS,
+  evidencia,
+  fila,
+} from '@/../tests/fixtures/evidencia-sintetica';
+import type { Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
 
 /**
  * Los bloqueos como **acciones humanas**, no como celdas rotas.
@@ -69,8 +77,17 @@ describe('un bloqueo sabe de qué otro depende', () => {
     const bloqueantes = soloBloqueantes(ERRECALDE.pendientes);
     const raices = soloRaices(ERRECALDE.pendientes);
 
-    // Hay muchas más celdas frenadas que cosas que hacer.
-    expect(bloqueantes.length).toBeGreaterThan(raices.length * 3);
+    /*
+     * Hay bastantes más celdas frenadas que cosas que hacer, que es todo el
+     * punto de separar raíces de consecuencias.
+     *
+     * La proporción bajó y bajó por buenas razones, así que la prueba mide lo
+     * que la garantía dice y no el número de aquel día: el comprobante se lee
+     * mejor —hay menos cuentas rotas— y una pregunta de columna reemplazó a
+     * cuatro de celda. Lo que no puede pasar es que se cuenten las consecuencias
+     * como trabajo.
+     */
+    expect(bloqueantes.length).toBeGreaterThan(raices.length);
 
     // El total que se informa son las raíces, y las consecuencias van aparte.
     expect(ERRECALDE.resumen.bloqueosUnicos).toBe(raices.length);
@@ -137,24 +154,60 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
    * OCR. Es lo mismo que la pantalla le va a mostrar a la persona como
    * sugerencia para que lo confirme contra el comprobante.
    */
-  function cantidadQueImplica(informe: InformeReconstruido, renglon: number): string | null {
-    const candidato = informe.veredicto.ganadora?.renglones[renglon - 1];
-    const precio = candidato?.precioConDescuento ?? candidato?.precioUnitario;
-    if (!candidato?.importe || !precio || precio.lte(0)) return null;
-    return candidato.importe.div(precio).toDecimalPlaces(3).toString().replace('.', ',');
-  }
+  /*
+   * El caso se arma a mano, y ése es el cambio.
+   *
+   * Antes se buscaba una raíz de cantidad en una factura del banco. Dejó de
+   * haber: su columna de cantidades pasó a preguntarse **una sola vez, como
+   * columna**, y las celdas que quedan pedidas ya no se destraban de a una. Eso
+   * es una mejora del motor, pero deja la garantía sin sujeto, y una garantía
+   * que depende de que cierta factura siga fallando cierto día no es una
+   * garantía.
+   *
+   * Así que el comprobante es sintético y mínimo: tres artículos, y al del medio
+   * el OCR no le leyó el importe. Falta un dato obligatorio, se pide, y al
+   * confirmarlo el renglón cierra su propia cuenta. Sin nombres de proveedor y
+   * sin valores de ningún papel.
+   */
+  const SIN_IMPORTE: Fragmento[] = [
+    ...fila(Y_TITULOS, TITULOS),
+    ...fila(Y_TITULOS + SALTO, [
+      ['70', 0.05],
+      ['ARTICULO A', 0.20],
+      ['4', 0.52],
+      ['5.700,00', 0.65],
+      ['22.800,00', 0.82],
+    ]),
+    // Al segundo renglón le falta el importe: es lo único que se le pide.
+    ...fila(Y_TITULOS + SALTO * 2, [
+      ['71', 0.05],
+      ['ARTICULO B', 0.20],
+      ['2', 0.52],
+      ['9.600,00', 0.65],
+    ]),
+    ...fila(Y_TITULOS + SALTO * 3, [
+      ['72', 0.05],
+      ['ARTICULO C', 0.20],
+      ['3', 0.52],
+      ['9.800,00', 0.65],
+      ['29.400,00', 0.82],
+    ]),
+  ];
 
-  /** La primera raíz de cantidad cuya confirmación cambia algo. */
+  const INCOMPLETO = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
+    cuitDelReceptor: CUIT_DEL_RECEPTOR,
+  });
+
+  /** La primera raíz **de celda** cuya confirmación destraba algo. */
   function primeraRaizDeCantidad() {
-    for (const raiz of soloRaices(ERRECALDE.pendientes)) {
-      if (raiz.renglon === null || raiz.campo === null) continue;
-      if (!['cantidad', 'kilos'].includes(raiz.campo)) continue;
-      const valor = cantidadQueImplica(ERRECALDE, raiz.renglon);
-      if (!valor) continue;
-      const despues = interpretar('errecalde', [
-        { renglon: raiz.renglon, campo: raiz.campo as never, texto: valor },
-      ]);
-      if (despues.resumen.bloqueosUnicos < ERRECALDE.resumen.bloqueosUnicos) {
+    for (const raiz of soloRaices(INCOMPLETO.pendientes)) {
+      if (raiz.renglon === null) continue;
+      const valor = '19.200,00';
+      const despues = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
+        cuitDelReceptor: CUIT_DEL_RECEPTOR,
+        confirmaciones: [{ renglon: raiz.renglon, campo: 'importe', texto: valor }],
+      });
+      if (despues.resumen.bloqueosUnicos < INCOMPLETO.resumen.bloqueosUnicos) {
         return { raiz, valor, despues };
       }
     }
@@ -167,9 +220,9 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     const { raiz, despues } = caso!;
 
     // Una acción humana menos, y un renglón más que se comprueba solo.
-    expect(despues.resumen.bloqueosUnicos).toBeLessThan(ERRECALDE.resumen.bloqueosUnicos);
+    expect(despues.resumen.bloqueosUnicos).toBeLessThan(INCOMPLETO.resumen.bloqueosUnicos);
 
-    const cierranAntes = (ERRECALDE.veredicto.ganadora?.renglones ?? []).filter(
+    const cierranAntes = (INCOMPLETO.veredicto.ganadora?.renglones ?? []).filter(
       (r) => r.controles.length > 0 && r.controles.every((c) => c.paso),
     ).length;
     const cierranDespues = (despues.veredicto.ganadora?.renglones ?? []).filter(
@@ -203,10 +256,10 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     const caso = primeraRaizDeCantidad();
     const { raiz, despues } = caso!;
 
-    expect(despues.tabla.renglones).toHaveLength(ERRECALDE.tabla.renglones.length);
+    expect(despues.tabla.renglones).toHaveLength(INCOMPLETO.tabla.renglones.length);
 
     // Ni un solo texto reconstruido distinto fuera de la celda confirmada.
-    ERRECALDE.tabla.renglones.forEach((fila, i) => {
+    INCOMPLETO.tabla.renglones.forEach((fila, i) => {
       if (i + 1 === raiz.renglon) return;
       const ahora = despues.tabla.renglones[i];
       expect(fila.celdas.map((c) => c?.texto ?? ''), `renglón ${i + 1}`).toEqual(
@@ -215,47 +268,34 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     });
   });
 
-  it('los renglones que cambian de valor lo hacen para cerrar, no para reacomodarse', () => {
+  it('los renglones que no se confirmaron no cambian de valor', () => {
     /*
-     * El otro lado de lo mismo: que la escala de una columna pueda cambiar no es
-     * permiso para que los números se muevan a cualquier lado. Todo renglón que
-     * cambió de valor tiene que quedar **mejor** —comprobándose contra su propia
-     * aritmética— porque si no, confirmar una celda sería empeorar la factura en
-     * otro lado y el informe no tendría cómo decirlo.
+     * Confirmar un dato que faltaba completa **ese** renglón y nada más. Los
+     * otros no tienen por qué moverse, y si se movieran nadie podría auditar qué
+     * cambió por qué.
+     *
+     * Hay un caso en que sí pueden, y está probado aparte: cuando el valor
+     * confirmado es un ancla nueva de la escala de su columna, las celdas
+     * mutiladas de esa misma columna se releen. Acá no lo es —el importe
+     * confirmado se escribe igual que los otros dos de su columna— así que no
+     * hay ninguna excusa para que nada más cambie.
      */
     const caso = primeraRaizDeCantidad();
     const { raiz, despues } = caso!;
 
-    const antes = retrato(ERRECALDE);
+    const antes = retrato(INCOMPLETO);
     const ahora = retrato(despues);
-    const cierra = (informe: InformeReconstruido, i: number) => {
-      const r = informe.veredicto.ganadora?.renglones[i];
-      return !!r && r.controles.length > 0 && r.controles.every((c) => c.paso);
-    };
-
-    let cambiados = 0;
+    expect(ahora).toHaveLength(antes.length);
     antes.forEach((fila, i) => {
-      if (i + 1 === raiz.renglon || ahora[i] === fila) return;
-      cambiados++;
-      expect(cierra(despues, i), `renglón ${i + 1} cambió sin cerrar`).toBe(true);
-
-      /*
-       * Y un renglón que **ya** cerraba no pierde ni cambia nada de lo que
-       * tenía: a lo sumo se le completa un campo que estaba vacío. Cambiarle un
-       * valor a un renglón que ya se comprobaba solo sería deshacer una
-       * respuesta buena, y ninguna confirmación de otra celda lo justifica.
-       */
-      if (!cierra(ERRECALDE, i)) return;
-      const viejos = fila.split('~');
-      const nuevos = ahora[i].split('~');
-      viejos.forEach((valor, campo) => {
-        if (valor === '') return;
-        expect(nuevos[campo], `renglón ${i + 1}, campo ${campo}`).toBe(valor);
-      });
+      if (i + 1 === raiz.renglon) return;
+      expect(ahora[i], `renglón ${i + 1}`).toBe(fila);
     });
 
-    // Y que efectivamente se miró algo: si no cambió nada, esto no prueba nada.
-    expect(cambiados).toBeGreaterThan(0);
+    // Y el confirmado sí cambió, y cambió para cerrar su propia cuenta.
+    const suyo = despues.veredicto.ganadora!.renglones[raiz.renglon! - 1];
+    expect(ahora[raiz.renglon! - 1]).not.toBe(antes[raiz.renglon! - 1]);
+    expect(suyo.controles.length).toBeGreaterThan(0);
+    expect(suyo.controles.every((c) => c.paso)).toBe(true);
   });
 
   it('la celda confirmada no vuelve a competir con lo que había leído el OCR', () => {
@@ -263,7 +303,7 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     const { raiz, valor, despues } = caso!;
 
     const fila = despues.tabla.renglones[raiz.renglon! - 1];
-    const indice = despues.tabla.columnas.findIndex((c) => c.campo?.campo === raiz.campo);
+    const indice = despues.tabla.columnas.findIndex((c) => c.campo?.campo === 'importe');
     const celda = fila.celdas[indice]!;
 
     expect(celda.estado).toBe('confirmada');
@@ -289,10 +329,11 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
   });
 
   it('una confirmación sobre un renglón que no existe no rompe nada', () => {
-    const inventado = interpretar('errecalde', [
-      { renglon: 999, campo: 'cantidad', texto: '1,00' },
-    ]);
-    expect(retrato(inventado)).toEqual(retrato(ERRECALDE));
-    expect(inventado.resumen.bloqueosUnicos).toBe(ERRECALDE.resumen.bloqueosUnicos);
+    const inventado = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
+      cuitDelReceptor: CUIT_DEL_RECEPTOR,
+      confirmaciones: [{ renglon: 999, campo: 'cantidad', texto: '1,00' }],
+    });
+    expect(retrato(inventado)).toEqual(retrato(INCOMPLETO));
+    expect(inventado.resumen.bloqueosUnicos).toBe(INCOMPLETO.resumen.bloqueosUnicos);
   });
 });
