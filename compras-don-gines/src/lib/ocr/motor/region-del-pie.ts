@@ -62,6 +62,23 @@ export interface CasillaDelPie {
   esNumero: boolean;
 }
 
+/**
+ * ¿Es este texto una **alícuota impresa** y no un número del pie?
+ *
+ * El signo de porcentaje lo dice sin ambigüedad: «21 %» no es plata en ninguna
+ * factura. Y la distinción hace falta para el alcance de las etiquetas, que se
+ * cortan en cada número: «Base Imponible IVA 21 % 1.523.537,99» tiene la
+ * alícuota **adentro del rótulo**, y tratarla como un número parte la frase en
+ * dos y tira justamente el dato que dice contra qué se calculó el impuesto.
+ *
+ * Se pide el signo y no la magnitud a propósito. Un número entre cero y cien
+ * podría ser un porcentaje o podrían ser noventa pesos; el «%» impreso es un
+ * hecho del papel.
+ */
+export function esAlicuotaEscrita(texto: string): boolean {
+  return texto.includes('%');
+}
+
 export interface AsociacionDelPie {
   /** El fragmento numérico. Cada uno aparece una sola vez por región. */
   numero: Fragmento;
@@ -432,7 +449,7 @@ function armarRegion(
         fragmento,
         fila: indice,
         columna: columnaDe(fragmento, cortes),
-        esNumero: /\d/.test(fragmento.texto),
+        esNumero: /\d/.test(fragmento.texto) && !esAlicuotaEscrita(fragmento.texto),
       });
     }
   });
@@ -838,6 +855,80 @@ export function noPuedenSerImportes(region: RegionDelPie): Set<Fragmento> {
     if (!pareceImporte(casilla.fragmento.texto)) fuera.add(casilla.fragmento);
   }
   return fuera;
+}
+
+/**
+ * Los importes que el OCR **partió en dos cajas** a la altura de la coma.
+ *
+ * Es un accidente frecuente y reconocible: el reconocedor devuelve
+ * «1.523.537» en una caja y «99» en la de al lado, pegadas, en la misma fila y
+ * de la misma pasada. No son dos números: es uno solo al que se le perdió el
+ * separador decimal, y tratarlos por separado cuesta dos veces. El importe
+ * queda sin centavos —con lo cual ninguna igualdad fiscal cierra— y los dos
+ * dígitos sueltos entran al pie como un concepto de noventa y nueve pesos.
+ *
+ * Las condiciones son las del accidente, no las de ningún comprobante: la misma
+ * pasada —cajas de dos lecturas distintas no se pegan—, la misma fila, sin
+ * blanco entre las dos, la izquierda escrita como un importe **sin decimales** y
+ * la derecha exactamente dos dígitos.
+ *
+ * Devuelve la pieza derecha indexada por la izquierda —quien lo use decide qué
+ * hacer: acá no se afirma que el número sea el pegado, se ofrece esa lectura— y
+ * además **todas las lecturas de ese lugar**: los mismos dos dígitos los
+ * devuelven también las otras pasadas, y si sólo se descartara la pieza de la
+ * pasada que los partió, las demás seguirían entrando al pie como un concepto
+ * fiscal de noventa y nueve pesos.
+ */
+export function centavosPartidos(
+  fragmentos: Fragmento[],
+  alturaTipica: number,
+): { pegados: Map<Fragmento, Fragmento>; piezas: Set<Fragmento> } {
+  const salida = new Map<Fragmento, Fragmento>();
+
+  const porPasada = new Map<string, Fragmento[]>();
+  for (const fragmento of fragmentos) {
+    porPasada.set(fragmento.pasada, [...(porPasada.get(fragmento.pasada) ?? []), fragmento]);
+  }
+
+  for (const suyos of porPasada.values()) {
+    for (const fila of enFilas(suyos, alturaTipica)) {
+      const enOrden = [...fila].sort((a, b) => a.caja.x0 - b.caja.x0);
+      for (let i = 0; i + 1 < enOrden.length; i += 1) {
+        const izquierda = enOrden[i];
+        const derecha = enOrden[i + 1];
+        if (!/^\d{2}$/.test(derecha.texto.trim())) continue;
+        // Miles impresos y ningún decimal: «1.523.537», «12345678».
+        if (!/^\$?\d{1,3}(?:[.,]\d{3})+$|^\$?\d{4,}$/.test(izquierda.texto.trim())) continue;
+        const hueco = derecha.caja.x0 - izquierda.caja.x1;
+        if (hueco < -0.003 || hueco > alturaTipica * 0.8) continue;
+        salida.set(izquierda, derecha);
+      }
+    }
+  }
+
+  /*
+   * Y el mismo lugar leído por otra pasada es el mismo lugar. Se piden las dos
+   * cosas —dos dígitos y ocupar la caja de una pieza conocida— para no llevarse
+   * puesto el importe entero que alguna pasada sí leyó completo.
+   */
+  const piezas = new Set<Fragmento>(salida.values());
+  for (const fragmento of fragmentos) {
+    if (piezas.has(fragmento)) continue;
+    if (!/^\d{2}$/.test(fragmento.texto.trim())) continue;
+    const suyo = fragmento.caja.x1 - fragmento.caja.x0;
+    for (const pieza of salida.values()) {
+      const comun =
+        Math.min(fragmento.caja.x1, pieza.caja.x1) - Math.max(fragmento.caja.x0, pieza.caja.x0);
+      const alto =
+        Math.min(fragmento.caja.y1, pieza.caja.y1) - Math.max(fragmento.caja.y0, pieza.caja.y0);
+      if (suyo > 0 && alto > 0 && comun > suyo * 0.5) {
+        piezas.add(fragmento);
+        break;
+      }
+    }
+  }
+
+  return { pegados: salida, piezas };
 }
 
 /**

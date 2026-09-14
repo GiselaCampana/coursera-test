@@ -6,8 +6,10 @@ import {
   type AsignacionDeRegion,
 } from '@/lib/ocr/motor/asignacion-del-pie';
 import {
+  centavosPartidos,
   desdeLaPalabra,
   dondeTerminaElVeto,
+  esAlicuotaEscrita,
   lecturasPisadas,
   noPuedenSerImportes,
   pareceImporte,
@@ -105,6 +107,22 @@ export type EstadoDelPie = 'completo' | 'parcial' | 'ausente';
 export type ConceptoFiscal =
   /** El neto gravado, que es lo que totaliza el detalle. */
   | 'netoGravado'
+  /**
+   * Una **base imponible**: sobre qué importe se calculó una alícuota de IVA.
+   *
+   * No es un sinónimo del neto gravado y modelarlo así pierde información. Un
+   * comprobante con artículos al 21 % y al 10,5 % imprime **dos** bases, cada
+   * una con su alícuota y su IVA, y el neto gravado es su suma. Meterlas las dos
+   * en un solo campo obliga a elegir una y tirar la otra.
+   *
+   * La distinción además resuelve una confusión medida: un papel que imprime
+   * «Subtotal» y «Base Imponible IVA 21 %» tiene dos números distintos y los dos
+   * son legítimos. El subtotal se parece más a la suma del detalle —por eso
+   * ganaba— y la base es la que cumple la relación que importa: base × alícuota
+   * da el IVA impreso. Esa igualdad es evidencia independiente del detalle, y
+   * vale más que una cercanía.
+   */
+  | 'baseImponible'
   /** Lo que no lleva IVA: envases, impuestos internos ya incluidos. */
   | 'noGravado'
   /** El IVA de una alícuota. */
@@ -139,6 +157,14 @@ const ETIQUETAS: [ConceptoFiscal, string[]][] = [
    * confundirlos mete en el neto gravado lo que justamente no lo está.
    */
   ['noGravado', ['no gravado', 'exento', 'impuestos internos']],
+  /*
+   * «Base imponible» va **antes** que el neto y sólo como frase completa: ni
+   * «base» ni «imponible» por separado nombran nada. «Base» sola aparece en
+   * media docena de leyendas de una factura —base de cálculo, base de datos del
+   * sistema de facturación— y reconocerla sería inventar un concepto fiscal
+   * donde hay una palabra suelta.
+   */
+  ['baseImponible', ['base imponible']],
   ['netoGravado', ['subtotal', 'neto gravado', 'importe neto', 'neto', 'gravado']],
   ['percepcion', ['percepcion', 'percepciones', 'perc', 'retencion']],
   ['iva', ['iva']],
@@ -156,6 +182,22 @@ const ETIQUETAS: [ConceptoFiscal, string[]][] = [
  * es «subtotal» con la primera letra comida.
  */
 const PARECIDO_DE_ETIQUETA = 0.6;
+
+/**
+ * Los conceptos que **sólo** se reconocen por su frase exacta.
+ *
+ * El parecido de una frase de dos palabras es mucho más frágil que el de una:
+ * hay más letras que perder, y un umbral que admite «ubtota» por «subtotal»
+ * admite también «bas impon» por cualquier cosa que empiece parecido. Una base
+ * imponible además decide contra qué importe se calculó un impuesto, así que
+ * afirmarla por parecido es afirmarla por nada.
+ *
+ * Lo que sí puede recuperar una etiqueta comida es la **relación fiscal**: base
+ * × alícuota tiene que dar el IVA impreso. Eso lo hace `elegirBasesImponibles`,
+ * que pide las dos cosas juntas —geometría coherente e igualdad— y nunca el
+ * parecido solo.
+ */
+const SOLO_FRASE_EXACTA: ReadonlySet<ConceptoFiscal> = new Set<ConceptoFiscal>(['baseImponible']);
 
 /**
  * Palabras que anuncian un **identificador**, no un importe.
@@ -273,6 +315,24 @@ export interface AsignacionFiscal {
 
 export interface PieFiscal {
   netoGravado: Decimal | null;
+  /**
+   * Las bases imponibles impresas, una por alícuota.
+   *
+   * Se conservan **separadas** y con su alícuota, aunque el neto agregado salga
+   * de su suma. Un comprobante con artículos al 21 % y al 10,5 % tiene dos
+   * bases, cada una con su IVA, y colapsarlas en un solo número pierde
+   * exactamente la información que las hace útiles: contra qué se calculó cada
+   * impuesto.
+   */
+  basesImponibles: { alicuota: Decimal | null; valor: Decimal }[];
+  /**
+   * ¿El neto gravado salió de sumar las bases en vez de estar impreso?
+   *
+   * Cuando hay una sola base, el neto **es** esa base: el mismo número del
+   * papel, con su procedencia. Cuando hay varias, el agregado no está impreso
+   * en ninguna parte y eso queda dicho, igual que con el total calculado.
+   */
+  netoDerivadoDeLasBases: boolean;
   noGravado: Decimal | null;
   /** Un renglón por alícuota. Vacío si el comprobante no discrimina IVA. */
   iva: { alicuota: Decimal | null; valor: Decimal }[];
@@ -531,7 +591,12 @@ function etiquetaEntre(
   return fragmentos
     .filter(
       (f) =>
-        !/\d/.test(f.texto) &&
+        /*
+         * La alícuota impresa es **parte del rótulo**, no un número que lo corte.
+         * «Base Imponible IVA 21 %» nombra el concepto y dice contra qué se
+         * calculó el impuesto, y sacarle el «21 %» deja una base sin alícuota.
+         */
+        (!/\d/.test(f.texto) || esAlicuotaEscrita(f.texto)) &&
         Math.abs(centro(f) - suCentro) <= holguraVertical &&
         f.caja.x1 <= numero.caja.x0 + 0.001 &&
         numero.caja.x0 - f.caja.x1 <= VENTANA_DE_ETIQUETA,
@@ -565,6 +630,7 @@ export function conceptoSegunEtiqueta(
     for (const canonica of canonicas) {
       const cuanto = cuantoSeParece(palabras, canonica);
       if (cuanto.parecido < PARECIDO_DE_ETIQUETA) continue;
+      if (!cuanto.exacta && SOLO_FRASE_EXACTA.has(concepto)) continue;
       if (cuanto.exacta) nombrados.add(concepto);
       if (!mejor || cuanto.parecido > mejor.parecido) {
         mejor = { concepto, parecido: cuanto.parecido, exacta: cuanto.exacta };
@@ -812,6 +878,19 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
   }
 
   /*
+   * Y los centavos que el OCR dejó en una caja aparte vuelven a su número.
+   *
+   * Dos dígitos pegados a la derecha de un importe sin decimales, de la misma
+   * pasada y la misma fila, son la cola de ese importe: «1.523.537» «99» es
+   * «1.523.537,99». Se ofrece como **otra lectura** del mismo lugar —no se
+   * afirma— y la pieza suelta deja de competir como importe propio, porque un
+   * concepto fiscal de noventa y nueve pesos al lado de uno de un millón y
+   * medio es el mismo número contado dos veces.
+   */
+  const { pegados: centavos, piezas } = centavosPartidos(delPie, opciones.alturaTipica);
+  for (const pieza of piezas) descartados.add(pieza);
+
+  /*
    * Y la escala de los importes también vale para todas las lecturas.
    *
    * Cómo escribe los números este pie —con coma y dos decimales, con punto, sin
@@ -846,7 +925,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
   }[] = [
     {
       origen: 'líneas',
-      candidatas: candidatasPorLineas(delPie, opciones, descartados, escalaDeImportes),
+      candidatas: candidatasPorLineas(delPie, opciones, descartados, escalaDeImportes, centavos),
       asignacion: null,
     },
   ];
@@ -857,6 +936,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       opciones,
       descartados,
       escalaDeImportes,
+      centavos,
     );
     juegos.push({ origen: region.origen, candidatas, asignacion });
   }
@@ -1281,6 +1361,7 @@ function candidatasPorLineas(
   opciones: OpcionesDelPie,
   descartados: ReadonlySet<Fragmento>,
   escala: FormatoDeColumna | null,
+  centavos: ReadonlyMap<Fragmento, Fragmento>,
 ): Candidata[] {
   const lineas = lineasDelPie(fragmentos, opciones.alturaTipica);
 
@@ -1308,7 +1389,7 @@ function candidatasPorLineas(
        * forma de un identificador —catorce dígitos corridos— y de eso se ocupa
        * `pareceImporte`.
        */
-      const lecturas = lecturasDeCelda(fragmento.texto, escala);
+      const lecturas = lecturasDelFragmento(fragmento, escala, centavos);
       if (lecturas.length === 0) continue;
 
       let etiqueta = linea.etiquetaDe(fragmento);
@@ -1359,6 +1440,7 @@ function candidatasPorCasillas(
   opciones: OpcionesDelPie,
   descartados: ReadonlySet<Fragmento>,
   escalaDeImportes: FormatoDeColumna | null,
+  centavos: ReadonlyMap<Fragmento, Fragmento>,
 ): { candidatas: Candidata[]; asignacion: AsignacionDeRegion } {
   const lineas = lineasDelPie(
     region.casillas.map((c) => c.fragmento),
@@ -1380,7 +1462,7 @@ function candidatasPorCasillas(
     if (!casilla.esNumero) return false;
     if (descartados.has(casilla.fragmento)) return false;
     if (casilla.fragmento.texto.includes('%')) return false;
-    const lecturas = lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes);
+    const lecturas = lecturasDelFragmento(casilla.fragmento, escalaDeImportes, centavos);
     if (lecturas.length === 0) return false;
     const linea = lineaDe(casilla.fragmento);
     if (linea && linea.esIdentificadorDe(casilla.fragmento)) return false;
@@ -1409,7 +1491,7 @@ function candidatasPorCasillas(
       linea: lineaDe(fragmento),
       fragmento,
       etiqueta,
-      lecturas: lecturasDeCelda(fragmento.texto, escalaDeImportes),
+      lecturas: lecturasDelFragmento(fragmento, escalaDeImportes, centavos),
       porEtiqueta: conceptoSegunEtiqueta(etiqueta),
       alicuota: alicuotaDeLaEtiqueta(par.etiqueta.texto),
     });
@@ -1426,13 +1508,44 @@ function candidatasPorCasillas(
       linea: lineaDe(casilla.fragmento),
       fragmento: casilla.fragmento,
       etiqueta: '',
-      lecturas: lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes),
+      lecturas: lecturasDelFragmento(casilla.fragmento, escalaDeImportes, centavos),
       porEtiqueta: null,
       alicuota: null,
     });
   }
 
   return { candidatas, asignacion };
+}
+
+/**
+ * Las lecturas de un fragmento, con los centavos partidos ofrecidos como una más.
+ *
+ * La lectura pegada va **detrás** de las propias y cuesta una reparación: es
+ * una suposición sobre el papel —que el OCR cortó el número en la coma— y como
+ * toda suposición no gana por estar, gana si alguna relación fiscal la elige.
+ * Ésa es la misma regla que usa el IVA para elegir entre dos lecturas de su
+ * línea, y la que impide que un número se agrande porque sí.
+ */
+function lecturasDelFragmento(
+  fragmento: Fragmento,
+  escala: FormatoDeColumna | null,
+  centavos: ReadonlyMap<Fragmento, Fragmento>,
+): LecturaNumerica[] {
+  const propias = lecturasDeCelda(fragmento.texto, escala);
+  const pieza = centavos.get(fragmento);
+  if (!pieza) return propias;
+
+  const juntas = lecturasDeCelda(`${fragmento.texto},${pieza.texto.trim()}`, escala).map(
+    (lectura) => ({
+      ...lectura,
+      literal: false,
+      reparaciones: lectura.reparaciones + 1,
+      comoSeLeyo: `${lectura.comoSeLeyo}; con los centavos «${pieza.texto.trim()}» de la caja de al lado`,
+    }),
+  );
+
+  const yaEstan = new Set(propias.map((l) => l.valor.toString()));
+  return [...propias, ...juntas.filter((l) => !yaEstan.has(l.valor.toString()))];
 }
 
 /**
@@ -1446,6 +1559,182 @@ function candidatasPorCasillas(
 function etiquetaEfectiva(texto: string): string {
   const fin = dondeTerminaElVeto(texto);
   return fin === null ? texto : desdeLaPalabra(texto, fin);
+}
+
+/**
+ * Las bases imponibles impresas, una por alícuota.
+ *
+ * Se piden **las dos cosas**: que la etiqueta diga «base imponible» como frase
+ * completa, y que el valor esté leído. Una base no se deduce de una igualdad
+ * —ése es el camino por el que cualquier número que multiplique bien se
+ * convierte en la base que falta— así que sin su rótulo no hay base.
+ *
+ * La alícuota sale de la misma etiqueta cuando está impresa: «Base Imponible
+ * IVA 21 %» trae las dos cosas. Sin ella la base queda con `alicuota: null`, que
+ * es distinto de inventarle una.
+ */
+function elegirBasesImponibles(
+  candidatas: Candidata[],
+  usadas: Set<Fragmento>,
+  renglones: number,
+): AsignacionFiscal[] {
+  const salida: AsignacionFiscal[] = [];
+  const vistas = new Set<string>();
+
+  for (const candidata of candidatas) {
+    if (usadas.has(candidata.fragmento)) continue;
+
+    if (candidata.lecturas.length === 0) continue;
+
+    /*
+     * Dos maneras de llegar a ser una base, y una sola de ellas alcanza sola.
+     *
+     * Con la frase completa impresa, la etiqueta basta. Con la frase mutilada
+     * hacen falta **las dos cosas**: que el rótulo que la geometría le asignó a
+     * este importe sea una lectura degradada de «base imponible», y que la
+     * igualdad se cumpla contra un IVA impreso. El parecido solo nunca alcanza,
+     * y la igualdad sola tampoco —ése es el camino por el que cualquier número
+     * que multiplique bien se convierte en la base que falta—.
+     *
+     * La pregunta por la etiqueta va primero, y no es un detalle de orden: la
+     * igualdad se busca contra todas las demás candidatas y sale cara, así que
+     * se la hace sólo por los números que **dicen** ser una base.
+     */
+    const porLaFrase = candidata.porEtiqueta?.concepto === 'baseImponible';
+    if (!porLaFrase && parecidoABaseImponible(candidata.etiqueta).parecido < PARECIDO_DE_ETIQUETA) {
+      continue;
+    }
+
+    /*
+     * Entre las lecturas del mismo lugar decide **la igualdad**, no el orden.
+     *
+     * Es la misma regla que usa el IVA con su línea: cuando dos lecturas del
+     * mismo número compiten, la que multiplica bien contra un IVA impreso es la
+     * que el papel tiene. Sobre una foto del lote el OCR partió la base en dos
+     * cajas y la lectura de arriba quedó sin centavos: contra el IVA impreso no
+     * cerraba por veintidós centavos, y con los centavos cierra.
+     */
+    let lectura = candidata.lecturas[0];
+    let porLaIgualdad: Decimal | null = null;
+    for (const otra of candidata.lecturas) {
+      const alicuota = alicuotaQueConfirmaLaBase(candidata, otra.valor, candidatas, renglones);
+      if (alicuota === null) continue;
+      lectura = otra;
+      porLaIgualdad = alicuota;
+      break;
+    }
+
+    // Sin la frase entera, la igualdad es la otra mitad de la prueba.
+    if (!porLaFrase && porLaIgualdad === null) continue;
+
+    /*
+     * Una base leída dos veces por dos pasadas es una base. Se distinguen por
+     * su valor y su alícuota, que es lo que separa dos bases verdaderas —una al
+     * 21 % y otra al 10,5 %— de dos lecturas del mismo renglón.
+     */
+    const alicuota = candidata.alicuota ?? porLaIgualdad;
+    const clave = `${lectura.valor.toString()}|${alicuota?.toString() ?? ''}`;
+    if (vistas.has(clave)) continue;
+    vistas.add(clave);
+
+    salida.push({
+      concepto: 'baseImponible',
+      valor: lectura.valor,
+      origen: origenDe(candidata.fragmento),
+      lecturaLiteral: candidata.lecturas.find((l) => l.literal)?.valor ?? null,
+      alternativas: alternativasDe(candidata.lecturas, lectura.valor),
+      alicuota,
+      /*
+       * La igualdad se anota **acá**, cuando hay un IVA impreso que la
+       * confirma, y no sólo en la etapa del IVA: es lo que distingue una base
+       * probada de una base que nada más está rotulada, y con eso decide
+       * después quién ocupa el lugar del neto gravado.
+       */
+      igualdad:
+        porLaIgualdad === null
+          ? null
+          : `base imponible × ${porLaIgualdad.times(100)} % = IVA`,
+      costoDeReparacion: lectura.reparaciones,
+      etiqueta: {
+        texto: candidata.etiqueta,
+        exacta: porLaFrase ? (candidata.porEtiqueta?.exacta ?? false) : false,
+        parecido: porLaFrase
+          ? (candidata.porEtiqueta?.parecido ?? 1)
+          : parecidoABaseImponible(candidata.etiqueta).parecido,
+      },
+      segunda: null,
+      margen: 1,
+      /*
+       * Una base recuperada de un rótulo comido es un concepto que puso la
+       * **relación**, no la etiqueta, y el informe tiene que poder decirlo: el
+       * número está leído del papel, pero lo que lo nombra es la igualdad.
+       */
+      procedencia: porLaFrase ? 'READ_FROM_DOCUMENT' : 'INFERRED_FROM_DOCUMENT_RELATIONS',
+    });
+    /*
+     * Y el fragmento queda tomado. Una base es un concepto fiscal más, y sin
+     * esto el mismo número volvía a competir como neto dos etapas después.
+     */
+    usadas.add(candidata.fragmento);
+  }
+
+  return salida;
+}
+
+/**
+ * Cuánto se parece una etiqueta a la frase «base imponible».
+ *
+ * Se pregunta aparte porque `conceptoSegunEtiqueta` no reconoce la base
+ * mutilada a propósito: el parecido de una frase de dos palabras no puede
+ * afirmar sola contra qué se calculó un impuesto. Acá el parecido es sólo la
+ * mitad de la evidencia; la otra mitad es la igualdad, y las dos se piden
+ * juntas.
+ */
+function parecidoABaseImponible(etiqueta: string): { parecido: number; exacta: boolean } {
+  const palabras = enPalabras(etiqueta);
+  if (palabras.length === 0) return { parecido: 0, exacta: false };
+  const junto = palabras.join(' ');
+  for (const ajena of AJENAS) {
+    if (junto.includes(ajena)) return { parecido: 0, exacta: false };
+  }
+  return cuantoSeParece(palabras, 'base imponible');
+}
+
+/**
+ * Qué alícuota confirma que este importe es una base, si alguna lo confirma.
+ *
+ * La prueba es la igualdad impresa: base × alícuota tiene que dar un IVA que
+ * esté **en el papel**, y ese IVA no puede estar rotulado como otra cosa. La
+ * igualdad se comprueba contra los dos importes impresos y **no depende del
+ * detalle**: sesenta centavos de desfase en la suma de los artículos no tienen
+ * por qué costar la relación entre una base y su impuesto.
+ *
+ * Si la alícuota está impresa se prueba esa sola. Si no, se prueban todas las
+ * que existen y hace falta que **una sola** cierre: dos alícuotas que dan el
+ * mismo número no confirman nada, confirman que hay una ambigüedad.
+ */
+function alicuotaQueConfirmaLaBase(
+  base: Candidata,
+  valor: Decimal,
+  candidatas: Candidata[],
+  renglones: number,
+): Decimal | null {
+  const posibles = base.alicuota ? [base.alicuota] : ALICUOTAS;
+  const confirman: Decimal[] = [];
+
+  for (const alicuota of posibles) {
+    const esperado = valor.times(alicuota);
+    const hay = candidatas.some((otra) => {
+      if (otra.fragmento === base.fragmento) return false;
+      // Un número rotulado como otra cosa no es el IVA de nadie.
+      if (otra.porEtiqueta !== null && otra.porEtiqueta.concepto !== 'iva') return false;
+      if (otra.alicuota !== null && !otra.alicuota.eq(alicuota)) return false;
+      return otra.lecturas.some((l) => dentroDeLaPrecision(l.valor, esperado, renglones));
+    });
+    if (hay) confirman.push(alicuota);
+  }
+
+  return confirman.length === 1 ? confirman[0] : null;
 }
 
 /**
@@ -1473,21 +1762,107 @@ function reconciliarConCandidatas(
     faltantes: [],
     residuo: null,
     sinAsignar: [],
+    basesImponibles: [],
+    netoDerivadoDeLasBases: false,
   };
 
   const usadas = new Set<Fragmento>();
 
+  /*
+   * --- 0. Las bases imponibles, que van **antes** que el neto ---------------
+   *
+   * Una base imponible dice sobre qué importe se calculó una alícuota, y ésa es
+   * la relación más comprobable del pie: base × alícuota tiene que dar el IVA
+   * impreso, y esa igualdad **no depende del detalle**. Por eso se resuelve
+   * primero, aunque el neto sea el concepto que el resto de la aplicación
+   * consume.
+   *
+   * El orden importaba de verdad: sobre una foto del lote el papel imprime
+   * «Subtotal» y «Base Imponible IVA 21 %», los dos son números legítimos y
+   * distintos, y el subtotal se parece más a la suma del detalle. Con el neto
+   * resuelto primero ganaba el subtotal, y el número que alimenta el IVA
+   * quedaba afuera. La cercanía a una suma es más débil que una igualdad.
+   */
+  const bases = elegirBasesImponibles(candidatas, usadas, opciones.renglonesDelDetalle ?? 1);
+  for (const base of bases) {
+    pie.asignaciones.push(base);
+  }
+
   // --- 1. El neto, contra la suma del detalle ------------------------------
-  const neto = elegirNeto(
+  let neto = elegirNeto(
     candidatas,
     opciones.sumaDelDetalle,
     opciones.renglonesDelDetalle ?? 1,
     pie,
+    usadas,
   );
+
+  /*
+   * Y una base **probada** le gana el lugar del neto a un subtotal que no
+   * prueba nada.
+   *
+   * Es el caso medido: el papel imprime «Subtotal 1.771.555,80» y «Base
+   * Imponible IVA 21 % 1.523.537,99», los dos números son legítimos y el
+   * subtotal ni siquiera cierra contra el detalle. Lo que sostiene a la base es
+   * una igualdad independiente contra el IVA impreso, y eso vale más que una
+   * etiqueta compatible. El subtotal no se borra: queda como un importe leído
+   * sin concepto probado, que es exactamente lo que es.
+   *
+   * Con dos bases no se hace: ahí el neto es la suma, y de eso se ocupa la
+   * derivación de más abajo. Y si el neto elegido trae su propia relación
+   * —cierra contra la suma del detalle— no lo desplaza nadie.
+   */
+  const probada = bases.length === 1 && bases[0].igualdad !== null ? bases[0] : null;
+  if (neto && probada && neto.igualdad === null && !neto.valor.eq(probada.valor)) {
+    neto = null;
+  }
+
   if (neto) {
     pie.netoGravado = neto.valor;
     pie.asignaciones.push(neto);
     usadas.add(neto.origen as unknown as Fragmento);
+  }
+
+  /*
+   * Y si no hubo neto impreso pero sí bases, el neto **se deriva de su suma**.
+   *
+   * Se deriva y se dice: la procedencia queda en `DERIVED_SUGGESTION` cuando
+   * son varias, porque ese número no está impreso en ninguna parte de la hoja.
+   * Con una sola base el neto es esa base —el mismo número, leído del papel— y
+   * conserva su procedencia original.
+   *
+   * Lo que no se hace nunca es reemplazar las bases: siguen estando, separadas
+   * y con su alícuota, porque son lo que el comprobante dice y el agregado es
+   * una cuenta.
+   */
+  if (pie.netoGravado === null && bases.length > 0) {
+    const suma = bases.reduce((acumulado: Decimal, b) => acumulado.plus(b.valor), new Decimal(0));
+    pie.netoGravado = suma;
+    pie.netoDerivadoDeLasBases = bases.length > 1;
+    if (bases.length === 1) {
+      pie.asignaciones.push({
+        ...bases[0],
+        concepto: 'netoGravado',
+        // Un neto no tiene alícuota: la que tiene es la de la base.
+        alicuota: null,
+        igualdad: 'la única base imponible es el neto gravado',
+      });
+    } else {
+      pie.asignaciones.push({
+        concepto: 'netoGravado',
+        valor: suma,
+        origen: bases[0].origen,
+        lecturaLiteral: null,
+        alternativas: [],
+        alicuota: null,
+        igualdad: `suma de ${bases.length} bases imponibles = neto gravado`,
+        costoDeReparacion: 0,
+        etiqueta: null,
+        segunda: null,
+        margen: 1,
+        procedencia: 'DERIVED_SUGGESTION',
+      });
+    }
   }
 
   /*
@@ -1525,8 +1900,68 @@ function reconciliarConCandidatas(
     if (etiquetaAjena) continue;
     if (!pie.netoGravado && candidata.porEtiqueta?.concepto !== 'iva') continue;
     if (usadas.has(candidata.fragmento)) continue;
-    const asignacion = asignarIva(candidata, pie.netoGravado, opciones.renglonesDelDetalle ?? 1);
+
+    /*
+     * Contra **su base**, cuando hay bases impresas.
+     *
+     * Cada base se relaciona con el IVA de su misma alícuota, que es lo que
+     * permite leer un comprobante con artículos al 21 % y al 10,5 %: los dos
+     * IVAs cumplen su igualdad contra bases distintas, y comprobar los dos
+     * contra un único neto agregado no cierra ninguno.
+     *
+     * Y cuando no hay bases, contra el neto, como siempre.
+     */
+    let asignacion: AsignacionFiscal | null = null;
+    let suBase: AsignacionFiscal | null = null;
+    for (const base of bases) {
+      /*
+       * Una alícuota impresa en los dos lados tiene que coincidir: el IVA del
+       * 10,5 % no se comprueba contra la base del 21 %. Y cuando falta de un
+       * lado —el OCR se come el porcentaje la mitad de las veces— manda la que
+       * esté, que es reconocer la alícuota por la relación y no inventarla.
+       */
+      if (
+        base.alicuota !== null &&
+        candidata.alicuota !== null &&
+        !base.alicuota.eq(candidata.alicuota)
+      ) {
+        continue;
+      }
+      const alicuota = base.alicuota ?? candidata.alicuota;
+      const prueba = asignarIva(
+        { ...candidata, alicuota },
+        base.valor,
+        opciones.renglonesDelDetalle ?? 1,
+      );
+      if (!prueba) continue;
+      asignacion = prueba;
+      suBase = base;
+      break;
+    }
+    /*
+     * Y si ninguna base lo explica, contra el neto, como siempre. El orden es
+     * el que importa: comprobar los dos IVAs de un comprobante con artículos al
+     * 21 % y al 10,5 % contra el **neto agregado** no cierra ninguno de los
+     * dos, y los dos desaparecen del pie teniéndolos impresos.
+     */
+    if (!asignacion) {
+      asignacion = asignarIva(candidata, pie.netoGravado, opciones.renglonesDelDetalle ?? 1);
+    }
     if (!asignacion) continue;
+    if (suBase) {
+      /*
+       * Y la alícuota que **cerró** la igualdad queda en la base, cuando el
+       * papel no la imprimió a su lado o el OCR se comió el porcentaje. No es
+       * inventarla: es reconocerla por la relación, que es lo mismo que hace el
+       * IVA cuando su propia etiqueta sale mutilada.
+       */
+      if (suBase.alicuota === null) suBase.alicuota = asignacion.alicuota;
+      asignacion.igualdad =
+        suBase.alicuota !== null
+          ? `base imponible × ${suBase.alicuota.times(100)} % = IVA`
+          : 'base imponible × su alícuota = IVA';
+      suBase.igualdad = asignacion.igualdad;
+    }
     usadas.add(candidata.fragmento);
     if (!primeraVez('iva', asignacion.valor, candidata.linea.y)) continue;
     ivas.push({ asignacion, candidata });
@@ -1549,8 +1984,18 @@ function reconciliarConCandidatas(
       porAlicuota.set(clave, cada);
       continue;
     }
+    /*
+     * Contra su base, si la tiene: es el importe sobre el que ese IVA se
+     * calculó, y el neto agregado de un comprobante con dos alícuotas no lo es.
+     */
+    const suBase = bases.find(
+      (b) =>
+        b.alicuota !== null &&
+        cada.asignacion.alicuota !== null &&
+        b.alicuota.eq(cada.asignacion.alicuota),
+    );
     const exacto = cada.asignacion.alicuota
-      ? (pie.netoGravado ?? new Decimal(0)).times(cada.asignacion.alicuota)
+      ? (suBase?.valor ?? pie.netoGravado ?? new Decimal(0)).times(cada.asignacion.alicuota)
       : null;
     if (!exacto) continue;
     if (
@@ -1562,6 +2007,16 @@ function reconciliarConCandidatas(
   for (const { asignacion } of porAlicuota.values()) {
     pie.iva.push({ alicuota: asignacion.alicuota, valor: asignacion.valor });
     pie.asignaciones.push(asignacion);
+  }
+
+  /*
+   * Y recién acá se publican las bases, **con la alícuota que les quedó**:
+   * impresa a su lado, o reconocida por la igualdad contra su IVA. Publicarlas
+   * antes de resolver los IVAs las dejaba sin porcentaje en los papeles donde
+   * el OCR se come el signo, que son la mitad.
+   */
+  for (const base of bases) {
+    pie.basesImponibles.push({ alicuota: base.alicuota, valor: base.valor });
   }
 
   /*
@@ -1735,6 +2190,14 @@ function elegirNeto(
   sumaDelDetalle: Decimal | null,
   renglones: number,
   pie: PieFiscal,
+  /**
+   * Los fragmentos que ya ocupó otro concepto.
+   *
+   * Una base imponible se resuelve antes que el neto, y sin esto el mismo
+   * número volvía a entrar como neto: el pie mostraba dos veces el mismo
+   * importe, una como base leída y otra como neto «deducido» de sí mismo.
+   */
+  usadas: ReadonlySet<Fragmento>,
 ): AsignacionFiscal | null {
   const posibles: {
     candidata: Candidata;
@@ -1744,6 +2207,7 @@ function elegirNeto(
   }[] = [];
 
   for (const candidata of candidatas) {
+    if (usadas.has(candidata.fragmento)) continue;
     const etiquetaCompatible =
       candidata.porEtiqueta?.concepto === 'netoGravado' || candidata.porEtiqueta === null;
     for (const lectura of candidata.lecturas) {
