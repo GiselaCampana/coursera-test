@@ -1,9 +1,20 @@
 import { Decimal } from '@/lib/money';
 import type { Caja, Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
+import {
+  desdeLaPalabra,
+  dondeTerminaElVeto,
+  lecturasPisadas,
+  noPuedenSerImportes,
+  regionesDelPie,
+  textosDeLaBanda,
+  type RegionDelPie,
+} from '@/lib/ocr/motor/region-del-pie';
 import { parecido } from '@/lib/ocr/motor/semantica-de-columnas';
 import {
   bienEscrito,
+  formatoDeColumna,
   lecturasDeCelda,
+  type FormatoDeColumna,
   type LecturaNumerica,
 } from '@/lib/ocr/motor/formato-de-columna';
 import { repararDigitos } from '@/lib/ocr/parsers/tipos';
@@ -286,6 +297,14 @@ export interface PieFiscal {
    * medida exacta de lo que no se leyó.
    */
   residuo: Decimal | null;
+  /**
+   * De qué región del papel salió esta lectura del pie.
+   *
+   * Va en el informe porque es lo que permite auditar la decisión: dos regiones
+   * del mismo comprobante dan dos pies distintos, compiten, y quien revise tiene
+   * que poder ver cuál ganó y buscarla en la foto.
+   */
+  region?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -635,6 +654,15 @@ export interface OpcionesDelPie {
    * son números grandes sin ninguna relación fiscal.
    */
   desdeY?: number;
+  /**
+   * Dónde termina el último artículo del detalle, en fracción de página.
+   *
+   * Sirve para proponer la región «debajo del último artículo», que es donde
+   * casi todos los papeles imprimen el recuadro de totales. Es opcional porque
+   * hay comprobantes donde el detalle no se pudo ubicar, y ahí la región se
+   * propone igual desde el encabezado.
+   */
+  finDelDetalle?: number;
 }
 
 /**
@@ -647,34 +675,228 @@ export interface OpcionesDelPie {
  * propia y dependen de la etiqueta y de la posición; y al final el total, que
  * cierra el sistema.
  */
+/**
+ * Reconcilia el pie fiscal contra el detalle y contra sí mismo.
+ *
+ * El orden en que se resuelve sigue la fuerza de la evidencia: primero el neto,
+ * que es el único concepto con una relación **externa** —tiene que dar la suma
+ * del detalle— y por eso el más comprobable; después los IVAs, que se verifican
+ * contra el neto y su alícuota; después las percepciones, que no tienen relación
+ * propia y dependen de la etiqueta y de la posición; y al final el total, que
+ * cierra el sistema.
+ *
+ * Eso se hace **una vez por región candidata** y las regiones compiten enteras.
+ * Ninguna corrige a la otra: la lectura por líneas de siempre es una región
+ * más, y si es la que mejor explica el papel, gana.
+ */
 export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie): PieFiscal {
   const desde = opciones.desdeY ?? 0;
-  const lineas = lineasDelPie(
-    fragmentos.filter((f) => (f.caja.y0 + f.caja.y1) / 2 >= desde),
-    opciones.alturaTipica,
+  const delPie = fragmentos.filter((f) => (f.caja.y0 + f.caja.y1) / 2 >= desde);
+
+  const regiones = regionesDelPie(delPie, {
+    alturaTipica: opciones.alturaTipica,
+    desdeY: desde,
+    finDelDetalle: opciones.finDelDetalle,
+  });
+
+  /*
+   * Lo que la geometría descarta vale para **todas** las lecturas.
+   *
+   * Que un número esté fuera de la columna de los importes, o que sea otra
+   * lectura del mismo lugar del papel, son hechos del comprobante y no
+   * opiniones de un lector. Se calculan una vez sobre la región más amplia y
+   * después ninguna lectura —ni la de líneas, ni las de la grilla— puede
+   * proponerlos como importes.
+   */
+  const descartados = new Set<Fragmento>(lecturasPisadas(delPie, opciones.alturaTipica));
+  for (const region of regiones) {
+    for (const fragmento of noPuedenSerImportes(region)) descartados.add(fragmento);
+  }
+
+  /*
+   * Y la escala de los importes también vale para todas las lecturas.
+   *
+   * Cómo escribe los números este pie —con coma y dos decimales, con punto, sin
+   * separadores— es un hecho del papel, y sale de los importes que están
+   * alineados en la banda. Es lo que descarta el CAE sin mirar su magnitud:
+   * catorce cifras seguidas no es un importe en un recuadro donde todos los
+   * importes llevan su separador.
+   */
+  const escalaDeImportes = formatoDeColumna(regiones.flatMap((r) => textosDeLaBanda(r)));
+
+  const juegos: { origen: string; candidatas: Candidata[] }[] = [
+    {
+      origen: 'líneas',
+      candidatas: candidatasPorLineas(delPie, opciones, descartados, escalaDeImportes),
+    },
+  ];
+
+  for (const region of regiones) {
+    juegos.push({
+      origen: region.origen,
+      candidatas: candidatasPorCasillas(region, opciones, descartados, escalaDeImportes),
+    });
+  }
+
+  let mejor: PieFiscal | null = null;
+  let origenElegido = 'ninguna';
+  for (const juego of juegos) {
+    if (juego.candidatas.length === 0) continue;
+    const pie = reconciliarConCandidatas(juego.candidatas, opciones);
+    if (mejor === null || compararPies(pie, mejor, opciones.sumaDelDetalle) < 0) {
+      mejor = pie;
+      origenElegido = juego.origen;
+    }
+  }
+
+  if (mejor === null) return reconciliarConCandidatas([], opciones);
+  return { ...mejor, region: origenElegido };
+}
+
+/**
+ * Cuál de dos lecturas del pie explica mejor el papel. Negativo si gana `a`.
+ *
+ * Un orden, no una suma, por la misma razón que en el resto del motor: un pie
+ * que cierra con conceptos inventados no vale más que uno incompleto y honesto.
+ *
+ *  1. **cuántas asignaciones cumplen una igualdad fiscal.** Es la evidencia que
+ *     no depende de haber leído bien ninguna etiqueta;
+ *  2. **cuántas salieron de su propia etiqueta impresa.** Un concepto que el
+ *     papel nombra vale más que uno deducido;
+ *  3. **cuánto queda sin explicar.** El residuo es la medida exacta de lo que
+ *     no se leyó;
+ *  4. y recién al final, **cuántos conceptos se pudieron asignar**. Va último a
+ *     propósito: una región que asigna ocho conceptos sin que ninguno cumpla
+ *     una igualdad no leyó mejor, adivinó más.
+ */
+function compararPies(a: PieFiscal, b: PieFiscal, detalle: Decimal | null): number {
+  /*
+   * Nivel 1: que el neto dé la suma del detalle.
+   *
+   * Es la única comprobación del pie que no depende del pie. Todo lo demás
+   * —que el IVA sea el neto por la alícuota, que el total sea la suma de los
+   * conceptos— se verifica contra números del mismo recuadro, así que un
+   * recuadro leído entero al revés puede cumplirlas todas. Que el neto coincida
+   * con lo que suman los artículos viene de otra parte de la hoja.
+   */
+  const cierraConElDetalle = (pie: PieFiscal) =>
+    detalle !== null && pie.netoGravado !== null && dentroDeLaPrecision(pie.netoGravado, detalle);
+
+  const conIgualdad = (pie: PieFiscal) =>
+    pie.asignaciones.filter((x) => x.igualdad !== null).length;
+  const leidas = (pie: PieFiscal) =>
+    pie.asignaciones.filter((x) => x.procedencia === 'READ_FROM_DOCUMENT').length;
+
+  /*
+   * Y el residuo se mide **en proporción**, no en pesos. Un pie que deja
+   * ochenta y seis mil millones sin explicar sobre un detalle de un millón y
+   * medio no está un poco peor que otro: está leyendo cualquier cosa.
+   */
+  const sinExplicar = (pie: PieFiscal) => {
+    /*
+     * Cuidado con el residuo en `null`, que quiere decir **dos cosas**: que el
+     * pie cierra, y que no hay total con qué compararlo. Tratarlas igual fue un
+     * error medido: un pie que cerraba perfecto quedaba en el peor casillero y
+     * perdía contra otro que dejaba el veintiuno por ciento del comprobante sin
+     * explicar.
+     */
+    if (pie.total === null) return 1;
+    if (pie.residuo === null) return 0;
+    const escala = detalle && detalle.gt(0) ? detalle : pie.netoGravado;
+    if (!escala || escala.lte(0)) return 1;
+    return Math.min(1, pie.residuo.abs().div(escala).toNumber());
+  };
+
+  /*
+   * El residuo va **antes** que las igualdades, y eso fue un error medido. Una
+   * región que leyó cualquier cosa puede cumplir una igualdad por casualidad
+   * —un «22» que por el 5 % da «1»— y con las igualdades primero le ganaba a la
+   * lectura que traía el total del comprobante bien leído y cuadrando al cuatro
+   * por ciento. Una igualdad entre dos números inventados no es evidencia de
+   * nada; lo que no se puede fingir es cuánto del papel queda sin explicar.
+   */
+  /*
+   * Y antes que nada, que el pie sea **posible**.
+   *
+   * El total de un comprobante nunca es menor que lo que suman sus artículos:
+   * los impuestos y las percepciones se suman, no se restan. Es una relación
+   * fiscal, no un umbral ni un rango comercial, y descarta de un saque las
+   * lecturas degeneradas: una región que encontró un «4» suelto y lo llamó
+   * total cierra perfecto consigo misma —un concepto, un total, cero residuo—
+   * y con cualquier medida de consistencia interna le gana a la región que
+   * traía los treinta y siete mil quinientos que dice el papel.
+   */
+  const posible = (pie: PieFiscal) => {
+    if (pie.total === null || detalle === null || detalle.lte(0)) return true;
+    return pie.total.gte(detalle) || dentroDeLaPrecision(pie.total, detalle);
+  };
+
+  return (
+    Number(posible(b)) - Number(posible(a)) ||
+    Number(cierraConElDetalle(b)) - Number(cierraConElDetalle(a)) ||
+    sinExplicar(a) - sinExplicar(b) ||
+    conIgualdad(b) - conIgualdad(a) ||
+    leidas(b) - leidas(a) ||
+    b.asignaciones.length - a.asignaciones.length
   );
+}
+
+/**
+ * ¿Queda vetada esta etiqueta, mirando lo que tiene más cerca del número?
+ *
+ * Un veto descarta lo que hay **hasta** él. Si después del veto la etiqueta
+ * todavía nombra un concepto, ese concepto es el que está pegado al número y es
+ * el que vale: «C.U.I.T. 30-71596337-6  I.V.A. 21 %» tiene el CUIT adelante y
+ * el IVA al lado del importe.
+ */
+function vetada(etiqueta: string): boolean {
+  const fin = dondeTerminaElVeto(etiqueta);
+  if (fin === null) return false;
+  return conceptoSegunEtiqueta(desdeLaPalabra(etiqueta, fin)) === null;
+}
+
+/**
+ * Las candidatas de siempre: un número por línea, con el texto de su izquierda.
+ *
+ * Se conserva entera y compitiendo. Hay pies de una sola columna donde es la
+ * lectura correcta, y reemplazarla por la grilla sin dejarla competir sería
+ * cambiar un error por otro.
+ */
+function candidatasPorLineas(
+  fragmentos: Fragmento[],
+  opciones: OpcionesDelPie,
+  descartados: ReadonlySet<Fragmento>,
+  escala: FormatoDeColumna | null,
+): Candidata[] {
+  const lineas = lineasDelPie(fragmentos, opciones.alturaTipica);
 
   const candidatas: Candidata[] = [];
   for (const linea of lineas) {
     for (const fragmento of linea.numericos) {
+      if (descartados.has(fragmento)) continue;
       /*
        * Un número con el signo de porcentaje pegado es una **alícuota**, no un
        * importe. «Perc IIBB CABA 1,50 % 7.098,49» tiene los dos números en la
        * misma línea y con la misma etiqueta, y sin esta distinción el 1,50
-       * entraba como una segunda percepción de un peso cincuenta: el total del
-       * comprobante dejaba de cerrar por ese peso y medio y quedaba informado
-       * como calculado teniéndolo impreso en el papel.
+       * entraba como una segunda percepción de un peso cincuenta.
        */
       if (fragmento.texto.includes('%')) continue;
-      const lecturas = lecturasDeCelda(fragmento.texto, null);
-      if (lecturas.length === 0) continue;
       /*
-       * La etiqueta de su propia línea primero; si no dice nada reconocible, se
-       * mira una línea más arriba o más abajo. Ese segundo intento es el que
-       * recupera el pie de dos columnas —«Neto Gravado» a la izquierda y su
-       * importe al margen derecho, a dos alturas de renglón de distancia— sin
-       * ensuciar las etiquetas que sí estaban donde tenían que estar.
+       * La escala de la banda de importes se usa para **leer** el número, no
+       * para descartarlo.
+       *
+       * Descartar con ella acá costó una medición: la banda de un comprobante
+       * quedó armada con importes de dos decimales y su IVA, impreso con otra
+       * precisión, salió marcado como ajeno a la escala y desapareció del pie
+       * teniéndolo en el papel. La banda dice cómo se escriben los importes de
+       * ese recuadro, que es una guía para interpretar un número mutilado, y no
+       * una prueba de que un número no sea plata. Lo que sí prueba eso es la
+       * forma de un identificador —catorce dígitos corridos— y de eso se ocupa
+       * `pareceImporte`.
        */
+      const lecturas = lecturasDeCelda(fragmento.texto, escala);
+      if (lecturas.length === 0) continue;
+
       let etiqueta = linea.etiquetaDe(fragmento);
       let porEtiqueta = conceptoSegunEtiqueta(etiqueta);
       if (!porEtiqueta) {
@@ -688,6 +910,14 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       // Lo que viene pegado detrás de «RG» o de «Res.» es el número de una norma.
       if (linea.esIdentificadorDe(fragmento)) continue;
 
+      /*
+       * Y lo que la etiqueta **desmiente** tampoco entra, venga de la lectura
+       * por líneas o de la grilla. Que una frase diga otra cosa es una
+       * propiedad del papel, no del lector que la encontró: «PESO NETO» no es
+       * el neto gravado en ninguna de las dos lecturas.
+       */
+      if (vetada(etiqueta)) continue;
+
       candidatas.push({
         linea,
         fragmento,
@@ -698,7 +928,131 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       });
     }
   }
+  return candidatas;
+}
 
+/**
+ * Las candidatas de una región, armadas con la grilla.
+ *
+ * Cada fragmento numérico entra **una sola vez**, con la mejor de sus
+ * asociaciones: la que más familias independientes sostienen y, a igualdad,
+ * la que tiene su etiqueta más cerca. Las demás quedan disponibles como
+ * alternativas pero no producen una segunda candidata, porque una misma caja
+ * física no puede ocupar dos conceptos fiscales.
+ */
+function candidatasPorCasillas(
+  region: RegionDelPie,
+  opciones: OpcionesDelPie,
+  descartados: ReadonlySet<Fragmento>,
+  escalaDeImportes: FormatoDeColumna | null,
+): Candidata[] {
+  const lineas = lineasDelPie(
+    region.casillas.map((c) => c.fragmento),
+    opciones.alturaTipica,
+  );
+  const lineaDe = (fragmento: Fragmento): LineaFiscal =>
+    lineas.find((l) => l.numericos.includes(fragmento)) ?? lineas[0];
+
+  /*
+   * La columna de importes tiene una escala, igual que cualquier columna de la
+   * tabla, y se decide igual: con lo que está impreso en ella.
+   *
+   * Es lo que descarta el CAE. Un número de catorce cifras seguidas, en una
+   * columna donde todos los importes llevan su coma y sus dos decimales, no es
+   * un importe mal escrito: es otra cosa. La misma cuenta que impide leer un
+   * precio cien veces más grande impide leer un identificador como plata.
+   */
+  const candidatas: Candidata[] = [];
+  const usados = new Set<Fragmento>();
+
+  /*
+   * Qué números de la región **no** son importes por estar en otra columna.
+   *
+   * «Perc IIBB CABA   1,50   22.853,07» tiene dos números en la misma fila y
+   * con la misma etiqueta. El de la izquierda es el porcentaje y el de la
+   * derecha es la plata, y sin el signo de porcentaje impreso —que el OCR se
+   * come la mitad de las veces— el 1,50 entraba como una percepción de un peso
+   * cincuenta. No los distingue su magnitud: los distingue **en qué columna
+   * están**. Lo que está fuera de la columna de importes, en una fila que sí
+   * tiene un importe, es una alícuota, una cantidad o un código.
+   */
+  const enOtraColumna = descartados;
+
+  for (const asociacion of region.asociaciones) {
+    const fragmento = asociacion.numero;
+    if (usados.has(fragmento)) continue;
+    if (enOtraColumna.has(fragmento)) continue;
+
+    // Una alícuota no es un importe, venga de donde venga.
+    if (fragmento.texto.includes('%')) continue;
+
+    const lecturas = lecturasDeCelda(fragmento.texto, escalaDeImportes);
+    if (lecturas.length === 0) continue;
+    if (lecturas[0].ajenaALaEscala) continue;
+
+    /*
+     * Y lo que la etiqueta desmiente no entra. «PESO NETO» no es el neto
+     * gravado y «DESCUENTO TOTAL» no es el total: son frases que **contienen**
+     * la palabra buscada y dicen otra cosa. Acá se descarta la asociación, no el
+     * número: el mismo fragmento puede entrar por otra de sus asociaciones si
+     * alguna lo nombra de verdad.
+     */
+    if (vetada(asociacion.etiqueta)) continue;
+
+    const linea = lineaDe(fragmento);
+    if (linea && linea.esIdentificadorDe(fragmento)) continue;
+
+    usados.add(fragmento);
+    candidatas.push({
+      linea,
+      fragmento,
+      etiqueta: asociacion.etiqueta,
+      lecturas,
+      porEtiqueta: conceptoSegunEtiqueta(asociacion.etiqueta),
+      alicuota: alicuotaDeLaEtiqueta(asociacion.etiqueta),
+    });
+  }
+
+  /*
+   * Los números que ninguna asociación nombró entran igual, sin etiqueta: son
+   * los que después identifica una igualdad fiscal. Perderlos sería perder
+   * justamente los que el papel imprimió sin rótulo legible.
+   */
+  for (const casilla of region.casillas) {
+    if (!casilla.esNumero || usados.has(casilla.fragmento)) continue;
+    if (enOtraColumna.has(casilla.fragmento)) continue;
+    if (casilla.fragmento.texto.includes('%')) continue;
+    const lecturas = lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes);
+    if (lecturas.length === 0) continue;
+    if (lecturas[0].ajenaALaEscala) continue;
+    const linea = lineaDe(casilla.fragmento);
+    if (linea && linea.esIdentificadorDe(casilla.fragmento)) continue;
+    usados.add(casilla.fragmento);
+    candidatas.push({
+      linea,
+      fragmento: casilla.fragmento,
+      etiqueta: '',
+      lecturas,
+      porEtiqueta: null,
+      alicuota: null,
+    });
+  }
+
+  return candidatas;
+}
+
+/**
+ * Reconcilia el pie **de una región**, con las candidatas que esa región ofrece.
+ *
+ * Es el cuerpo de siempre. Lo que cambió es quién arma las candidatas: antes
+ * había una sola manera de asociar cada número con su etiqueta —el texto de su
+ * izquierda dentro de una ventana— y ahora hay varias, porque un pie es un
+ * recuadro con casillas y no una lista de líneas.
+ */
+function reconciliarConCandidatas(
+  candidatas: Candidata[],
+  opciones: OpcionesDelPie,
+): PieFiscal {
   const pie: PieFiscal = {
     netoGravado: null,
     noGravado: null,

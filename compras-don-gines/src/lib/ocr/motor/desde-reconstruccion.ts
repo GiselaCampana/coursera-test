@@ -550,6 +550,15 @@ function interpretarUnaVez(
     alturaTipica: tabla.alturaTipica,
     renglonesDelDetalle: tabla.renglones.length,
     desdeY: tabla.renglones[0]?.y ?? 0,
+    /*
+     * Dónde termina el detalle, para poder proponer el recuadro de totales como
+     * una región propia. Es el borde de abajo del último artículo y no su
+     * altura: un renglón ocupa alto, y cortar por el centro deja media línea
+     * del detalle adentro del pie.
+     */
+    finDelDetalle: tabla.renglones.length
+      ? Math.max(...tabla.renglones.map((r) => r.caja.y1))
+      : undefined,
   });
 
   return {
