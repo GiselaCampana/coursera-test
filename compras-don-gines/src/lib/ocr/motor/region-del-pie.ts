@@ -1,4 +1,5 @@
 import type { Caja, Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
+import { bienEscrito } from '@/lib/ocr/motor/formato-de-columna';
 
 /**
  * El pie fiscal leído como lo que es: **un recuadro con casillas**.
@@ -615,9 +616,29 @@ function apoyosDe(
  */
 export function pareceImporte(texto: string): boolean {
   if (texto.includes('%')) return false;
+  /*
+   * Un importe no tiene letras, salvo la unidad al final.
+   *
+   * «B2B.AR.1002097479» y «50/S108-TOTAL» limpian a algo con forma de número y
+   * son un identificador de sistema y un pedazo de leyenda: dejar que las
+   * letras se caigan en la limpieza convierte cualquier código en plata. Lo
+   * único que se admite pegado es la unidad —«18,38 kg»— porque eso sí es un
+   * número con su unidad impresa al lado.
+   */
+  if (/\p{L}/u.test(texto.replace(/\s*(kgs?|un|u|lts?|grs?)\.?\s*$/iu, ''))) return false;
   const limpio = texto.replace(/[^\d.,]/g, '');
   if (limpio === '') return false;
   if (esIdentificadorDeAfip(limpio)) return false;
+  /*
+   * Y está **bien escrito**: grupos de hasta tres cifras y una cola decimal
+   * corta, que es como se imprime la plata en las dos convenciones.
+   *
+   * El separador final se saca antes de preguntarlo. «$4.816.812,» es el total
+   * de un comprobante al que el OCR le comió los centavos, y exigirle la cola
+   * completa lo descartaba entero: perder el total impreso por dos dígitos que
+   * el lector no alcanzó es peor que conservarlo con su coma colgando.
+   */
+  if (!bienEscrito(limpio.replace(/[.,]$/, '')).si) return false;
   if (/[.,]\d{2}$/.test(limpio)) return true;
   return limpio.replace(/[.,]/g, '').length >= 3;
 }
@@ -784,7 +805,18 @@ export function noPuedenSerImportes(region: RegionDelPie): Set<Fragmento> {
           c.fragmento.caja.x0 >= casilla.fragmento.caja.x1 &&
           c.fragmento.caja.x1 <= importeDeLaFila.fragmento.caja.x0,
       );
-      if (!rotuloPropio) {
+      /*
+       * Y además tiene que **poder ser un porcentaje**.
+       *
+       * Ésta es la única restricción semántica que se aplica, y es universal:
+       * una alícuota está entre cero y cien en cualquier factura del mundo. Sin
+       * ella la regla se llevaba puesto el neto gravado de un comprobante donde
+       * la banda quedó mal ubicada —el pie tenía sus montos a la izquierda y el
+       * grupo más numeroso de números con forma de plata estaba en otro lado—,
+       * y un neto de treinta y tres mil no es la alícuota de nada.
+       */
+      const alicuotaPosible = comoPorcentaje(casilla.fragmento.texto);
+      if (!rotuloPropio && alicuotaPosible) {
         fuera.add(casilla.fragmento);
         continue;
       }
@@ -828,6 +860,19 @@ export function lecturasPisadas(
     }
   }
   return perdidas;
+}
+
+/**
+ * ¿Podría este número ser un porcentaje, por su valor?
+ *
+ * Entre cero y cien, que es lo que existe. No dice nada sobre rangos
+ * comerciales: dice que un número de cinco cifras no es una alícuota.
+ */
+function comoPorcentaje(texto: string): boolean {
+  const limpio = texto.replace(/[^\d.,]/g, '');
+  if (limpio === '') return false;
+  const entero = limpio.split(/[.,]/)[0].replace(/\D/g, '');
+  return entero.length > 0 && entero.length <= 3 && Number(entero) <= 100;
 }
 
 /**

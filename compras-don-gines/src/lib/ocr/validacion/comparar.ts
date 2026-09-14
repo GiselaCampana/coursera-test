@@ -133,6 +133,14 @@ export interface Comparacion {
   accionesHumanas: number;
   columnasPorConfirmar: number;
   celdasPorCorregir: number;
+  /** El pie desglosado en las cinco cuentas que piden trabajos distintos. */
+  balanceFiscal: {
+    asignacionesIncorrectas: number;
+    importesSinAsignar: number;
+    conceptosOmitidos: number;
+    conceptosInferidos: number;
+    sugerenciasDerivadas: number;
+  };
   veredicto: string;
 }
 
@@ -396,6 +404,32 @@ export function comparar(
     });
   });
 
+  /*
+   * **El pie se mide en cinco cuentas separadas, no en una.**
+   *
+   * «Doce incidencias» no dice nada: mezcla un concepto asignado mal —que es lo
+   * único grave— con un número que el motor leyó y dijo no saber nombrar, con
+   * uno que no está en la foto, con uno que dedujo de una igualdad y con una
+   * cuenta que ofreció como ayuda. Las cinco cosas piden trabajos distintos y
+   * sólo una es un error: afirmar un concepto equivocado.
+   */
+  const delPieMal = campos.filter((c) => c.causa === 'pie-fiscal' && c.leido !== null);
+  const leidosSinAsignar = new Set((acta.pie.sinAsignar ?? []).map((x) => x.valor));
+  const balanceFiscal = {
+    /** Un concepto asignado a un valor que el papel desmiente. El único error. */
+    asignacionesIncorrectas: delPieMal.filter((c) => !leidosSinAsignar.has(c.leido)).length,
+    /** El número está leído y sin concepto: una pregunta, no un error. */
+    importesSinAsignar: (acta.pie.sinAsignar ?? []).length,
+    /** El papel lo imprime y el motor no lo tiene por ningún lado. */
+    conceptosOmitidos: campos.filter((c) => c.causa === 'pie-fiscal' && c.leido === null).length,
+    /** Lo ubicó una igualdad fiscal, no su etiqueta. */
+    conceptosInferidos: acta.pie.asignaciones.filter(
+      (a) => a.procedencia === 'INFERRED_FROM_DOCUMENT_RELATIONS',
+    ).length,
+    /** Una cuenta ofrecida como ayuda, que no cuenta como dato. */
+    sugerenciasDerivadas: acta.pie.totalCalculado ? 1 : 0,
+  };
+
   const porCausa: Record<string, number> = {};
   for (const campo of campos) {
     if (!campo.causa) continue;
@@ -448,6 +482,7 @@ export function comparar(
     accionesHumanas: acta.bloqueosRaiz.length,
     columnasPorConfirmar,
     celdasPorCorregir,
+    balanceFiscal,
     veredicto: veredictoDe({
       coinciden,
       errores: campos.filter((c) => c.acierto === false).length,

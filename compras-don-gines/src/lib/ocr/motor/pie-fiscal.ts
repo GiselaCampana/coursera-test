@@ -1,10 +1,17 @@
 import { Decimal } from '@/lib/money';
 import type { Caja, Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
 import {
+  asignarRegion,
+  gobernadosPorUnVeto,
+  type AsignacionDeRegion,
+} from '@/lib/ocr/motor/asignacion-del-pie';
+import {
   desdeLaPalabra,
   dondeTerminaElVeto,
   lecturasPisadas,
   noPuedenSerImportes,
+  pareceImporte,
+  nombraOtraCosa,
   regionesDelPie,
   textosDeLaBanda,
   type RegionDelPie,
@@ -138,7 +145,16 @@ const ETIQUETAS: [ConceptoFiscal, string[]][] = [
   ['total', ['total', 'son pesos']],
 ];
 
-/** Qué tan parecida tiene que ser una etiqueta para contar como degradada. */
+/**
+ * Qué tan parecida tiene que ser una etiqueta para contar como degradada.
+ *
+ * Seis décimos, **y además** que las letras de la etiqueta aparezcan en orden
+ * dentro de la canónica. El umbral solo no alcanza y se midió: «recepción» se
+ * parece a «percepción» en ocho décimos, así que la línea del conforme de
+ * recepción de una factura entraba como una percepción de cuatro mil pesos, y
+ * subir el umbral lo bastante como para excluirla dejaba afuera «ubtota», que
+ * es «subtotal» con la primera letra comida.
+ */
 const PARECIDO_DE_ETIQUETA = 0.6;
 
 /**
@@ -305,6 +321,41 @@ export interface PieFiscal {
    * que poder ver cuál ganó y buscarla en la foto.
    */
   region?: string;
+  /** Contra qué otra región compitió, para poder auditar la elección. */
+  segundaRegion?: string | null;
+  /**
+   * Los importes que se leyeron dentro de la región y no se pudieron asignar.
+   *
+   * **Es un estado propio, distinto de faltar.** Un concepto ausente es un
+   * número que no está en la foto; esto es un número que sí está, que se leyó,
+   * y del que no se pudo probar qué concepto es. Mezclarlos oculta lo único que
+   * el motor averiguó y convierte una pregunta contestable —«¿qué es este
+   * número?»— en un campo vacío que nadie sabe de dónde llenar.
+   *
+   * Conserva todo lo que hace falta para contestarla mirando la foto: el texto
+   * tal como salió, su caja, su lectura, sus alternativas y de qué región es.
+   */
+  sinAsignar: ImporteSinAsignar[];
+}
+
+/**
+ * Un importe fiscal leído y sin concepto: `UNASSIGNED_FISCAL_AMOUNT`.
+ *
+ * Produce **una** acción humana —«¿qué es este número?»— y no una por cada
+ * campo que quedó vacío. La diferencia importa: cuatro campos sin llenar por un
+ * número sin asignar son un problema, no cuatro.
+ */
+export interface ImporteSinAsignar {
+  texto: string;
+  caja: Caja;
+  pasada: string;
+  confianza: number;
+  /** La lectura preferida del número, que es lo que el motor sí sabe. */
+  valor: Decimal | null;
+  /** Las demás lecturas del mismo fragmento. */
+  alternativas: string[];
+  /** De qué región salió. */
+  region: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,15 +560,32 @@ export function conceptoSegunEtiqueta(
   }
 
   let mejor: { concepto: ConceptoFiscal; parecido: number; exacta: boolean } | null = null;
+  const nombrados = new Set<ConceptoFiscal>();
   for (const [concepto, canonicas] of ETIQUETAS) {
     for (const canonica of canonicas) {
       const cuanto = cuantoSeParece(palabras, canonica);
       if (cuanto.parecido < PARECIDO_DE_ETIQUETA) continue;
+      if (cuanto.exacta) nombrados.add(concepto);
       if (!mejor || cuanto.parecido > mejor.parecido) {
         mejor = { concepto, parecido: cuanto.parecido, exacta: cuanto.exacta };
       }
     }
   }
+
+  /*
+   * Una etiqueta que nombra **dos conceptos** no nombra ninguno exactamente.
+   *
+   * El texto que el OCR junta a la izquierda de un importe es a veces media
+   * línea: «Neto — IVA — $» trae las dos palabras y no dice cuál de los dos
+   * números de esa fila es cuál. Tratarla como un rótulo exacto le daba al
+   * primer candidato la fuerza de una etiqueta impresa entera, y con eso se
+   * afirmaba un neto de seis mil donde el papel decía treinta mil.
+   *
+   * Sigue valiendo como parecido —la etiqueta dice algo— pero deja de ser la
+   * evidencia que cierra la discusión, así que el empate vuelve a decidir.
+   */
+  if (mejor && nombrados.size > 1) mejor = { ...mejor, exacta: false };
+
   return mejor;
 }
 
@@ -576,6 +644,16 @@ function cuantoSeParece(
   for (let i = 0; i + partes.length <= palabras.length; i += 1) {
     const ventana = palabras.slice(i, i + partes.length).join(' ');
     if (ventana === canonica) return { parecido: 1, exacta: true };
+    /*
+     * El parecido cuenta sólo si la ventana es una **lectura degradada** de la
+     * canónica: sus letras aparecen en orden dentro de ella, aunque falten. El
+     * OCR pierde caracteres y los rompe; no los reordena ni agrega palabras
+     * nuevas. «ubtota» y «ercepcio» pasan —son «subtotal» y «percepción» con
+     * letras comidas— y «recepción» no, porque para llegar a «percepción» hay
+     * que mover la erre de lugar. Son dos palabras distintas del castellano, no
+     * una lectura dañada de la otra.
+     */
+    if (!esUnaVersionComida(ventana, canonica)) continue;
     const cuanto = parecido(ventana, canonica);
     if (cuanto > mejor) mejor = cuanto;
   }
@@ -595,6 +673,26 @@ function cuantoSeParece(
   }
 
   return { parecido: mejor, exacta };
+}
+
+/**
+ * ¿Son las letras de `leida` las de `canonica`, en orden y sin agregar?
+ *
+ * Es la forma que tiene una palabra a la que el OCR le comió caracteres. Se
+ * admite **una** letra suelta que no encaje, porque el reconocedor también
+ * cambia una por otra —una ene por una eme, una ce por una e— y una sola
+ * sustitución no convierte una palabra en otra.
+ */
+function esUnaVersionComida(leida: string, canonica: string): boolean {
+  if (leida.length > canonica.length) return false;
+  let i = 0;
+  let sobran = 0;
+  for (const letra of leida) {
+    const donde = canonica.indexOf(letra, i);
+    if (donde === -1) sobran += 1;
+    else i = donde + 1;
+  }
+  return sobran <= 1;
 }
 
 /**
@@ -724,33 +822,349 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
    */
   const escalaDeImportes = formatoDeColumna(regiones.flatMap((r) => textosDeLaBanda(r)));
 
-  const juegos: { origen: string; candidatas: Candidata[] }[] = [
+  /*
+   * Qué números tienen, **en la grilla**, una etiqueta que los explica como otra
+   * cosa.
+   *
+   * Vale para las dos lecturas. La de líneas busca la etiqueta dentro de una
+   * ventana y a veces la corta: en un comprobante del banco el «Saldo Ac.» le
+   * queda afuera y su importe terminaba preguntado como si nadie supiera qué
+   * es, teniéndolo escrito al lado. Lo que el papel explica no se pregunta.
+   */
+  const vetadosPorLaGrilla = new Set<string>();
+  for (const region of regiones) {
+    for (const fragmento of gobernadosPorUnVeto(region, nombraOtraCosa, opciones.alturaTipica)) {
+      vetadosPorLaGrilla.add(`${fragmento.texto}@${fragmento.caja.x0.toFixed(4)}`);
+    }
+  }
+
+
+  const juegos: {
+    origen: string;
+    candidatas: Candidata[];
+    asignacion: AsignacionDeRegion | null;
+  }[] = [
     {
       origen: 'líneas',
       candidatas: candidatasPorLineas(delPie, opciones, descartados, escalaDeImportes),
+      asignacion: null,
     },
   ];
 
   for (const region of regiones) {
-    juegos.push({
-      origen: region.origen,
-      candidatas: candidatasPorCasillas(region, opciones, descartados, escalaDeImportes),
-    });
+    const { candidatas, asignacion } = candidatasPorCasillas(
+      region,
+      opciones,
+      descartados,
+      escalaDeImportes,
+    );
+    juegos.push({ origen: region.origen, candidatas, asignacion });
   }
 
   let mejor: PieFiscal | null = null;
   let origenElegido = 'ninguna';
+  let segundoOrigen: string | null = null;
+  let mejorEsGlobal = false;
   for (const juego of juegos) {
     if (juego.candidatas.length === 0) continue;
     const pie = reconciliarConCandidatas(juego.candidatas, opciones);
-    if (mejor === null || compararPies(pie, mejor, opciones.sumaDelDetalle) < 0) {
+    /*
+     * Los importes que la región leyó y **el pie no asignó** viajan con él.
+     *
+     * Se calculan contra el resultado y no contra la asignación geométrica, y
+     * por dos razones. Una, que después de la geometría todavía puede
+     * identificarlos una igualdad fiscal, y un número que la aritmética ubicó
+     * tiene concepto. La otra, que así vale para las dos lecturas: la de líneas
+     * no arma una grilla y sin esto sus importes huérfanos desaparecían en
+     * silencio, que es exactamente lo que no puede pasar.
+     *
+     * No son un `null` ni una omisión: el número está en la foto, se leyó, y lo
+     * único que falta es saber qué concepto es.
+     */
+    const asignados = new Set(
+      pie.asignaciones.map((a) => `${a.origen.texto}@${a.origen.caja.x0.toFixed(4)}`),
+    );
+
+    /*
+     * Y se pregunta **sólo por los del pie**, no por los de la tabla.
+     *
+     * La región de líneas empieza donde empieza el detalle, así que abarca los
+     * precios y los subtotales de cada artículo. Ésos no son importes fiscales
+     * sin asignar: son las celdas de la tabla, que tienen su propio circuito de
+     * revisión. Lo que califica es estar debajo del último artículo **y** en la
+     * banda donde el recuadro alinea sus montos, que es la definición de «un
+     * importe del pie».
+     */
+    const enElPie = (fragmento: Fragmento) => {
+      const centro = (fragmento.caja.y0 + fragmento.caja.y1) / 2;
+      if (opciones.finDelDetalle !== undefined && centro < opciones.finDelDetalle) return false;
+      return regiones.some((r) => r.esImporte(fragmento));
+    };
+    /*
+     * Y el valor ya asignado tampoco vuelve a preguntarse.
+     *
+     * El mismo número lo leen varias pasadas y cada una deja su fragmento en un
+     * lugar apenas distinto, así que comparar por posición no alcanza: el neto
+     * aparecía asignado y, un milímetro más allá, preguntado.
+     */
+    const valoresAsignados = new Set(pie.asignaciones.map((a) => a.valor.toString()));
+    /*
+     * El largo máximo sale de los importes **ya asignados**, no de la banda.
+     *
+     * Sacarlo de la banda es circular: el token de cuarenta y un dígitos está
+     * en la banda, así que él mismo subía el techo y se dejaba pasar. Los
+     * asignados son los que tienen un concepto probado, y son la única
+     * referencia de cuántas cifras imprime este comprobante.
+     */
+    const digitosDeLaBanda = Math.max(
+      ...pie.asignaciones.map((a) => digitos(a.origen.texto)),
+      0,
+    );
+
+    const vistos = new Set<string>();
+    pie.sinAsignar = [];
+    for (const candidata of juego.candidatas) {
+      const clave = `${candidata.fragmento.texto}@${candidata.fragmento.caja.x0.toFixed(4)}`;
+      if (asignados.has(clave) || vistos.has(clave)) continue;
+      const valor = candidata.lecturas[0]?.valor ?? null;
+      if (valor !== null && valoresAsignados.has(valor.toString())) continue;
+      // Sólo lo que tiene forma de plata: un resto de la grilla no es una
+      // pregunta que alguien pueda contestar.
+      if (!pareceImporte(candidata.fragmento.texto)) continue;
+      if (!enElPie(candidata.fragmento)) continue;
+      /*
+       * Lo que el papel **ya explica** no se pregunta. Un saldo de cuenta
+       * corriente no está sin asignar: está asignado a otra cosa, y el papel lo
+       * dice. Preguntarlo sería pedirle a una persona que confirme lo que ya
+       * leímos.
+       */
+      if (vetada(candidata.etiqueta) || vetadosPorLaGrilla.has(clave)) continue;
+      /*
+       * Y tampoco lo que la banda de importes desmiente. Un blob de cuarenta
+       * cifras en un recuadro donde los montos llevan su coma y sus dos
+       * decimales no es un importe sin concepto: no es un importe.
+       */
+      if (candidata.lecturas[0]?.ajenaALaEscala) continue;
+      /*
+       * Ni lo que tiene **más cifras que cualquier importe de la banda**. El
+       * largo sale del propio comprobante, no de una constante: si el recuadro
+       * alinea montos de hasta nueve dígitos, un token de cuarenta y uno no es
+       * uno de ellos leído mal.
+       */
+      if (digitos(candidata.fragmento.texto) > digitosDeLaBanda) continue;
+      vistos.add(clave);
+      pie.sinAsignar.push({
+        texto: candidata.fragmento.texto,
+        caja: candidata.fragmento.caja,
+        pasada: candidata.fragmento.pasada,
+        confianza: candidata.fragmento.confianza,
+        valor,
+        alternativas: candidata.lecturas.slice(1).map((l) => l.valor.toString()),
+        region: juego.origen,
+      });
+    }
+
+    /*
+     * A igualdad de todo lo demás gana la que **resolvió la correspondencia
+     * entera**.
+     *
+     * No es una preferencia por la novedad. La lectura por líneas empareja cada
+     * número con el texto que tiene más cerca, una decisión por vez; la de la
+     * grilla elige la asignación completa de menor costo, donde una etiqueta
+     * toma un solo importe, un importe toma una sola etiqueta y las
+     * asociaciones no se cruzan. La segunda está comprobada contra
+     * restricciones que la primera ni siquiera mira, así que cuando las dos
+     * explican el papel igual de bien, la comprobada vale más.
+     *
+     * Se midió: sobre una foto del lote las dos lecturas daban exactamente un
+     * concepto con exactamente el mismo apoyo, y el empate lo resolvía el orden
+     * en que se habían probado. Una tenía la percepción verdadera y la otra el
+     * total del comprobante puesto en su lugar.
+     */
+    const comparacion = compararPies(pie, mejor ?? pie, opciones.sumaDelDetalle);
+    const desempata = comparacion === 0 && juego.asignacion !== null && !mejorEsGlobal;
+    if (mejor === null || comparacion < 0 || desempata) {
       mejor = pie;
       origenElegido = juego.origen;
+      mejorEsGlobal = juego.asignacion !== null;
+      segundoOrigen = mejor === pie ? segundoOrigen : segundoOrigen;
     }
   }
 
   if (mejor === null) return reconciliarConCandidatas([], opciones);
-  return { ...mejor, region: origenElegido };
+
+  /*
+   * **Una igualdad perfecta no convierte cualquier número sin etiqueta en el
+   * concepto que falta.**
+   *
+   * La aritmética del pie es potentísima y por eso hay que acotarla: con cuatro
+   * conceptos y un total, siempre hay algún número de la hoja que hace cerrar
+   * la cuenta, y tomarlo es fabricar un dato. Una asignación inferida sólo se
+   * conserva cuando las cinco cosas se cumplen a la vez:
+   *
+   *  1. es la **única** que satisface el grafo —si hay dos, no hay una;
+   *  2. usa un fragmento realmente leído del papel;
+   *  3. la escala de ese fragmento está respaldada por la banda de importes;
+   *  4. el resto de los conceptos tiene asignaciones independientes, así que la
+   *     igualdad comprueba y no sostiene sola todo el pie;
+   *  5. la segunda solución queda por debajo del margen.
+   *
+   * Lo que no cumple las cinco no se descarta ni se inventa: vuelve a ser un
+   * importe leído sin concepto, que es lo que honestamente es.
+   */
+  /*
+   * **Dos asignaciones con el mismo apoyo no son una respuesta: son dos.**
+   *
+   * Cuando el margen contra la segunda es cero y las dos dicen valores
+   * distintos, el papel no alcanzó para elegir. Quedarse con la primera es
+   * tirar una moneda y escribirla como si fuera un dato leído; sobre el lote
+   * eso producía tres conceptos afirmados mal, y en los tres casos **la segunda
+   * era la correcta**, que es la prueba de que no había nada que sostuviera a la
+   * primera.
+   *
+   * Así que el número vuelve a lo que honestamente es: un importe leído del que
+   * no se pudo probar qué concepto es, y el pie queda parcial.
+   */
+  const empatadas = mejor.asignaciones.filter(
+    (a) =>
+      a.segunda !== null &&
+      a.margen === 0 &&
+      /*
+       * **Dos conceptos**, no dos lecturas del mismo número. La segunda mejor
+       * de una celda suele ser ella misma cien veces más grande, y eso no es un
+       * empate entre conceptos: es la misma asignación con una lectura peor, que
+       * ya perdió donde tenía que perder.
+       */
+      !a.segunda.valor.eq(a.valor) &&
+      /*
+       * Y sólo cuando la etiqueta **no lo nombra exactamente**.
+       *
+       * Un rótulo impreso entero es evidencia fuerte y no se tira por un empate
+       * de costo: «Total 121.000,00» dice lo que dice. El empate importa donde
+       * la etiqueta salió dañada o no dice nada, que es donde la elección entre
+       * dos candidatas es realmente una moneda al aire, y es el caso que se
+       * midió: tres conceptos afirmados con etiquetas ilegibles y, en los tres,
+       * la segunda opción era la correcta.
+       */
+      a.etiqueta?.exacta !== true &&
+      /*
+       * Ni cuando **cumple una igualdad fiscal**. Ahí el cierre no está
+       * eligiendo entre dos candidatas parecidas: está confirmando una, que es
+       * para lo único que sirve. El total de un comprobante cuya etiqueta salió
+       * ilegible pero que da exactamente neto + IVA + percepciones está
+       * identificado, y desasignarlo por un empate de costo geométrico sería
+       * tirar la evidencia más fuerte que tiene el pie.
+       */
+      a.igualdad === null &&
+      /*
+       * Y **dos números distintos**, no el mismo leído en otra escala. La
+       * segunda mejor de una celda suele ser ella misma cien veces más grande,
+       * y eso no es un empate entre dos respuestas: es la misma asignación con
+       * una lectura peor, que ya perdió donde tenía que perder.
+       */
+      !esLaMismaEnOtraEscala(a.valor, a.segunda.valor),
+  );
+  for (const empatada of empatadas) desasignar(mejor, empatada, origenElegido);
+
+  const inferidas = mejor.asignaciones.filter(
+    (a) => a.procedencia === 'INFERRED_FROM_DOCUMENT_RELATIONS',
+  );
+  const conEtiquetaPropia = mejor.asignaciones.filter(
+    (a) => a.procedencia === 'READ_FROM_DOCUMENT',
+  ).length;
+
+  for (const inferida of inferidas) {
+    const unica = inferida.segunda === null || inferida.margen > 0;
+    const independientes = conEtiquetaPropia >= 1;
+    const respaldada = escalaDeImportes === null || inferida.lecturaLiteral !== null;
+    if (unica && independientes && respaldada) continue;
+
+    desasignar(mejor, inferida, origenElegido);
+  }
+
+  /*
+   * Y con qué compitió, para poder auditar la decisión: dos regiones del mismo
+   * comprobante dan dos pies distintos y quien revise tiene que poder ver cuál
+   * ganó, contra cuál, y buscarlas en la foto.
+   */
+  segundoOrigen =
+    juegos
+      .filter((j) => j.origen !== origenElegido)
+      .map((j) => j.origen)
+      .find(() => true) ?? null;
+
+  return { ...mejor, region: origenElegido, segundaRegion: segundoOrigen };
+}
+
+/**
+ * ¿Son estos dos valores el mismo número leído con la coma en otro lugar?
+ *
+ * Uno es el otro multiplicado o dividido por una potencia de diez. No es un
+ * desempate entre dos conceptos: es una celda con dos lecturas, y de ésas se
+ * ocupa la escala de la columna.
+ */
+function esLaMismaEnOtraEscala(a: Decimal, b: Decimal): boolean {
+  if (a.lte(0) || b.lte(0)) return false;
+  const mayor = Decimal.max(a, b);
+  const menor = Decimal.min(a, b);
+  const veces = mayor.div(menor);
+  for (const potencia of [10, 100, 1000, 10000]) {
+    if (veces.minus(potencia).abs().lt('0.0001')) return true;
+  }
+  return false;
+}
+
+/** Cuántas cifras tiene un texto, sin separadores ni nada más. */
+function digitos(texto: string): number {
+  return texto.replace(/\D/g, '').length;
+}
+
+/**
+ * Devuelve un concepto asignado a su estado honesto: un importe sin asignar.
+ *
+ * El número sigue estando en la foto y sigue leído; lo que se retira es la
+ * afirmación de qué concepto es. Conserva su texto, su caja, su lectura y sus
+ * alternativas, porque con eso una persona lo encuentra y lo contesta.
+ */
+function desasignar(pie: PieFiscal, asignacion: AsignacionFiscal, region: string): void {
+  pie.asignaciones = pie.asignaciones.filter((a) => a !== asignacion);
+  pie.sinAsignar = [
+    ...pie.sinAsignar,
+    {
+      texto: asignacion.origen.texto,
+      caja: asignacion.origen.caja,
+      pasada: asignacion.origen.pasada,
+      confianza: asignacion.origen.confianza,
+      valor: asignacion.valor,
+      alternativas: asignacion.alternativas.map((x) => x.valor.toString()),
+      region,
+    },
+  ];
+  quitarDelPie(pie, asignacion);
+  if (pie.estado === 'completo') pie.estado = 'parcial';
+}
+
+/**
+ * Saca del resumen un concepto que dejó de estar asignado.
+ *
+ * El pie tiene los valores por duplicado —en los campos que consume el resto de
+ * la aplicación y en la lista de asignaciones que explica de dónde salió cada
+ * uno— y desasignar uno tiene que limpiar los dos lados. Dejarlo a medias
+ * mostraría un neto en la pantalla y ninguna procedencia detrás.
+ */
+function quitarDelPie(pie: PieFiscal, asignacion: AsignacionFiscal): void {
+  if (asignacion.concepto === 'netoGravado') pie.netoGravado = null;
+  if (asignacion.concepto === 'noGravado') pie.noGravado = null;
+  if (asignacion.concepto === 'total') {
+    pie.total = null;
+    pie.totalCalculado = false;
+  }
+  if (asignacion.concepto === 'iva') {
+    pie.iva = pie.iva.filter((x) => !x.valor.eq(asignacion.valor));
+  }
+  if (asignacion.concepto === 'percepcion') {
+    pie.percepciones = pie.percepciones.filter((x) => !x.valor.eq(asignacion.valor));
+  }
 }
 
 /**
@@ -945,7 +1359,7 @@ function candidatasPorCasillas(
   opciones: OpcionesDelPie,
   descartados: ReadonlySet<Fragmento>,
   escalaDeImportes: FormatoDeColumna | null,
-): Candidata[] {
+): { candidatas: Candidata[]; asignacion: AsignacionDeRegion } {
   const lineas = lineasDelPie(
     region.casillas.map((c) => c.fragmento),
     opciones.alturaTipica,
@@ -954,91 +1368,84 @@ function candidatasPorCasillas(
     lineas.find((l) => l.numericos.includes(fragmento)) ?? lineas[0];
 
   /*
-   * La columna de importes tiene una escala, igual que cualquier columna de la
-   * tabla, y se decide igual: con lo que está impreso en ella.
+   * Qué casillas de la región pueden ser un importe.
    *
-   * Es lo que descarta el CAE. Un número de catorce cifras seguidas, en una
-   * columna donde todos los importes llevan su coma y sus dos decimales, no es
-   * un importe mal escrito: es otra cosa. La misma cuenta que impide leer un
-   * precio cien veces más grande impide leer un identificador como plata.
+   * Se filtra **antes** de asignar, y ése es el orden correcto: una alícuota,
+   * un identificador o una lectura pisada no entran al problema de
+   * correspondencia, porque no son candidatos a nada. Meterlos y confiar en que
+   * la asignación los descarte sería pedirle a la geometría que conteste una
+   * pregunta que ya contestó el formato.
    */
-  const candidatas: Candidata[] = [];
-  const usados = new Set<Fragmento>();
+  const numeros = region.casillas.filter((casilla) => {
+    if (!casilla.esNumero) return false;
+    if (descartados.has(casilla.fragmento)) return false;
+    if (casilla.fragmento.texto.includes('%')) return false;
+    const lecturas = lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes);
+    if (lecturas.length === 0) return false;
+    const linea = lineaDe(casilla.fragmento);
+    if (linea && linea.esIdentificadorDe(casilla.fragmento)) return false;
+    return true;
+  });
 
   /*
-   * Qué números de la región **no** son importes por estar en otra columna.
+   * Y la correspondencia se resuelve **entera**, no número por número.
    *
-   * «Perc IIBB CABA   1,50   22.853,07» tiene dos números en la misma fila y
-   * con la misma etiqueta. El de la izquierda es el porcentaje y el de la
-   * derecha es la plata, y sin el signo de porcentaje impreso —que el OCR se
-   * come la mitad de las veces— el 1,50 entraba como una percepción de un peso
-   * cincuenta. No los distingue su magnitud: los distingue **en qué columna
-   * están**. Lo que está fuera de la columna de importes, en una fila que sí
-   * tiene un importe, es una alícuota, una cantidad o un código.
+   * Lo codicioso se equivoca siempre de la misma manera: dos etiquetas y dos
+   * importes un poco corridos se emparejan cruzados, cada uno con el que tiene
+   * más cerca, y sale una lectura coherente y falsa. Acá se elige la asignación
+   * completa de menor costo, donde cada etiqueta toma a lo sumo un importe y
+   * cada importe a lo sumo una etiqueta.
    */
-  const enOtraColumna = descartados;
+  const asignacion = asignarRegion(region, numeros, {
+    alturaTipica: opciones.alturaTipica,
+    nombraConcepto: (etiqueta) => conceptoSegunEtiqueta(etiqueta)?.concepto ?? null,
+  });
 
-  for (const asociacion of region.asociaciones) {
-    const fragmento = asociacion.numero;
-    if (usados.has(fragmento)) continue;
-    if (enOtraColumna.has(fragmento)) continue;
-
-    // Una alícuota no es un importe, venga de donde venga.
-    if (fragmento.texto.includes('%')) continue;
-
-    const lecturas = lecturasDeCelda(fragmento.texto, escalaDeImportes);
-    if (lecturas.length === 0) continue;
-    if (lecturas[0].ajenaALaEscala) continue;
-
-    /*
-     * Y lo que la etiqueta desmiente no entra. «PESO NETO» no es el neto
-     * gravado y «DESCUENTO TOTAL» no es el total: son frases que **contienen**
-     * la palabra buscada y dicen otra cosa. Acá se descarta la asociación, no el
-     * número: el mismo fragmento puede entrar por otra de sus asociaciones si
-     * alguna lo nombra de verdad.
-     */
-    if (vetada(asociacion.etiqueta)) continue;
-
-    const linea = lineaDe(fragmento);
-    if (linea && linea.esIdentificadorDe(fragmento)) continue;
-
-    usados.add(fragmento);
+  const candidatas: Candidata[] = [];
+  for (const par of asignacion.pares) {
+    const fragmento = par.numero.fragmento;
+    const etiqueta = etiquetaEfectiva(par.etiqueta.texto);
     candidatas.push({
-      linea,
+      linea: lineaDe(fragmento),
       fragmento,
-      etiqueta: asociacion.etiqueta,
-      lecturas,
-      porEtiqueta: conceptoSegunEtiqueta(asociacion.etiqueta),
-      alicuota: alicuotaDeLaEtiqueta(asociacion.etiqueta),
+      etiqueta,
+      lecturas: lecturasDeCelda(fragmento.texto, escalaDeImportes),
+      porEtiqueta: conceptoSegunEtiqueta(etiqueta),
+      alicuota: alicuotaDeLaEtiqueta(par.etiqueta.texto),
     });
   }
 
   /*
-   * Los números que ninguna asociación nombró entran igual, sin etiqueta: son
-   * los que después identifica una igualdad fiscal. Perderlos sería perder
+   * Los importes que quedaron sin etiqueta entran igual, **sin** ella: son los
+   * que después puede identificar una igualdad fiscal, y los que si no se
+   * identifican quedan explícitamente sin asignar. Perderlos acá sería perder
    * justamente los que el papel imprimió sin rótulo legible.
    */
-  for (const casilla of region.casillas) {
-    if (!casilla.esNumero || usados.has(casilla.fragmento)) continue;
-    if (enOtraColumna.has(casilla.fragmento)) continue;
-    if (casilla.fragmento.texto.includes('%')) continue;
-    const lecturas = lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes);
-    if (lecturas.length === 0) continue;
-    if (lecturas[0].ajenaALaEscala) continue;
-    const linea = lineaDe(casilla.fragmento);
-    if (linea && linea.esIdentificadorDe(casilla.fragmento)) continue;
-    usados.add(casilla.fragmento);
+  for (const casilla of asignacion.sinAsignar) {
     candidatas.push({
-      linea,
+      linea: lineaDe(casilla.fragmento),
       fragmento: casilla.fragmento,
       etiqueta: '',
-      lecturas,
+      lecturas: lecturasDeCelda(casilla.fragmento.texto, escalaDeImportes),
       porEtiqueta: null,
       alicuota: null,
     });
   }
 
-  return candidatas;
+  return { candidatas, asignacion };
+}
+
+/**
+ * La etiqueta que hay que usar, con el veto ya aplicado sobre la frase.
+ *
+ * Un veto se come lo que hay **hasta** él y deja lo que sigue: la frase entera
+ * decide su alcance primero y su significado después. Si después del veto no
+ * queda nada, la etiqueta no nombra nada y el importe queda sin asignar, que es
+ * distinto de desaparecer.
+ */
+function etiquetaEfectiva(texto: string): string {
+  const fin = dondeTerminaElVeto(texto);
+  return fin === null ? texto : desdeLaPalabra(texto, fin);
 }
 
 /**
@@ -1065,6 +1472,7 @@ function reconciliarConCandidatas(
     estado: 'ausente',
     faltantes: [],
     residuo: null,
+    sinAsignar: [],
   };
 
   const usadas = new Set<Fragmento>();

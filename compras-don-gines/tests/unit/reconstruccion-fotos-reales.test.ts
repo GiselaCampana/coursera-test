@@ -430,7 +430,8 @@ describe('qué le queda por resolver a una persona', () => {
      */
     expect(
       BARRAZA.resumen.desglose.columnasSinReconocer +
-        BARRAZA.resumen.desglose.escalasSinDecidir,
+        BARRAZA.resumen.desglose.escalasSinDecidir +
+        BARRAZA.resumen.desglose.importesSinAsignar,
     ).toBe(BARRAZA.resumen.bloqueosUnicos);
     expect(BARRAZA.resumen.desglose.renglonesSinProbar).toBe(0);
 

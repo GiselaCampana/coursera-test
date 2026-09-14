@@ -143,7 +143,9 @@ describe('las igualdades reconocen lo que las etiquetas no', () => {
     expect(pie.total?.toFixed(2)).toBe('1210.00');
     const delTotal = pie.asignaciones.find((a) => a.concepto === 'total')!;
     expect(delTotal.igualdad).toContain('= total');
-    expect(delTotal.etiqueta?.exacta).toBe(false);
+    // La etiqueta no lo nombra —no es una lectura comida de «total»— así que
+    // lo que lo identifica es la igualdad, no el rótulo.
+    expect(delTotal.etiqueta?.exacta ?? false).toBe(false);
   });
 
   it('una línea fiscal en el tercio central de la página sigue siendo del pie', () => {
@@ -580,7 +582,14 @@ describe('sobre las cuatro facturas reales', () => {
      * devolvió «EATAL EPATAL» donde el papel dice «TOTAL».
      */
     const delTotal = pie.asignaciones.find((a) => a.concepto === 'total')!;
-    expect(delTotal.etiqueta?.exacta).toBe(false);
+    /*
+     * Lo que lo identifica es la **igualdad**: da exactamente neto + IVA +
+     * percepciones. Que además se haya recuperado la palabra «TOTAL» de la
+     * misma línea es una mejora posterior de la lectura de etiquetas y no
+     * cambia lo que esta prueba mide: el valor sale del papel y la relación lo
+     * confirma.
+     */
+    expect(delTotal.procedencia).toBe('READ_FROM_DOCUMENT');
     expect(delTotal.igualdad).toContain('= total');
   });
 

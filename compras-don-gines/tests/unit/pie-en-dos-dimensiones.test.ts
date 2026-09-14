@@ -8,6 +8,10 @@ import {
   regionesDelPie,
 } from '@/lib/ocr/motor/region-del-pie';
 import { reconciliarPie } from '@/lib/ocr/motor/pie-fiscal';
+import { asignarRegion, etiquetasDe } from '@/lib/ocr/motor/asignacion-del-pie';
+import { interpretarReconstruccion } from '@/lib/ocr/motor/desde-reconstruccion';
+import { soloBloqueantes } from '@/lib/ocr/motor/pendientes';
+import { evidencia } from '@/../tests/fixtures/evidencia-sintetica';
 import { Decimal } from '@/lib/money';
 import type { Fragmento } from '@/lib/ocr/reconstruccion/evidencia';
 import { palabra } from '@/../tests/fixtures/evidencia-sintetica';
@@ -490,5 +494,395 @@ describe('las regiones compiten enteras', () => {
 
     const resultado = pie(fragmentos, '100000.00');
     expect(resultado.region).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. La correspondencia se resuelve entera, no número por número
+// ---------------------------------------------------------------------------
+
+describe('la asignación es global dentro de la región', () => {
+  it('etiquetas arriba e importes abajo: cada valor queda en su columna', () => {
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['NETO', 0.50],
+        ['IVA', 0.66],
+        ['TOTAL', 0.82],
+      ]),
+      ...filaDelPie(0.42, [
+        ['100.000,00', 0.50],
+        ['21.000,00', 0.66],
+        ['121.000,00', 0.82],
+      ]),
+    ]);
+    const numeros = region.casillas.filter((c) => c.esNumero);
+    const { pares } = asignarRegion(region, numeros, {
+      alturaTipica: ALTURA,
+      nombraConcepto: (e) => (/neto|iva|total/i.test(e) ? 'algo' : null),
+    });
+
+    const porValor = new Map(pares.map((p) => [p.numero.fragmento.texto, p.etiqueta.texto]));
+    expect(porValor.get('100.000,00')).toBe('NETO');
+    expect(porValor.get('21.000,00')).toBe('IVA');
+    expect(porValor.get('121.000,00')).toBe('TOTAL');
+    for (const par of pares) expect(par.relacion).toBe('encima');
+  });
+
+  it('etiquetas a la izquierda e importes a la derecha: cada valor queda en su fila', () => {
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['Neto', 0.58],
+        ['100.000,00', 0.82],
+      ]),
+      ...filaDelPie(0.42, [
+        ['IVA', 0.58],
+        ['21.000,00', 0.82],
+      ]),
+      ...filaDelPie(0.44, [
+        ['Total', 0.58],
+        ['121.000,00', 0.82],
+      ]),
+    ]);
+    const { pares } = asignarRegion(region, region.casillas.filter((c) => c.esNumero), {
+      alturaTipica: ALTURA,
+      nombraConcepto: (e) => (/neto|iva|total/i.test(e) ? 'algo' : null),
+    });
+
+    const porValor = new Map(pares.map((p) => [p.numero.fragmento.texto, p.etiqueta.texto]));
+    expect(porValor.get('100.000,00')).toBe('Neto');
+    expect(porValor.get('21.000,00')).toBe('IVA');
+    expect(porValor.get('121.000,00')).toBe('Total');
+    for (const par of pares) expect(par.relacion).toBe('a la izquierda');
+  });
+
+  it('una etiqueta partida en varias cajas se reconstruye antes de buscar palabras', () => {
+    /*
+     * El OCR devuelve «Percepción IIBB CABA» en tres cajas, y a veces en cinco.
+     * La frase es la unidad que tiene significado: **primero el alcance,
+     * después el sentido**.
+     */
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['Percepcion', 0.50],
+        ['IIBB', 0.60],
+        ['CABA', 0.66],
+        ['1.500,00', 0.82],
+      ]),
+    ]);
+    const etiquetas = etiquetasDe(region);
+    const entera = etiquetas.find((e) => e.texto.includes('Percepcion'));
+    expect(entera?.texto).toBe('Percepcion IIBB CABA');
+    expect(entera?.fragmentos).toHaveLength(3);
+  });
+
+  it('de dos asociaciones cercanas gana la que respeta la grilla completa', () => {
+    /*
+     * Dos etiquetas y dos importes, con la segunda etiqueta más cerca del
+     * primer importe que su propia etiqueta. Lo codicioso emparejaría cruzado;
+     * lo global no puede, porque una etiqueta sólo alcanza el primer importe
+     * que le corresponde y cada importe toma una sola etiqueta.
+     */
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['Neto', 0.40],
+        ['100.000,00', 0.62],
+      ]),
+      ...filaDelPie(0.42, [
+        ['Total', 0.40],
+        ['121.000,00', 0.62],
+      ]),
+    ]);
+    const { pares } = asignarRegion(region, region.casillas.filter((c) => c.esNumero), {
+      alturaTipica: ALTURA,
+      nombraConcepto: (e) => (/neto|total/i.test(e) ? 'algo' : null),
+    });
+
+    const porValor = new Map(pares.map((p) => [p.numero.fragmento.texto, p.etiqueta.texto]));
+    expect(porValor.get('100.000,00')).toBe('Neto');
+    expect(porValor.get('121.000,00')).toBe('Total');
+  });
+
+  it('ninguna etiqueta toma dos importes, y ningún importe dos etiquetas', () => {
+    /*
+     * Una etiqueta puede alcanzar dos importes a la vez: el de su fila, a la
+     * derecha, y el de su columna, debajo. Sin exclusividad se quedaría con los
+     * dos y el segundo —que no tiene rótulo propio— aparecería nombrado por una
+     * etiqueta que ya nombró a otro.
+     */
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['Neto', 0.58],
+        ['100.000,00', 0.82],
+      ]),
+      // Debajo de «Neto», sin rótulo propio: la misma etiqueta lo alcanza.
+      ...filaDelPie(0.42, [['21.000,00', 0.58]]),
+    ]);
+    const { pares, sinAsignar } = asignarRegion(
+      region,
+      region.casillas.filter((c) => c.esNumero),
+      { alturaTipica: ALTURA, nombraConcepto: () => 'algo' },
+    );
+
+    expect(new Set(pares.map((p) => p.etiqueta)).size).toBe(pares.length);
+    expect(new Set(pares.map((p) => p.numero)).size).toBe(pares.length);
+    // Y el que se quedó sin etiqueta queda visible, no repartido.
+    expect(pares.length + sinAsignar.length).toBe(2);
+    expect(pares).toHaveLength(1);
+  });
+
+  it('la cercanía sola no asocia nada', () => {
+    /*
+     * Un texto pegado a un importe que no nombra ningún concepto no produce
+     * arista. Si la cercanía alcanzara, cualquier leyenda del pie bautizaría al
+     * número que tiene al lado.
+     */
+    const region = unaRegion([
+      ...filaDelPie(0.40, [
+        ['Conforme', 0.58],
+        ['recepcion', 0.66],
+        ['100.000,00', 0.82],
+      ]),
+    ]);
+    const { pares, sinAsignar } = asignarRegion(
+      region,
+      region.casillas.filter((c) => c.esNumero),
+      { alturaTipica: ALTURA, nombraConcepto: () => null },
+    );
+    expect(pares).toHaveLength(0);
+    expect(sinAsignar).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. Los tres estados, separados
+// ---------------------------------------------------------------------------
+
+describe('un importe leído sin concepto no es un campo vacío', () => {
+  it('queda como UNASSIGNED_FISCAL_AMOUNT, con todo lo que hace falta para contestarlo', () => {
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['Conforme', 0.52],
+          ['recepcion', 0.60],
+          ['4.321,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+
+    const huerfano = resultado.sinAsignar.find((x) => x.texto === '4.321,00');
+    expect(huerfano, 'el importe sin concepto desapareció del informe').toBeDefined();
+    expect(huerfano!.valor?.toString()).toBe('4321');
+    expect(huerfano!.caja.x1).toBeGreaterThan(huerfano!.caja.x0);
+    expect(huerfano!.region).toBeTruthy();
+    expect(huerfano!.pasada).toBeTruthy();
+
+    // Y no se convirtió en ningún concepto.
+    for (const a of resultado.asignaciones) expect(a.valor.toString()).not.toBe('4321');
+  });
+
+  it('un importe sin asignar es una sola pregunta, no varios campos faltantes', () => {
+    const informe = interpretarReconstruccion(
+      evidencia([
+        ...filaDelPie(0.30, [
+          ['Codigo', 0.05],
+          ['Descripcion', 0.20],
+          ['Cantidad', 0.50],
+          ['Precio', 0.65],
+          ['Importe', 0.82],
+        ]),
+        ...filaDelPie(0.32, [
+          ['70', 0.05],
+          ['ARTICULO', 0.20],
+          ['4', 0.52],
+          ['5.700,00', 0.65],
+          ['22.800,00', 0.82],
+        ]),
+        ...filaDelPie(0.40, [
+          ['Conforme', 0.52],
+          ['recepcion', 0.60],
+          ['4.321,00', 0.82],
+        ]),
+      ]),
+      { cuitDelReceptor: CUIT },
+    );
+
+    const preguntas = soloBloqueantes(informe.pendientes).filter(
+      (p) => p.categoria === 'BLOCKING_UNASSIGNED_AMOUNT',
+    );
+    // Una por número, con dónde encontrarlo. No una por campo vacío.
+    expect(preguntas.length).toBe(informe.pieFiscal.sinAsignar.length);
+    for (const pregunta of preguntas) {
+      expect(pregunta.alternativas.length).toBeGreaterThan(0);
+      expect(pregunta.motivo).toContain('no se pudo probar qué');
+    }
+  });
+
+  it('dos candidatas con el mismo apoyo y etiqueta dañada quedan sin asignar', () => {
+    /*
+     * Cuando el margen contra la segunda es cero, los valores son distintos y
+     * **la etiqueta no nombra el concepto exactamente**, el papel no alcanzó
+     * para elegir. Quedarse con la primera es tirar una moneda y escribirla como
+     * si fuera un dato leído; sobre el lote eso producía tres conceptos
+     * afirmados mal, y en los tres la segunda era la correcta.
+     *
+     * Un rótulo impreso entero sí decide: «Total 121.000,00» dice lo que dice, y
+     * por eso el empate no se aplica ahí.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Tot4I', 0.58],
+          ['121.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['T0taI', 0.58],
+          ['131.000,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+    expect(resultado.estado).not.toBe('completo');
+    const delTotal = resultado.asignaciones.find((a) => a.concepto === 'total');
+    if (delTotal) expect(delTotal.etiqueta?.exacta).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 8. Lo que no puede cambiar
+// ---------------------------------------------------------------------------
+
+describe('lo que la geometría no puede alterar', () => {
+  it('reordenar las pasadas del OCR no cambia la asignación', () => {
+    const fragmentos = [
+      ...filaDelPie(0.40, [
+        ['Neto', 0.58],
+        ['100.000,00', 0.82],
+      ]),
+      ...filaDelPie(0.42, [
+        ['IVA 21%', 0.58],
+        ['21.000,00', 0.82],
+      ]),
+      ...filaDelPie(0.44, [
+        ['Total', 0.58],
+        ['121.000,00', 0.82],
+      ]),
+    ];
+    const derecho = pie(fragmentos, '100000.00');
+    const alReves = pie([...fragmentos].reverse(), '100000.00');
+    const comoTexto = (p: typeof derecho) =>
+      p.asignaciones
+        .map((a) => `${a.concepto}=${a.valor.toString()}`)
+        .sort()
+        .join('|');
+    expect(comoTexto(alReves)).toBe(comoTexto(derecho));
+  });
+
+  it('no gana el número más grande ni el último de la región', () => {
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['Total', 0.58],
+          ['121.000,00', 0.82],
+        ]),
+        // Más grande y más abajo que el total: si ganara por eso, ganaría éste.
+        ...filaDelPie(0.46, [
+          ['Saldo', 0.50],
+          ['Acumulado', 0.58],
+          ['999.999,99', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+    expect(resultado.total?.toFixed(2)).toBe('121000.00');
+    for (const a of resultado.asignaciones) {
+      expect(a.valor.toString()).not.toBe('999999.99');
+    }
+  });
+
+  it('un veto dentro de una etiqueta larga conserva la evidencia posterior', () => {
+    /*
+     * El texto que el OCR junta a la izquierda de un importe es a veces media
+     * línea de la hoja. Un veto descarta lo que hay **hasta** él; lo que sigue
+     * está más cerca del número y sigue valiendo.
+     */
+    expect(nombraOtraCosa('C.U.I.T. 30-71596337-6 I.V.A. 21 %')).toBe(true);
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['C.U.I.T.', 0.50],
+          ['30-71596337-6', 0.56],
+          ['IVA', 0.66],
+          ['21.000,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+    expect(valores(resultado.iva)).toContain('21000');
+  });
+
+  it('línea y grilla compiten como regiones completas, y la elegida queda dicha', () => {
+    const resultado = pie(
+      [
+        ...filaDelPie(0.32, [
+          ['ARTICULO', 0.20],
+          ['22.800,00', 0.82],
+        ]),
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['Total', 0.58],
+          ['121.000,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+    expect(resultado.region).toBeTruthy();
+    expect(resultado.segundaRegion).toBeTruthy();
+    expect(resultado.region).not.toBe(resultado.segundaRegion);
+  });
+
+  it('la escala de la banda genera alternativas y no borra un literal válido', () => {
+    /*
+     * La banda dice **cómo se escriben** los importes de este recuadro, que es
+     * una guía para interpretar un número mutilado. Usarla para descartar
+     * costaba un IVA impreso con otra precisión que la de sus vecinos.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['IVA', 0.58],
+          ['21.000,005', 0.82],
+        ]),
+        ...filaDelPie(0.44, [
+          ['Total', 0.58],
+          ['121.000,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+    const leidos = [
+      ...resultado.asignaciones.map((a) => a.valor.toString()),
+      ...resultado.sinAsignar.map((x) => x.valor?.toString() ?? ''),
+    ];
+    expect(leidos.some((v) => v.startsWith('21000'))).toBe(true);
   });
 });

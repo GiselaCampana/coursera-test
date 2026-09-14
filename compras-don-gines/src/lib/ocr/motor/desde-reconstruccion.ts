@@ -561,6 +561,42 @@ function interpretarUnaVez(
       : undefined,
   });
 
+  /*
+   * **Un importe leído sin concepto es una pregunta, no cuatro campos vacíos.**
+   *
+   * El papel imprimió un número, el motor lo leyó y conserva su texto, su caja y
+   * sus alternativas; lo único que falta es saber qué concepto es. Se pregunta
+   * una vez por número, con dónde encontrarlo en la foto, en vez de dejar el
+   * neto, el IVA y el total vacíos y que parezca que faltan tres datos.
+   *
+   * Va acá, después de reconciliar, porque el pie necesita la suma del detalle
+   * y la suma necesita el veredicto: antes de este punto no se sabe todavía qué
+   * importes quedaron sin asignar.
+   */
+  for (const importe of pieFiscal.sinAsignar) {
+    pendientes.push({
+      id: `pie:sinAsignar:${importe.texto}@${importe.caja.x0.toFixed(3)}`,
+      dependeDe: null,
+      categoria: 'BLOCKING_UNASSIGNED_AMOUNT',
+      renglon: null,
+      campo: null,
+      columna: 'pie fiscal',
+      alternativas: [
+        {
+          texto: importe.texto,
+          caja: importe.caja,
+          pasada: importe.pasada,
+          confianza: importe.confianza,
+        },
+      ],
+      elegido: importe.valor?.toString() ?? null,
+      motivo:
+        `El pie tiene un importe leído —«${importe.texto}»— del que no se pudo probar qué ` +
+        `concepto es. Está en ${importe.region}. Hay que decir si es el neto, el IVA, una ` +
+        `percepción, un concepto no gravado o el total: el número ya está leído.`,
+    });
+  }
+
   return {
     emisor,
     tabla,

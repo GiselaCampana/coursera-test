@@ -55,6 +55,20 @@ export type CategoriaPendiente =
    * vista**.
    */
   | 'BLOCKING_UNDECIDED_SCALE'
+  /**
+   * Hay un importe fiscal leído del que no se pudo probar qué concepto es.
+   *
+   * Es un estado propio, distinto de que falte. Un concepto ausente es un
+   * número que no está en la foto; esto es un número que **sí está**, que se
+   * leyó y que conserva su texto, su caja y sus alternativas, y del que lo
+   * único que falta saber es qué es. Convertirlo en un campo vacío pierde lo
+   * único que el motor averiguó, y elegirle un concepto para que la cuenta
+   * cierre es peor.
+   *
+   * Produce **una** pregunta —«¿qué es este número?»— y no una por cada campo
+   * que quedó sin llenar.
+   */
+  | 'BLOCKING_UNASSIGNED_AMOUNT'
   /** Una lectura alternativa perdió contra otra: queda anotada. */
   | 'WARNING_DISCARDED_ALTERNATIVE'
   /** Texto o número que no pertenece a la tabla. */
@@ -77,6 +91,7 @@ export const CATEGORIAS_BLOQUEANTES: ReadonlySet<CategoriaPendiente> = new Set([
   'BLOCKING_PRODUCT',
   'BLOCKING_UNPROVEN_ROW',
   'BLOCKING_UNDECIDED_SCALE',
+  'BLOCKING_UNASSIGNED_AMOUNT',
 ]);
 
 export function bloquea(categoria: CategoriaPendiente): boolean {
@@ -159,7 +174,7 @@ export interface ResumenDePendientes {
    * el mismo problema.
    */
   bloqueosUnicos: number;
-  /** En qué se reparte ese total. Las siete suman `bloqueosUnicos`. */
+  /** En qué se reparte ese total. Las ocho suman `bloqueosUnicos`. */
   desglose: {
     celdasObligatoriasFaltantes: number;
     ambiguedadesBloqueantes: number;
@@ -168,6 +183,7 @@ export interface ResumenDePendientes {
     asociacionesDeProductoPendientes: number;
     renglonesSinProbar: number;
     escalasSinDecidir: number;
+    importesSinAsignar: number;
   };
   /**
    * Cuántos bloqueos dependen de una raíz.
@@ -196,6 +212,7 @@ export function resumir(pendientes: Pendiente[]): ResumenDePendientes {
     asociacionesDeProductoPendientes: contar('BLOCKING_PRODUCT'),
     renglonesSinProbar: contar('BLOCKING_UNPROVEN_ROW'),
     escalasSinDecidir: contar('BLOCKING_UNDECIDED_SCALE'),
+    importesSinAsignar: contar('BLOCKING_UNASSIGNED_AMOUNT'),
   };
 
   const bloqueosUnicos = Object.values(desglose).reduce((a, b) => a + b, 0);

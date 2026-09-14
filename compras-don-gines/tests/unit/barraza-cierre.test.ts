@@ -111,7 +111,8 @@ describe('los dos renglones cierran contra su propia aritmética', () => {
      */
     expect(
       BARRAZA.resumen.desglose.columnasSinReconocer +
-        BARRAZA.resumen.desglose.escalasSinDecidir,
+        BARRAZA.resumen.desglose.escalasSinDecidir +
+        BARRAZA.resumen.desglose.importesSinAsignar,
     ).toBe(BARRAZA.resumen.bloqueosUnicos);
     expect(BARRAZA.resumen.desglose.renglonesSinProbar).toBe(0);
     const textual = BARRAZA.pendientes.find((p) =>

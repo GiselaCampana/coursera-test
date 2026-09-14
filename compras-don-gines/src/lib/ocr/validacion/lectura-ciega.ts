@@ -127,6 +127,23 @@ export interface PieLeidoEnValidacion {
   totalCalculado: boolean;
   residuo: string | null;
   faltantes: string[];
+  /** De qué región salió el pie, y contra cuál compitió. */
+  region: string | null;
+  segundaRegion: string | null;
+  /**
+   * Los importes leídos del pie sin concepto probado: `UNASSIGNED_FISCAL_AMOUNT`.
+   *
+   * Van en el acta con todo lo que hace falta para contestarlos mirando la
+   * foto. No son campos vacíos: son números que el motor leyó y no pudo
+   * nombrar, y la diferencia entre las dos cosas es lo que decide si una
+   * persona sabe adónde mirar.
+   */
+  sinAsignar: {
+    texto: string;
+    valor: string | null;
+    alternativas: string[];
+    region: string;
+  }[];
   asignaciones: {
     concepto: string;
     valor: string;
@@ -402,6 +419,14 @@ export function actaDePrimeraLectura(entrada: {
       total: comoTexto(pf.total),
       totalCalculado: pf.totalCalculado,
       residuo: comoTexto(pf.residuo),
+      region: pf.region ?? null,
+      segundaRegion: pf.segundaRegion ?? null,
+      sinAsignar: pf.sinAsignar.map((x) => ({
+        texto: x.texto,
+        valor: x.valor?.toString() ?? null,
+        alternativas: x.alternativas,
+        region: x.region,
+      })),
       faltantes: pf.faltantes,
       asignaciones: pf.asignaciones.map((a) => ({
         concepto: a.concepto,
