@@ -98,6 +98,37 @@ function informar(titulo: string, deEste: Fila[]) {
   console.log(
     `  valores afirmados mal ${afirmadosMal} | omisiones ${omitidos} | texto mal ${textoMal}`,
   );
+
+  /*
+   * El pie, en las cinco cuentas que piden trabajos distintos.
+   *
+   * Un solo número mezcla un concepto asignado mal —que es lo único grave— con
+   * un importe que el motor leyó y dijo no saber nombrar, con uno que no está
+   * en la foto, con uno que dedujo de una igualdad y con una cuenta ofrecida
+   * como ayuda. Sumarlas esconde justamente la diferencia que importa.
+   */
+  const balance = deEste.map((f) => f.comparacion.balanceFiscal).reduce(
+    (acumulado, c) => ({
+      asignacionesIncorrectas: acumulado.asignacionesIncorrectas + c.asignacionesIncorrectas,
+      importesSinAsignar: acumulado.importesSinAsignar + c.importesSinAsignar,
+      conceptosOmitidos: acumulado.conceptosOmitidos + c.conceptosOmitidos,
+      conceptosInferidos: acumulado.conceptosInferidos + c.conceptosInferidos,
+      sugerenciasDerivadas: acumulado.sugerenciasDerivadas + c.sugerenciasDerivadas,
+    }),
+    {
+      asignacionesIncorrectas: 0,
+      importesSinAsignar: 0,
+      conceptosOmitidos: 0,
+      conceptosInferidos: 0,
+      sugerenciasDerivadas: 0,
+    },
+  );
+  console.log(
+    `  pie fiscal → asignaciones INCORRECTAS ${balance.asignacionesIncorrectas} | ` +
+      `importes sin asignar ${balance.importesSinAsignar} | conceptos omitidos ` +
+      `${balance.conceptosOmitidos} | inferidos ${balance.conceptosInferidos} | ` +
+      `sugerencias derivadas ${balance.sugerenciasDerivadas}`,
+  );
   console.log(`  causas: ${JSON.stringify(causas)}`);
   console.log(`  1. automáticas                        ${pct(cuantos('automatica'))} (${cuantos('automatica')}/${deEste.length})`);
   console.log(`  2. sólo configurar columnas una vez   ${pct(cuantos('solo-columnas'))} (${cuantos('solo-columnas')}/${deEste.length})`);
