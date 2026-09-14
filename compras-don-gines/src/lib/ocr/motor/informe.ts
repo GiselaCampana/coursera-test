@@ -25,6 +25,7 @@ export function informeEnTexto(informe: InformeDelMotor): string {
   l.push('EMISOR');
   l.push(`  Razón social : ${informe.emisor.razonSocial ?? '(no se pudo leer)'}`);
   l.push(`  CUIT         : ${informe.emisor.cuit ?? '(no se pudo leer)'}`);
+  if (informe.emisor.estadoCuit) l.push(`  Estado CUIT  : ${informe.emisor.estadoCuit}`);
   l.push(`  Huella del formato : ${informe.huella ?? '(sin tabla)'}`);
   l.push('');
 

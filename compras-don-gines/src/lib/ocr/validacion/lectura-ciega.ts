@@ -167,13 +167,29 @@ export interface ActaDePrimeraLectura {
   /**
    * Lo que el motor general dice del emisor.
    *
-   * Son dos campos y no cinco a propósito: el punto de venta, el número y la
-   * fecha del comprobante los lee otra capa, y meterlos acá sin que el motor
-   * los produzca sería registrar nulos que parecen fallas de lectura.
+   * El punto de venta, el número y la fecha los lee otra capa. Acá, junto al
+   * CUIT y la razón social, queda el estado de la identificación y toda la
+   * evidencia que la sostuvo: es lo que permite distinguir un CUIT literal de
+   * uno recompuesto o recuperado entre alternativas del OCR.
    */
   emisor: {
     cuit: string | null;
     razonSocial: string | null;
+    estadoCuit: string | null;
+    candidatosCuit: {
+      cuit: string;
+      estado: string;
+      apoyo: number;
+      procedencias: {
+        texto: string;
+        pasada: string;
+        confianza: number;
+        caja: { x0: number; y0: number; x1: number; y1: number };
+        cajaEnLaFoto: { x0: number; y0: number; x1: number; y1: number };
+        alternativaDelOcr: boolean;
+        alternativas: string[];
+      }[];
+    }[];
   };
   encabezados: string[];
   columnas: { titulo: string | null; campo: string | null; origen: string | null; confianza: number }[];
@@ -391,6 +407,21 @@ export function actaDePrimeraLectura(entrada: {
     emisor: {
       cuit: informe.emisor.cuit ?? null,
       razonSocial: informe.emisor.razonSocial ?? null,
+      estadoCuit: informe.emisor.estadoCuit ?? null,
+      candidatosCuit: (informe.emisor.candidatosCuit ?? []).map((candidato) => ({
+        cuit: candidato.cuit,
+        estado: candidato.estado,
+        apoyo: candidato.apoyo,
+        procedencias: candidato.procedencias.map((origen) => ({
+          texto: origen.texto,
+          pasada: origen.pasada,
+          confianza: origen.confianza,
+          caja: origen.caja,
+          cajaEnLaFoto: origen.cajaEnLaFoto,
+          alternativaDelOcr: origen.alternativaDelOcr,
+          alternativas: origen.alternativas,
+        })),
+      })),
     },
     encabezados: informe.tabla.encabezados,
     columnas,

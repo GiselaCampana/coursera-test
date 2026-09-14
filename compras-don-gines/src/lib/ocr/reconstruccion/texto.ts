@@ -1,6 +1,11 @@
 import type { TextosComprobante } from '@/lib/ocr/parsers/tipos';
 import { centroY, type EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
-import { agruparPorLugar, armarRenglones, textoPreferido } from '@/lib/ocr/reconstruccion/agrupar';
+import {
+  agruparPorLugar,
+  armarRenglones,
+  textoPreferido,
+  type RenglonVisual,
+} from '@/lib/ocr/reconstruccion/agrupar';
 import {
   alturaDeRenglon,
   enderezar,
@@ -13,9 +18,9 @@ import { esRuido } from '@/lib/ocr/reconstruccion/reconstruccion';
  * Vuelve a armar el texto de la página desde la evidencia.
  *
  * Hace falta porque hay dos lectores que siguen trabajando sobre texto y está
- * bien que así sea: el del **emisor**, que busca la razón social y el CUIT en la
- * zona de arriba, y el del **pie fiscal**, que busca etiquetas. Los dos leen
- * prosa, no una tabla, y pasarlos a coordenadas no ganaría nada.
+ * bien que así sea: el **pie fiscal** todavía busca etiquetas en prosa. El
+ * emisor ya no pasa por este texto: conserva coordenadas y alternativas para
+ * poder distinguir su zona de la del receptor y de la tabla de artículos.
  *
  * Lo que sí cambia es de dónde sale ese texto. Antes era la concatenación cruda
  * de todas las pasadas, con cada línea repetida tantas veces como pasadas la
@@ -28,7 +33,14 @@ import { esRuido } from '@/lib/ocr/reconstruccion/reconstruccion';
  * 532.848,64   Subtotal 473.232,44»— conserve la separación que permite
  * distinguir dos etiquetas de una.
  */
-export function textoDeLaEvidencia(evidencia: EvidenciaDeLectura): TextosComprobante {
+export interface EstructuraDeTexto {
+  textos: TextosComprobante;
+  renglones: RenglonVisual[];
+  alturaTipica: number;
+}
+
+/** Reconstruye una vez la geometría que comparten texto, emisor y pie. */
+export function estructuraDeLaEvidencia(evidencia: EvidenciaDeLectura): EstructuraDeTexto {
   const utiles = evidencia.fragmentos.filter((f) => !esRuido(f.texto));
   const alturaCruda = alturaDeRenglon(utiles);
   const inclinacion = medirInclinacion(utiles);
@@ -73,9 +85,17 @@ export function textoDeLaEvidencia(evidencia: EvidenciaDeLectura): TextosComprob
       .join('\n');
 
   return {
-    completo,
-    encabezado: porBanda(0, 0.32),
-    articulos: porBanda(0.24, 0.84),
-    resumen: porBanda(0.7, 1),
+    textos: {
+      completo,
+      encabezado: porBanda(0, 0.32),
+      articulos: porBanda(0.24, 0.84),
+      resumen: porBanda(0.7, 1),
+    },
+    renglones,
+    alturaTipica,
   };
+}
+
+export function textoDeLaEvidencia(evidencia: EvidenciaDeLectura): TextosComprobante {
+  return estructuraDeLaEvidencia(evidencia).textos;
 }

@@ -41,7 +41,8 @@ import {
 
 export type { Pendiente, ResumenDePendientes } from '@/lib/ocr/motor/pendientes';
 import { lugarDe, type Celda, type FilaDeDatos } from '@/lib/ocr/motor/tabla';
-import { leerEmisor, leerPie, type EmisorLeido } from '@/lib/ocr/motor/motor';
+import { leerPie, type EmisorLeido } from '@/lib/ocr/motor/motor';
+import { leerEmisorDeEvidencia } from '@/lib/ocr/motor/emisor';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import {
   type LecturaDeCelda,
@@ -50,7 +51,7 @@ import {
 } from '@/lib/ocr/reconstruccion/reconstruccion';
 import { candidatasDeTabla } from '@/lib/ocr/reconstruccion/candidatas-de-tabla';
 import type { ColumnaEspacial } from '@/lib/ocr/reconstruccion/columnas-espaciales';
-import { textoDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
+import { estructuraDeLaEvidencia } from '@/lib/ocr/reconstruccion/texto';
 import {
   celdasParaReleer,
   convieneReleer,
@@ -385,8 +386,8 @@ function interpretarUnaVez(
 ): InformeReconstruido {
   const comienzo = Date.now();
 
-  const textos = textoDeLaEvidencia(evidencia);
-  const emisor = leerEmisor(textos, opciones.cuitDelReceptor);
+  const estructuraDeTexto = estructuraDeLaEvidencia(evidencia);
+  const textos = estructuraDeTexto.textos;
 
   /*
    * Se interpretan **todas** las maneras de armar la tabla y gana la que mejor
@@ -490,6 +491,14 @@ function interpretarUnaVez(
     candidatas = interpretarTabla(tabla, elegido.candidata.filasEsperadas);
   }
 
+  const inicioDelDetalle = tabla.renglones[0]?.caja.y0;
+  const emisor = leerEmisorDeEvidencia(
+    evidencia,
+    opciones.cuitDelReceptor,
+    estructuraDeTexto,
+    inicioDelDetalle,
+  );
+
   /*
    * Qué columnas frenan el comprobante.
    *
@@ -514,6 +523,34 @@ function interpretarUnaVez(
   const escalas = escalasDeLaTabla(tabla);
   const provisorio = decidir(candidatas, sinResolver);
   const pendientes = queFaltaResolver(tabla, provisorio, sinResolver, escalas);
+
+  if (emisor.cuit === null) {
+    const ambiguo = emisor.estadoCuit === 'AMBIGUOUS_TAX_ID';
+    pendientes.push({
+      id: 'emisor:cuit',
+      dependeDe: null,
+      categoria: ambiguo ? 'BLOCKING_AMBIGUOUS_CELL' : 'BLOCKING_MISSING_CELL',
+      renglon: null,
+      campo: 'cuitEmisor',
+      columna: 'zona del emisor',
+      alternativas: (emisor.candidatosCuit ?? []).flatMap((candidato) => {
+        const origen = candidato.procedencias[0];
+        return origen
+          ? [{
+              texto: candidato.cuit,
+              caja: origen.caja,
+              pasada: origen.pasada,
+              confianza: origen.confianza,
+              delPropioOcr: origen.alternativaDelOcr,
+            }]
+          : [];
+      }),
+      elegido: null,
+      motivo: ambiguo
+        ? 'La zona del emisor contiene más de un CUIT válido con evidencia equivalente. Hay que confirmar cuál emitió el comprobante.'
+        : 'La zona del emisor no contiene un CUIT válido comprobable. Hay que identificar al emisor antes de registrar la compra.',
+    });
+  }
   const columnasQueFrenan = soloBloqueantes(pendientes)
     .filter((p) => p.categoria === 'BLOCKING_UNKNOWN_COLUMN')
     .map((p) => p.columna!);
@@ -529,7 +566,9 @@ function interpretarUnaVez(
   const frenos = soloBloqueantes(pendientes)
     .filter(
       (p) =>
-        p.categoria === 'BLOCKING_UNPROVEN_ROW' || p.categoria === 'BLOCKING_UNDECIDED_SCALE',
+        p.categoria === 'BLOCKING_UNPROVEN_ROW' ||
+        p.categoria === 'BLOCKING_UNDECIDED_SCALE' ||
+        p.id === 'emisor:cuit',
     )
     .map((p) => p.motivo);
 

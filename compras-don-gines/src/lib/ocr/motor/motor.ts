@@ -21,6 +21,7 @@ import {
   type FilaDeTitulos,
 } from '@/lib/ocr/motor/tabla';
 import type { ColumnaReconocida } from '@/lib/ocr/motor/columnas';
+import type { EmisorLeido } from '@/lib/ocr/motor/emisor';
 
 export type { PieLeido, CandidataDeTabla, RenglonCandidato } from '@/lib/ocr/motor/candidatas';
 
@@ -38,10 +39,7 @@ export type { PieLeido, CandidataDeTabla, RenglonCandidato } from '@/lib/ocr/mot
  * configuración o rechazarlo es parte del resultado, no del que lo llama.
  */
 
-export interface EmisorLeido {
-  cuit: string | null;
-  razonSocial: string | null;
-}
+export type { EmisorLeido } from '@/lib/ocr/motor/emisor';
 
 export interface InformeDelMotor {
   emisor: EmisorLeido;
