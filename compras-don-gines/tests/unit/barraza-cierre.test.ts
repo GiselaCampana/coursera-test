@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { Decimal } from '@/lib/money';
 import {
@@ -21,6 +21,7 @@ import { relacionesAritmeticas } from '@/lib/ocr/motor/semantica-de-columnas';
 import { reconocerColumna, type ColumnaReconocida } from '@/lib/ocr/motor/columnas';
 import { lugarDe, type Celda, type FilaDeDatos } from '@/lib/ocr/motor/tabla';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
+import type { EvidenciaDeRelectura } from '@/lib/ocr/reconstruccion/relectura';
 import type {
   CeldaReconstruida,
   RenglonReconstruido,
@@ -38,13 +39,19 @@ import type {
  */
 
 const DIRECTORIO = path.resolve(__dirname, '../fixtures/evidencia');
+const CUIT_DEL_RECEPTOR = '27-33342291-9';
 
 function leer(nombre: string): EvidenciaDeLectura {
   return JSON.parse(readFileSync(path.join(DIRECTORIO, `${nombre}.json`), 'utf8'));
 }
 
+function relecturaDe(nombre: string): EvidenciaDeRelectura | undefined {
+  const archivo = path.join(DIRECTORIO, `${nombre}-relectura.json`);
+  return existsSync(archivo) ? JSON.parse(readFileSync(archivo, 'utf8')) : undefined;
+}
+
 const BARRAZA = interpretarReconstruccion(leer('barraza'), {
-  cuitDelReceptor: '27-33342291-9',
+  cuitDelReceptor: CUIT_DEL_RECEPTOR,
 });
 const RENGLONES = BARRAZA.veredicto.ganadora!.renglones;
 
@@ -168,9 +175,13 @@ describe('el código del segundo artículo sale de la tabla y de ningún otro la
     const cantidad = BARRAZA.tabla.renglones[1].celdas.find((c) => c?.texto?.startsWith('30.'));
     expect(codigo?.procedencia).toBeTruthy();
     expect(cantidad?.procedencia).toBeTruthy();
-    expect(lugarDe(codigo!.procedencia!.caja)).not.toBe(lugarDe(cantidad!.procedencia!.caja));
+    expect(lugarDe(codigo!.procedencia!.cajaEnLaFoto)).not.toBe(
+      lugarDe(cantidad!.procedencia!.cajaEnLaFoto),
+    );
     // Ni siquiera se tocan: están a media página de distancia.
-    expect(cantidad!.procedencia!.caja.x0 - codigo!.procedencia!.caja.x1).toBeGreaterThan(0.05);
+    expect(
+      cantidad!.procedencia!.cajaEnLaFoto.x0 - codigo!.procedencia!.cajaEnLaFoto.x1,
+    ).toBeGreaterThan(0.05);
   });
 
   it('un fragmento usado como cantidad no puede ofrecerse además como código', () => {
@@ -281,8 +292,13 @@ describe('el cierre contra el pie no tapa una fila incorrecta', () => {
      * La distinción que le importa a quien carga la factura: una columna por
      * confirmar se contesta una vez para el formato; una celda que falta hay que
      * mirarla en ese renglón.
+     *
+     * El caso se mide sobre Errecalde. Estaba sobre la foto de Los Calvos, que
+     * dejó de servir para esto: con la tabla cortada donde termina de verdad,
+     * sus once renglones quedan completos y ya no hay ninguna celda faltante que
+     * mostrar. La garantía es la misma; lo que cambió es dónde se ve.
      */
-    const sinPrecio = interpretarReconstruccion(leer('los-calvos-213103'));
+    const sinPrecio = interpretarReconstruccion(leer('errecalde'));
     const faltantes = sinPrecio.pendientes.filter(
       (p) => p.categoria === 'BLOCKING_MISSING_CELL' && p.renglon !== null,
     );
@@ -342,16 +358,40 @@ describe('las columnas se resuelven juntas, no una por una', () => {
 
   it('la combinación aritméticamente correcta le gana a la más cercana', () => {
     /*
-     * Es la prueba de que el haz sirve para algo. La candidata que gana usa
-     * repartos que **no** son los más baratos de su columna, y gana porque hace
-     * cerrar los dos renglones.
+     * Lo que decide entre candidatas es la aritmética del comprobante, no la
+     * distancia entre las cajas: la más cercana existe, se ofrece y pierde.
+     *
+     * Sobre Barraza el haz ya no hace falta para llegar al resultado —desde que
+     * la celda dejó de pegar lo que varias pasadas leyeron del mismo lugar, el
+     * reparto base pone los dos importes donde van— así que acá se comprueba lo
+     * que sigue siendo cierto: que la candidata elegida no es la de cercanía, que
+     * cierra sus dos renglones, y que el haz de repartos se ofreció igual.
      */
-    expect(BARRAZA.reconstruccionElegida).toContain('repartos');
-    expect(BARRAZA.reconstruccionElegida).toContain('2 renglón/es cierran');
-
-    const porCercania = candidatasDeTabla(leer('barraza')).find((c) => c.origen === 'cercanía');
-    expect(porCercania).toBeDefined();
+    const candidatas = candidatasDeTabla(leer('barraza'));
+    expect(candidatas.find((c) => c.origen === 'cercanía')).toBeDefined();
+    expect(candidatas.some((c) => c.origen.includes('repartos'))).toBe(true);
     expect(BARRAZA.reconstruccionElegida).not.toBe('cercanía');
+    expect(BARRAZA.veredicto.ganadora!.renglones).toHaveLength(2);
+    expect(
+      BARRAZA.veredicto.ganadora!.renglones.every(
+        (r) => r.controles.length > 0 && r.controles.every((c) => c.paso),
+      ),
+    ).toBe(true);
+  });
+
+  it('y donde el haz todavía decide, gana el reparto que hace cerrar renglones', () => {
+    /*
+     * La otra mitad de la misma garantía, sobre el comprobante donde el haz
+     * sigue siendo decisivo: con la banda de precios releída, la candidata que
+     * gana en Errecalde usa repartos que **no** son los más baratos de su
+     * columna, y gana porque hace cerrar renglones que si no no cerraban.
+     */
+    const errecalde = interpretarReconstruccion(leer('errecalde'), {
+      cuitDelReceptor: CUIT_DEL_RECEPTOR,
+      relectura: relecturaDe('errecalde'),
+    });
+    expect(errecalde.reconstruccionElegida).toContain('repartos');
+    expect(errecalde.reconstruccionElegida).toContain('renglón/es cierran');
   });
 
   it('9.453,76 termina en el segundo renglón y lo deja cerrado', () => {
@@ -412,11 +452,17 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       columna: 1,
       texto,
       alternativas: [
-        { texto, caja: CAJA, pasada: 'completo:directo', confianza: 0.8 },
-        { texto: `${texto}0`, caja: CAJA, pasada: 'articulos:directo', confianza: 0.7 },
+        { texto, caja: CAJA, cajaEnLaFoto: CAJA, pasada: 'completo:directo', confianza: 0.8 },
+        {
+          texto: `${texto}0`,
+          caja: CAJA,
+          cajaEnLaFoto: CAJA,
+          pasada: 'articulos:directo',
+          confianza: 0.7,
+        },
       ],
       estado: 'ambigua',
-      procedencia: { pasada: 'completo:directo', confianza: 0.8, caja: CAJA },
+      procedencia: { pasada: 'completo:directo', confianza: 0.8, cajaEnLaFoto: CAJA },
     });
     const renglon = (texto: string): RenglonReconstruido => ({
       y: 0.3,
@@ -424,6 +470,10 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       celdas: [null, celda(texto)],
       sobrantes: [],
       estado: 'incompleto',
+      clase: 'aceptado',
+      apoyos: ['identidad', 'numeros'],
+      continuacionDe: null,
+      motivo: 'armado a mano para la prueba',
     });
     return {
       columnas: [
@@ -433,6 +483,8 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       metodo: 'datos-con-titulos',
       encabezados: ['Descripcion', 'Importe'],
       renglones: [renglon('1000'), renglon('500')],
+      hipotesis: [renglon('1000'), renglon('500')],
+      banda: { hastaY: 1, origen: 'armada a mano para la prueba' },
       filasVisibles: 2,
       inclinacionGrados: 0,
       seEnderezo: false,

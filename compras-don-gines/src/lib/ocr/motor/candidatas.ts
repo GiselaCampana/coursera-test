@@ -676,6 +676,25 @@ export function puntuarTabla(
     );
   }
 
+  /*
+   * Y el caso peor, que hasta acá no pesaba nada: **no haber verificado nada**.
+   *
+   * Ningún renglón con aritmética propia y ningún neto impreso contra el cual
+   * comparar la suma quiere decir que lo leído no se apoya en un solo hecho del
+   * comprobante. No es «una lectura con dudas»: es una lista de textos. Sobre la
+   * foto ilegible de Los Calvos eso son nueve descripciones y nueve kilos sin un
+   * solo precio, y mandarlo a revisión le pide a una persona que tipee la
+   * factura entera mirando una foto que no se lee, cuando lo que corresponde es
+   * decirle que la saque de nuevo.
+   */
+  if (hechos === 0 && !pie.netTotal) {
+    penalizar(
+      'No se pudo comprobar ni un solo renglón y tampoco hay un neto impreso contra el ' +
+        'cual comparar la suma: la lectura no se apoya en ningún hecho del comprobante.',
+      0.5,
+    );
+  }
+
   // --- La suma contra el neto impreso --------------------------------------
   const sumaDeRenglones = renglones.reduce(
     (acc, r) => acc.plus(netoDelRenglon(r) ?? 0),

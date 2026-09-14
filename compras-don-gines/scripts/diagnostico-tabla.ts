@@ -33,8 +33,21 @@ const tabla = reconstruirTabla(evidencia);
 process.stdout.write(
   `columnas (${tabla.metodo}): ${tabla.columnas.map((c) => c.campo?.campo ?? '?').join(' | ')}\n` +
     `encabezados: ${tabla.encabezados.join(' | ')}\n` +
-    `${tabla.renglones.length} renglones interpretables, ${tabla.filasVisibles} filas vistas\n\n`,
+    `${tabla.renglones.length} artículos de ${tabla.hipotesis.length} hipótesis, ` +
+    `${tabla.filasVisibles} filas vistas; banda hasta ${tabla.banda.hastaY.toFixed(4)} ` +
+    `(${tabla.banda.origen})\n\n`,
 );
+
+if (process.env.HIPOTESIS) {
+  for (const h of tabla.hipotesis) {
+    process.stdout.write(
+      `y ${h.y.toFixed(4)} ${h.clase.padEnd(12)} [${h.apoyos.join(',')}] ` +
+        `${JSON.stringify(h.celdas.filter((c) => c?.texto).map((c) => c!.texto))}\n` +
+        `     ${h.motivo}\n`,
+    );
+  }
+  process.stdout.write('\n');
+}
 
 for (const renglon of tabla.renglones) {
   const sobrantes = renglon.sobrantes.map((s) => s.texto);

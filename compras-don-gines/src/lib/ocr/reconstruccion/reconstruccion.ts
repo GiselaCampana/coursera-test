@@ -37,6 +37,13 @@ import {
   type ColumnaEspacial,
   type MetodoDeLimites,
 } from '@/lib/ocr/reconstruccion/columnas-espaciales';
+import {
+  bandasDeArticulos,
+  clasificarRenglones,
+  type CandidataDeBanda,
+  type ClaseDeRenglon,
+  type FamiliaDeApoyo,
+} from '@/lib/ocr/reconstruccion/renglones';
 
 /**
  * Reconstruir la tabla de un comprobante a partir de la evidencia del OCR.
@@ -74,8 +81,14 @@ export type EstadoDeCelda =
 export interface Procedencia {
   pasada: string;
   confianza: number;
-  /** Dónde está en la foto original, sin enderezar: para poder señalarlo. */
-  caja: Caja;
+  /**
+   * Dónde está en la foto tal como salió, sin enderezar: para poder señalarlo.
+   *
+   * Se llama así y no `caja` a propósito. Es **procedencia**, no geometría: si
+   * se llamara `caja`, tarde o temprano alguien decide con ella, y decidir en
+   * dos espacios a la vez es el defecto que esta corrección vino a cerrar.
+   */
+  cajaEnLaFoto: Caja;
 }
 
 export interface CeldaReconstruida {
@@ -101,6 +114,22 @@ export interface RenglonReconstruido {
   /** Lo que no entró en ninguna columna. */
   sobrantes: { texto: string; caja: Caja }[];
   estado: EstadoDeRenglon;
+  /**
+   * Si es un artículo, si está pendiente de prueba, si es la continuación de la
+   * descripción de arriba o si no es nada.
+   *
+   * Está acá y no en un filtro previo a propósito: una línea descartada tiene
+   * que poder mirarse. Lo que se descartó en silencio no se puede auditar, y
+   * las filas fantasma de Los Calvos aparecieron justamente porque nadie podía
+   * ver qué estaba entrando a la tabla.
+   */
+  clase: ClaseDeRenglon;
+  /** Qué familias de evidencia lo sostienen. */
+  apoyos: FamiliaDeApoyo[];
+  /** Índice del renglón al que se pega, cuando es continuación. */
+  continuacionDe: number | null;
+  /** Por qué quedó en esa clase. */
+  motivo: string;
 }
 
 export interface TablaReconstruida {
@@ -108,7 +137,18 @@ export interface TablaReconstruida {
   metodo: MetodoDeLimites;
   /** Los títulos tal como se leyeron. */
   encabezados: string[];
+  /**
+   * Sólo los artículos: los aceptados y los pendientes, con las continuaciones
+   * ya pegadas a su renglón.
+   */
   renglones: RenglonReconstruido[];
+  /**
+   * Todas las líneas que se miraron, con su clase. Es lo que permite auditar
+   * qué se descartó y por qué sin volver a correr nada.
+   */
+  hipotesis: RenglonReconstruido[];
+  /** Hasta dónde se consideró que llega la tabla, y por qué.  */
+  banda: { hastaY: number; origen: string };
   /** Cuántas líneas de texto se vieron entre la tabla, antes de interpretarlas. */
   filasVisibles: number;
   inclinacionGrados: number;
@@ -124,6 +164,14 @@ export interface OpcionesDeReconstruccion {
   /** Sólo se reconstruye lo que esté entre estas alturas de la página. */
   desdeY?: number;
   hastaY?: number;
+  /**
+   * Qué candidata de banda de artículos usar, de las que propone la evidencia.
+   *
+   * Cero es la más generosa —conserva todo— y las siguientes van cortando. Que
+   * se elija desde afuera es lo que permite que compitan entre sí en vez de que
+   * una regla fija decida por todas.
+   */
+  banda?: number;
   /**
    * Los netos que se leyeron en el pie, con cualquiera de las dos convenciones.
    *
@@ -223,8 +271,17 @@ export function reconstruirConContexto(
 
   // --- Celdas --------------------------------------------------------------
   const hayColumnasNumericas = limites.columnas.some((c) => llevaNumeros(c.campo?.campo));
-  const renglones: RenglonReconstruido[] = [];
   let valoresDeOtraPasada = 0;
+
+  /*
+   * Primero **hipótesis**, no renglones.
+   *
+   * Acá se arma una por cada línea que se vio, sin decidir todavía si es un
+   * artículo: esa pregunta necesita ver las demás líneas —qué columnas ocupan
+   * las vecinas, dónde termina la tabla— y contestarla línea por línea es lo
+   * que dejaba entrar la grilla vacía.
+   */
+  const hipotesis: RenglonReconstruido[] = [];
 
   for (const visual of cuerpo) {
     const celdas: (CeldaReconstruida | null)[] = limites.columnas.map(() => null);
@@ -248,41 +305,10 @@ export function reconstruirConContexto(
     });
 
     const llenas = celdas.filter((c) => c !== null).length;
-    // Una línea con una sola celda no es un renglón de la tabla: es un
-    // comentario, un pie de página o basura del borde.
-    if (llenas < 2) continue;
+    // Con una sola celda no hay renglón posible: ni siquiera es una hipótesis.
+    if (llenas < 1) continue;
 
-    /*
-     * Y un renglón de una tabla de precios tiene **algún número**.
-     *
-     * Sobre la foto de Mabelherdi el OCR produce cuatro líneas de basura entre
-     * los artículos —«LENIN NAL | UR EE ERE», «MI | eN»— que llenan dos celdas
-     * y pasan por renglones. No son inofensivas: cuentan como filas sin
-     * importe, y con eso el control de integridad concluye que a la factura le
-     * faltan renglones. Los nueve artículos buenos, que suman exactamente el
-     * neto impreso, quedaban sin confirmar por culpa de cuatro líneas que no
-     * dicen nada.
-     *
-     * Se pide un dígito en alguna columna que entre en las cuentas. No alcanza
-     * con que haya un dígito en cualquier lado: «956X30X1» está en la
-     * descripción de un artículo y no lo vuelve un renglón.
-     */
-    const tieneAlgunNumero = celdas.some((celda, i) => {
-      if (celda === null || !/\d/.test(celda.texto ?? '')) return false;
-      // Cuando ninguna columna se reconoció no hay dónde mirar, así que sirve
-      // un número en cualquier celda. Con columnas reconocidas, en cambio, se
-      // exige que el número esté en una **columna de números**: «956X30X1» está
-      // en la descripción de un artículo y no vuelve renglón a una línea.
-      //
-      // Que la columna todavía no tenga semántica confirmada no importa acá: la
-      // pregunta es si ahí van números, no cuáles. Una columna de montos sin
-      // encabezado legible sigue siendo la prueba de que la línea es un artículo.
-      if (!hayColumnasNumericas) return true;
-      return llevaNumeros(limites.columnas[i]?.campo?.campo);
-    });
-    if (!tieneAlgunNumero) continue;
-
-    renglones.push({
+    hipotesis.push({
       y: visual.y,
       caja: visual.caja,
       celdas,
@@ -293,7 +319,42 @@ export function reconstruirConContexto(
           : llenas === limites.columnas.length
             ? 'completo'
             : 'incompleto',
+      clase: 'pendiente',
+      apoyos: [],
+      continuacionDe: null,
+      motivo: '',
     });
+  }
+
+  // --- Hasta dónde llega la tabla ------------------------------------------
+  const bandas = bandasDeArticulos(hipotesis, limites.columnas, alturaTipica);
+  const banda: CandidataDeBanda = bandas[Math.min(opciones.banda ?? 0, bandas.length - 1)];
+
+  // --- Qué es cada línea ---------------------------------------------------
+  const clases = clasificarRenglones(hipotesis, {
+    columnas: limites.columnas,
+    alturaTipica,
+    hastaY: banda.hastaY,
+  });
+  clases.forEach((clasificacion, i) => {
+    hipotesis[i].clase = clasificacion.clase;
+    hipotesis[i].apoyos = clasificacion.apoyos;
+    hipotesis[i].continuacionDe = clasificacion.continuacionDe;
+    hipotesis[i].motivo = clasificacion.motivo;
+  });
+
+  const renglones = articulosConSusContinuaciones(hipotesis, limites.columnas);
+
+  const descartadas = hipotesis.filter((h) => h.clase === 'ruido').length;
+  const continuaciones = hipotesis.filter((h) => h.clase === 'continuacion').length;
+  if (descartadas > 0) {
+    notas.push(
+      `${descartadas} línea/s no llegaron a artículo y quedaron como ruido; ` +
+        `la tabla termina en ${banda.hastaY === 1 ? 'el final del cuerpo' : banda.origen}.`,
+    );
+  }
+  if (continuaciones > 0) {
+    notas.push(`${continuaciones} línea/s son la continuación de la descripción de arriba.`);
   }
 
   const contexto: ContextoDeTabla = {
@@ -315,6 +376,8 @@ export function reconstruirConContexto(
       metodo: limites.metodo,
       encabezados: contexto.encabezados,
       renglones,
+      hipotesis,
+      banda,
       filasVisibles: cuerpo.length,
       inclinacionGrados: enGrados(inclinacion),
       seEnderezo: corregir,
@@ -324,6 +387,107 @@ export function reconstruirConContexto(
       ms: Date.now() - comienzo,
     },
   };
+}
+
+/**
+ * La misma tabla con otro final de la banda de artículos.
+ *
+ * Rehace sólo la clasificación, que es barata: las líneas ya están armadas y
+ * las columnas ya están puestas. Es lo que permite que los finales posibles
+ * **compitan** —cada uno es una candidata más, y gana el que hace cerrar el
+ * comprobante— en vez de que una regla de distancia decida por todos.
+ */
+export function conOtraBanda(
+  tabla: TablaReconstruida,
+  banda: CandidataDeBanda,
+): TablaReconstruida {
+  // Copia superficial a propósito: la clasificación sólo escribe la clase y sus
+  // motivos, y conservar el mismo arreglo de celdas es lo que permite reusar lo
+  // ya calculado sobre esas mismas líneas en vez de rehacerlo por cada corte.
+  const hipotesis = tabla.hipotesis.map((h) => ({ ...h }));
+  clasificarRenglones(hipotesis, {
+    columnas: tabla.columnas,
+    alturaTipica: tabla.alturaTipica,
+    hastaY: banda.hastaY,
+  }).forEach((clasificacion, i) => {
+    hipotesis[i].clase = clasificacion.clase;
+    hipotesis[i].apoyos = clasificacion.apoyos;
+    hipotesis[i].continuacionDe = clasificacion.continuacionDe;
+    hipotesis[i].motivo = clasificacion.motivo;
+  });
+
+  return {
+    ...tabla,
+    hipotesis,
+    banda,
+    renglones: articulosConSusContinuaciones(hipotesis, tabla.columnas),
+  };
+}
+
+/** Los finales de banda que propone la evidencia de una tabla ya armada. */
+export function bandasDe(tabla: TablaReconstruida): CandidataDeBanda[] {
+  return bandasDeArticulos(tabla.hipotesis, tabla.columnas, tabla.alturaTipica);
+}
+
+/**
+ * Los artículos de la tabla, con las continuaciones pegadas a su renglón.
+ *
+ * «STRE CAV» debajo de un artículo es el final de su nombre, no otro artículo.
+ * Antes entraba como renglón propio y llegaba hasta el informe: contaba como
+ * una fila sin importe —con lo que el control de integridad concluía que
+ * faltaban renglones— y le pedía a una persona que completara sus celdas. Ahora
+ * se pega al de arriba, que es lo que dice el papel, y no genera ni una sola
+ * acción.
+ */
+export function articulosConSusContinuaciones(
+  hipotesis: RenglonReconstruido[],
+  columnas: ColumnaEspacial[],
+): RenglonReconstruido[] {
+  const salida = hipotesis
+    .map((h, i) => ({ h, i }))
+    .filter(({ h }) => h.clase === 'aceptado' || h.clase === 'pendiente')
+    .map(({ h }) => ({ ...h, celdas: [...h.celdas] }));
+
+  const dondeQuedo = new Map<number, (typeof salida)[number]>();
+  let cual = 0;
+  hipotesis.forEach((h, i) => {
+    if (h.clase === 'aceptado' || h.clase === 'pendiente') dondeQuedo.set(i, salida[cual++]);
+  });
+
+  for (const h of hipotesis) {
+    if (h.clase !== 'continuacion' || h.continuacionDe === null) continue;
+    const suyo = dondeQuedo.get(h.continuacionDe);
+    if (!suyo) continue;
+
+    h.celdas.forEach((celda, i) => {
+      // Sólo en las columnas donde van nombres: una continuación es el resto de
+      // una descripción, nunca el resto de un código ni de un importe.
+      const campo = columnas[i]?.campo?.campo;
+      const deNombres = campo === 'descripcion' || campo === 'marca' || campo === 'UNKNOWN_TEXT';
+      if (!celda?.texto || !deNombres) return;
+      const actual = suyo.celdas[i];
+      if (!actual?.texto) {
+        suyo.celdas[i] = celda;
+        return;
+      }
+      // El texto se suma al que ya estaba, en el orden en que está impreso.
+      suyo.celdas[i] = {
+        ...actual,
+        texto: `${actual.texto} ${celda.texto}`,
+        alternativas: [
+          {
+            ...actual.alternativas[0],
+            texto: `${actual.texto} ${celda.texto}`,
+            caja: unirCajas(actual.alternativas[0].caja, celda.alternativas[0].caja),
+          },
+          ...actual.alternativas,
+        ],
+      };
+    });
+    suyo.caja = unirCajas(suyo.caja, h.caja);
+  }
+
+  return salida;
 }
 
 /**
@@ -346,7 +510,11 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
       alternativas,
       // Que el propio OCR haya dudado también es ambigüedad, no ruido.
       estado: alternativas.length > 1 ? 'ambigua' : 'leida',
-      procedencia: { pasada: lectura.pasada, confianza: lectura.confianza, caja: lectura.caja },
+      procedencia: {
+        pasada: lectura.pasada,
+        confianza: lectura.confianza,
+        cajaEnLaFoto: lectura.cajaEnLaFoto,
+      },
     };
   }
 
@@ -373,6 +541,9 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
   const juntas = partes.join(partes.every(esNumerico) ? '' : ' ');
   const lectura = mejorLectura(reparto.partes[0]);
   const cajaDeTodas = reparto.partes.map((o) => mejorLectura(o).caja).reduce(unirCajas);
+  const cajaDeTodasEnLaFoto = reparto.partes
+    .map((o) => mejorLectura(o).cajaEnLaFoto)
+    .reduce(unirCajas);
 
   /*
    * Lo descartado no se pierde: queda como alternativa de la celda, con su
@@ -386,12 +557,19 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
     reparto.partes.length === 1
       ? [...lecturasAlternativas(reparto.partes[0]), ...deLasQueCompetian]
       : [
-          { texto: juntas, caja: cajaDeTodas, pasada: lectura.pasada, confianza: lectura.confianza },
+          {
+            texto: juntas,
+            caja: cajaDeTodas,
+            cajaEnLaFoto: cajaDeTodasEnLaFoto,
+            pasada: lectura.pasada,
+            confianza: lectura.confianza,
+          },
           ...reparto.partes.map((o) => {
             const suya = mejorLectura(o);
             return {
               texto: suya.texto,
               caja: suya.caja,
+              cajaEnLaFoto: suya.cajaEnLaFoto,
               pasada: suya.pasada,
               confianza: suya.confianza,
             };
@@ -408,7 +586,11 @@ export function armarCelda(columna: number, competidoras: Observacion[]): CeldaR
     texto: juntas,
     alternativas: sinRepetidas,
     estado: sinRepetidas.length > 1 ? 'ambigua' : 'leida',
-    procedencia: { pasada: lectura.pasada, confianza: lectura.confianza, caja: lectura.caja },
+    procedencia: {
+      pasada: lectura.pasada,
+      confianza: lectura.confianza,
+      cajaEnLaFoto: lectura.cajaEnLaFoto,
+    },
   };
 }
 

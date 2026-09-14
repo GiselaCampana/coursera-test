@@ -33,7 +33,7 @@ function caja(x0: number, x1: number, y0 = 0.3, alto = ALTO): Caja {
 }
 
 function lectura(texto: string, pasada: string, confianza: number, donde: Caja): Lectura {
-  return { texto, pasada, confianza, caja: donde, alternativas: [] };
+  return { texto, pasada, confianza, caja: donde, cajaEnLaFoto: donde, alternativas: [] };
 }
 
 /** Una observación leída por varias pasadas, todas con la misma caja. */

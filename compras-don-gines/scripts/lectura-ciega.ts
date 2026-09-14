@@ -14,6 +14,12 @@
  *
  *   npx tsx scripts/lectura-ciega.ts validacion/imagenes/*.jpg
  *   npx tsx scripts/lectura-ciega.ts --relectura validacion/imagenes/una.jpg
+ *   npx tsx scripts/lectura-ciega.ts --sin-ocr        (reusa la evidencia guardada)
+ *
+ * `--sin-ocr` vuelve a correr **sólo el motor** sobre la evidencia que ya se
+ * capturó. No sirve para una primera lectura ciega —para eso hay que leer la
+ * foto— pero sí para medir un cambio del motor contra el mismo OCR, que es la
+ * única manera de saber si una diferencia es del motor o de la lectura.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -87,6 +93,7 @@ function huellaDelMotor(): HuellaDelMotor {
 async function main() {
   const argumentos = process.argv.slice(2);
   const conRelectura = argumentos.includes('--relectura');
+  const sinOcr = argumentos.includes('--sin-ocr');
   const rutas = argumentos.filter((a) => !a.startsWith('--'));
 
   const fotos = rutas.length
@@ -114,15 +121,21 @@ async function main() {
     );
   }
 
-  const worker = await abrirWorker();
+  const worker = sinOcr ? null : await abrirWorker();
 
   for (const foto of fotos) {
     const nombre = path.basename(foto).replace(/\.[^.]+$/, '');
     const bytes = readFileSync(foto);
     process.stderr.write(`\n=== ${nombre}\n`);
 
-    const { evidencia, ms: ocrMs } = await capturarEvidencia(worker, foto);
-    writeFileSync(path.join(EVIDENCIA, `${nombre}.json`), JSON.stringify(evidencia));
+    let evidencia;
+    let ocrMs = 0;
+    if (worker) {
+      ({ evidencia, ms: ocrMs } = await capturarEvidencia(worker, foto));
+      writeFileSync(path.join(EVIDENCIA, `${nombre}.json`), JSON.stringify(evidencia));
+    } else {
+      evidencia = JSON.parse(readFileSync(path.join(EVIDENCIA, `${nombre}.json`), 'utf8'));
+    }
 
     /*
      * El plan de relectura se calcula y se guarda **siempre**, incluso cuando no
@@ -167,7 +180,7 @@ async function main() {
     }
   }
 
-  await worker.terminate();
+  await worker?.terminate();
 }
 
 main().catch((error) => {

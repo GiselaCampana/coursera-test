@@ -24,11 +24,19 @@ import {
 } from '@/lib/ocr/reconstruccion/esqueleto';
 import { aplicarSemantica } from '@/lib/ocr/reconstruccion/columnas-espaciales';
 import {
+  bandasDeArticulos,
+  clasificarRenglones,
+  cortePierdeUnArticulo,
+} from '@/lib/ocr/reconstruccion/renglones';
+import {
   relacionesAritmeticas,
   type ContenidoDeColumna,
 } from '@/lib/ocr/motor/semantica-de-columnas';
 import {
   armarCelda,
+  articulosConSusContinuaciones,
+  bandasDe,
+  conOtraBanda,
   reconstruirConContexto,
   type CeldaReconstruida,
   type LecturaDeCelda,
@@ -72,9 +80,54 @@ export interface CandidataDeReconstruccion {
  * La primera es siempre la base, sin tocar. Las demás salen de las hipótesis de
  * esqueleto con las columnas numéricas repartidas de una sola vez.
  */
+/**
+ * Cuánto trabajo hizo cada etapa, para poder diagnosticar el tiempo.
+ *
+ * Sin esto, «el motor tardó siete segundos» no se puede investigar: no se sabe
+ * si el espacio de búsqueda creció, si creció en los esqueletos o en los
+ * repartos, ni cuánto de eso fue reconstruir y cuánto interpretar. Se mide
+ * siempre —cuesta nada— y se informa siempre.
+ */
+export interface MedicionDeCandidatas {
+  /** Líneas que se miraron antes de decidir cuáles son artículos. */
+  hipotesisDeRenglon: number;
+  aceptados: number;
+  pendientes: number;
+  continuaciones: number;
+  ruido: number;
+  /** Alturas de renglón propuestas por alguna columna. */
+  esqueletos: number;
+  /** Combinaciones de reparto de columnas que se llegaron a armar. */
+  combinaciones: number;
+  /** Finales de tabla que se propusieron. */
+  cortesDeBanda: number;
+  /** Candidatas de tabla que salieron de todo eso. */
+  candidatas: number;
+  msReconstruccion: number;
+  msCandidatas: number;
+}
+
+export function medicionVacia(): MedicionDeCandidatas {
+  return {
+    hipotesisDeRenglon: 0,
+    aceptados: 0,
+    pendientes: 0,
+    continuaciones: 0,
+    ruido: 0,
+    esqueletos: 0,
+    combinaciones: 0,
+    cortesDeBanda: 0,
+    candidatas: 0,
+    msReconstruccion: 0,
+    msCandidatas: 0,
+  };
+}
+
 export function candidatasDeTabla(
   evidencia: EvidenciaDeLectura,
+  medicion: MedicionDeCandidatas = medicionVacia(),
 ): CandidataDeReconstruccion[] {
+  const comienzo = Date.now();
   /*
    * El pie se lee **antes** de delimitar las columnas, porque el neto impreso es
    * una evidencia sobre qué es cada columna: la de montos cuya suma da ese neto
@@ -91,6 +144,14 @@ export function candidatasDeTabla(
     .filter((neto): neto is Decimal => neto !== null && neto.gt(0));
 
   const { tabla, contexto } = reconstruirConContexto(evidencia, { netosPosibles });
+  medicion.msReconstruccion = Date.now() - comienzo;
+  medicion.hipotesisDeRenglon = tabla.hipotesis.length;
+  for (const h of tabla.hipotesis) {
+    if (h.clase === 'aceptado') medicion.aceptados += 1;
+    else if (h.clase === 'pendiente') medicion.pendientes += 1;
+    else if (h.clase === 'continuacion') medicion.continuaciones += 1;
+    else medicion.ruido += 1;
+  }
 
   const esqueletos = hipotesisDeEsqueleto(
     contexto.cuerpo,
@@ -99,17 +160,101 @@ export function candidatasDeTabla(
   );
   const consenso = consensoDeFilas(esqueletos);
 
-  const candidatas: CandidataDeReconstruccion[] = [
-    {
-      origen: 'cercanía',
-      tabla: resemantizada(tabla, netosPosibles),
-      filasEsperadas: consenso.esperadas,
-      notas: [
-        'Cada valor fue al renglón que tenía más cerca.',
-        ...consenso.discrepancias,
-      ],
-    },
-  ];
+  const candidatas: CandidataDeReconstruccion[] = [];
+
+  /*
+   * Dónde termina la tabla es una **hipótesis más**, no una regla, y se combina
+   * con todas las demás.
+   *
+   * El encabezado dice dónde empieza; el final no lo dice nadie. Una grilla
+   * impresa que sigue vacía debajo del último artículo, o una línea del pie que
+   * mirada sola parece un renglón, prolongan la tabla si el corte lo decide una
+   * distancia fija. Se proponen los finales plausibles y gana el que hace
+   * cerrar el comprobante, igual que con todo lo demás.
+   *
+   * Cada candidata entra con sus versiones cortadas pegadas. Si se agregaran
+   * todas al final, el presupuesto de candidatas se lo comen las hipótesis de
+   * esqueleto y la versión cortada nunca llega a competir, que es exactamente
+   * lo que pasaba con la foto de Los Calvos. Cuesta poco: las líneas ya están
+   * armadas y las columnas puestas, así que cortar es volver a clasificar.
+   */
+  const cortes = bandasDe(tabla).slice(1, 3);
+  medicion.esqueletos = esqueletos.length;
+  medicion.cortesDeBanda = cortes.length;
+
+  /*
+   * Cuántos renglones espera el consenso **dentro** de la banda.
+   *
+   * Sin esto una candidata cortada no podría ganar nunca: `puntuarTabla`
+   * penaliza interpretar menos renglones de los que el detector vio, así que
+   * cortar la grilla vacía se pagaba como si se hubieran perdido artículos. La
+   * expectativa tiene que moverse con la hipótesis: si la tabla termina antes,
+   * los renglones que el esqueleto veía debajo no son renglones que falten.
+   */
+  const patron =
+    esqueletos.find((e) => e.alturas.length === consenso.esperadas) ?? esqueletos[0];
+  const esperadasHasta = (hastaY: number) =>
+    patron ? patron.alturas.filter((y) => y <= hastaY).length : consenso.esperadas;
+
+  /*
+   * Dos candidatas que dicen exactamente lo mismo son una sola.
+   *
+   * Pasa todo el tiempo: un reparto alternativo de una columna que el esqueleto
+   * ya resolvía igual, o un corte de banda que no saca ninguna línea, producen
+   * una tabla idéntica a otra. `decidir` las descarta al final por su firma,
+   * pero para entonces ya se pagó una interpretación completa del comprobante
+   * por cada una, que es la parte cara. Descartarlas acá es lo que bajó el
+   * tiempo de la foto más lenta del lote a la mitad.
+   */
+  const firmas = new Set<string>();
+  const firmaDe = (t: CandidataDeReconstruccion['tabla']) =>
+    t.renglones
+      .map((r) => `${r.y.toFixed(4)}|${r.celdas.map((c) => c?.texto ?? '').join('~')}`)
+      .join('\n');
+
+  const agregar = (candidata: CandidataDeReconstruccion) => {
+    if (candidatas.length >= CANDIDATAS_MAXIMAS) return;
+    const firma = firmaDe(candidata.tabla);
+    if (firmas.has(firma)) return;
+    firmas.add(firma);
+    candidatas.push(candidata);
+    for (const banda of cortes) {
+      if (candidatas.length >= CANDIDATAS_MAXIMAS) return;
+      // Un final de tabla no puede llevarse puesto un artículo que se prueba solo.
+      if (
+        cortePierdeUnArticulo(
+          candidata.tabla.hipotesis,
+          candidata.tabla.columnas,
+          candidata.tabla.alturaTipica,
+          banda.hastaY,
+        )
+      ) {
+        continue;
+      }
+      const cortada = conOtraBanda(candidata.tabla, banda);
+      if (cortada.renglones.length === candidata.tabla.renglones.length) continue;
+      const firmaCortada = firmaDe(cortada);
+      if (firmas.has(firmaCortada)) continue;
+      firmas.add(firmaCortada);
+      candidatas.push({
+        origen: `${candidata.origen}, cortada en ${banda.origen}`,
+        tabla: resemantizada(cortada, netosPosibles),
+        filasEsperadas: Math.min(candidata.filasEsperadas, esperadasHasta(banda.hastaY)),
+        notas: [
+          ...candidata.notas,
+          `La tabla se corta en ${banda.origen}: ` +
+            `${candidata.tabla.renglones.length - cortada.renglones.length} línea/s quedan afuera.`,
+        ],
+      });
+    }
+  };
+
+  agregar({
+    origen: 'cercanía',
+    tabla: resemantizada(tabla, netosPosibles),
+    filasEsperadas: consenso.esperadas,
+    notas: ['Cada valor fue al renglón que tenía más cerca.', ...consenso.discrepancias],
+  });
 
   /*
    * Una candidata por hipótesis de esqueleto, hasta tres, y dentro de cada una
@@ -132,10 +277,11 @@ export function candidatasDeTabla(
     const preparado = prepararColumnas(contexto, filas);
 
     for (const combinacion of combinacionesDeReparto(contexto, preparado, filas, esqueleto)) {
+      medicion.combinaciones += 1;
       if (candidatas.length >= CANDIDATAS_MAXIMAS) break;
       const armada = armarConEsqueleto(contexto, esqueleto, preparado, filas, combinacion.eleccion);
       if (!armada) continue;
-      candidatas.push({
+      agregar({
         origen: `esqueleto de ${esqueleto.origen}${combinacion.nombre}`,
         tabla: resemantizada(armada.tabla, netosPosibles),
         filasEsperadas: consenso.esperadas,
@@ -144,6 +290,8 @@ export function candidatasDeTabla(
     }
   }
 
+  medicion.candidatas = candidatas.length;
+  medicion.msCandidatas = Date.now() - comienzo - medicion.msReconstruccion;
   return candidatas;
 }
 
@@ -171,7 +319,7 @@ const COMBINACIONES_MAXIMAS = 6;
  * favorece del mejor esqueleto y alguna del segundo; más que eso es gastar
  * segundos en hipótesis que ya perdieron.
  */
-const CANDIDATAS_MAXIMAS = 8;
+const CANDIDATAS_MAXIMAS = 12;
 
 /**
  * Las combinaciones de repartos que vale la pena interpretar enteras.
@@ -503,30 +651,18 @@ function armarConEsqueleto(
   /*
    * Una altura del esqueleto no es todavía un artículo.
    *
-   * El esqueleto dice **dónde** puede haber un renglón; si ahí hay uno lo dicen
-   * las celdas que quedaron colgadas. Sin este filtro, cada línea que el OCR vio
-   * —el domicilio del emisor, la leyenda del pie, una mancha— se convierte en un
-   * artículo con descripción y sin un solo número. Sobre una de las dos fotos de
-   * Los Calvos eso producía dieciocho «artículos» llamados «Federal», «Aires,» y
-   * «Monotributista», que es peor que no leer nada: una lista de basura larga
-   * parece una lectura y hay que revisarla entera para descubrir que no lo es.
+   * El esqueleto dice **dónde** puede haber un renglón; si ahí hay uno lo dice
+   * la evidencia que quedó colgada, y lo decide la misma clasificación que en
+   * la reconstrucción por cercanía. Que las dos hipótesis de tabla usen la
+   * misma regla es lo que hace comparable elegir entre ellas: antes, la de
+   * esqueleto pedía «dos celdas y un número» y la de cercanía otra cosa, así
+   * que ganaba la que tuviera el filtro más flojo.
    */
-  const conDatos = filas
-    .map((fila, i) => ({ fila, i }))
-    .filter(({ i }) => esRenglonDeVerdad(celdas[i], columnas, contexto.hayColumnasNumericas));
-
-  const descartadas = filas.length - conDatos.length;
-  if (descartadas > 0) {
-    notas.push(
-      `${descartadas} de las ${filas.length} alturas del esqueleto no tienen datos de artículo ` +
-        'y no se tomaron como renglones.',
-    );
-  }
-
-  const renglones: RenglonReconstruido[] = conDatos.map(({ fila, i }) => {
+  const hipotesis: RenglonReconstruido[] = filas.map((fila, i) => {
     const delRenglon = celdas[i].filter((c): c is CeldaReconstruida => c !== null);
+    // En el espacio canónico, como todo lo que después se compara con esto.
     const caja = delRenglon.length
-      ? delRenglon.map((c) => c.procedencia!.caja).reduce(unir)
+      ? delRenglon.map((c) => c.alternativas[0]!.caja).reduce(unir)
       : { x0: 0, y0: fila.y, x1: 1, y1: fila.y };
     return {
       y: fila.y,
@@ -539,8 +675,34 @@ function armarConEsqueleto(
           : delRenglon.length === columnas.length
             ? 'completo'
             : 'incompleto',
+      clase: 'pendiente' as const,
+      apoyos: [],
+      continuacionDe: null,
+      motivo: '',
     };
   });
+
+  const bandas = bandasDeArticulos(hipotesis, columnas, contexto.alturaTipica);
+  const banda = bandas[0];
+  clasificarRenglones(hipotesis, {
+    columnas,
+    alturaTipica: contexto.alturaTipica,
+    hastaY: banda.hastaY,
+  }).forEach((clasificacion, i) => {
+    hipotesis[i].clase = clasificacion.clase;
+    hipotesis[i].apoyos = clasificacion.apoyos;
+    hipotesis[i].continuacionDe = clasificacion.continuacionDe;
+    hipotesis[i].motivo = clasificacion.motivo;
+  });
+
+  const renglones = articulosConSusContinuaciones(hipotesis, columnas);
+
+  const descartadas = filas.length - renglones.length;
+  if (descartadas > 0) {
+    notas.push(
+      `${descartadas} de las ${filas.length} alturas del esqueleto no llegaron a artículo.`,
+    );
+  }
 
   const valoresDeOtraPasada = renglones.reduce(
     (total, renglon) =>
@@ -557,6 +719,8 @@ function armarConEsqueleto(
       columnas,
       metodo: contexto.metodo,
       encabezados: contexto.encabezados,
+      hipotesis,
+      banda,
       renglones,
       filasVisibles: contexto.cuerpo.length,
       inclinacionGrados: contexto.inclinacionGrados,
@@ -600,21 +764,6 @@ function resemantizada(tabla: TablaReconstruida, netosPosibles: Decimal[]): Tabl
   };
 }
 
-/** ¿Estas celdas son un artículo, o una línea suelta que cayó a esa altura? */
-function esRenglonDeVerdad(
-  celdas: (CeldaReconstruida | null)[],
-  columnas: { campo: { campo: CampoDeColumna } | null }[],
-  hayColumnasNumericas: boolean,
-): boolean {
-  const llenas = celdas.filter((c) => c !== null && (c.texto ?? '').trim() !== '');
-  if (llenas.length < 2) return false;
-
-  return celdas.some((celda, i) => {
-    if (celda === null || !/\d/.test(celda.texto ?? '')) return false;
-    if (!hayColumnasNumericas) return true;
-    return llevaNumeros(columnas[i]?.campo?.campo);
-  });
-}
 
 /** Cuánta ventaja tiene que sacar un reparto para creerle, en alturas de renglón. */
 const MARGEN_DE_REPARTO = 1;
@@ -671,7 +820,11 @@ function armarCeldaDeValor(columna: number, valor: ValorConObservaciones): Celda
     texto: unicas[0]?.texto ?? valor.texto,
     alternativas: unicas,
     estado: unicas.length > 1 ? 'ambigua' : 'leida',
-    procedencia: { pasada: lectura.pasada, confianza: valor.confianza, caja: valor.caja },
+    procedencia: {
+      pasada: lectura.pasada,
+      confianza: valor.confianza,
+      cajaEnLaFoto: lectura.cajaEnLaFoto,
+    },
   };
 }
 
@@ -689,7 +842,12 @@ function unionesPosibles(valor: ValorConObservaciones): LecturaDeCelda[] {
   if (partes.length < 2) return [];
 
   const lectura = mejorLectura(valor.observaciones[0]);
-  const base = { caja: valor.caja, pasada: lectura.pasada, confianza: valor.confianza };
+  const base = {
+    caja: valor.caja,
+    cajaEnLaFoto: lectura.cajaEnLaFoto,
+    pasada: lectura.pasada,
+    confianza: valor.confianza,
+  };
 
   const pegado = partes.join('');
   const uniones = [pegado];

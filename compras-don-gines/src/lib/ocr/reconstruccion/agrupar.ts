@@ -33,7 +33,16 @@ import type { FragmentoEnderezado } from '@/lib/ocr/reconstruccion/inclinacion';
  * versiones que trajo cada pasada.
  */
 export interface Observacion {
-  /** La caja de consenso: la mediana de las pasadas que leyeron lo mismo. */
+  /**
+   * Dónde está, en el **espacio canónico**: normalizado a 0..1 de la página y
+   * enderezado.
+   *
+   * Toda decisión geométrica del motor —qué renglón, qué columna, qué se pisa
+   * con qué, dónde empieza y termina la tabla— se toma en este espacio y sólo
+   * en éste. Tener dos sistemas conviviendo es lo que hacía que la corrección
+   * de inclinación se perdiera justo en las celdas con más apoyo, que son las
+   * que juntan varias pasadas.
+   */
   caja: Caja;
   lecturas: Lectura[];
 }
@@ -42,8 +51,16 @@ export interface Lectura {
   texto: string;
   confianza: number;
   pasada: string;
-  /** Dónde está en la foto original, sin enderezar: es lo que se le señala a una persona. */
+  /** Dónde está en el espacio canónico. Es la que se usa para decidir. */
   caja: Caja;
+  /**
+   * Dónde está en la foto tal como salió, sin enderezar.
+   *
+   * Es **sólo procedencia**: sirve para señalarle el dato a una persona sobre
+   * su propia foto y para poder auditar la corrección de inclinación. No se
+   * decide nada con ella.
+   */
+  cajaEnLaFoto: Caja;
   /** Las otras lecturas que el propio OCR consideró para esta palabra. */
   alternativas: string[];
 }
@@ -110,7 +127,13 @@ export function mejorLectura(observacion: Observacion): Lectura {
 export function lecturasAlternativas(observacion: Observacion): LecturaDeCelda[] {
   const ganadora = mejorLectura(observacion);
   const salida: LecturaDeCelda[] = [
-    { texto: ganadora.texto, caja: ganadora.caja, pasada: ganadora.pasada, confianza: ganadora.confianza },
+    {
+      texto: ganadora.texto,
+      caja: ganadora.caja,
+      cajaEnLaFoto: ganadora.cajaEnLaFoto,
+      pasada: ganadora.pasada,
+      confianza: ganadora.confianza,
+    },
   ];
   const vistos = new Set([ganadora.texto]);
 
@@ -120,6 +143,7 @@ export function lecturasAlternativas(observacion: Observacion): LecturaDeCelda[]
     salida.push({
       texto: lectura.texto,
       caja: lectura.caja,
+      cajaEnLaFoto: lectura.cajaEnLaFoto,
       pasada: lectura.pasada,
       confianza: lectura.confianza,
     });
@@ -134,6 +158,7 @@ export function lecturasAlternativas(observacion: Observacion): LecturaDeCelda[]
       salida.push({
         texto: alternativa,
         caja: lectura.caja,
+        cajaEnLaFoto: lectura.cajaEnLaFoto,
         pasada: lectura.pasada,
         confianza: lectura.confianza,
         delPropioOcr: true,
@@ -147,7 +172,10 @@ export function lecturasAlternativas(observacion: Observacion): LecturaDeCelda[]
 /** Una lectura posible de una celda, con todo lo que hace falta para auditarla. */
 export interface LecturaDeCelda {
   texto: string;
+  /** En el espacio canónico. */
   caja: Caja;
+  /** En la foto, para señalarla. Sólo procedencia. */
+  cajaEnLaFoto: Caja;
   pasada: string;
   confianza: number;
   /** La propuso el propio OCR como segunda opción de esa misma palabra. */
@@ -182,7 +210,8 @@ export function agruparPorLugar(fragmentos: FragmentoEnderezado[]): Observacion[
       texto: fragmento.texto,
       confianza: fragmento.confianza,
       pasada: fragmento.pasada,
-      caja: fragmento.cajaOriginal,
+      caja: fragmento.caja,
+      cajaEnLaFoto: fragmento.cajaOriginal,
       alternativas: fragmento.alternativas ?? [],
     };
 
@@ -192,16 +221,7 @@ export function agruparPorLugar(fragmentos: FragmentoEnderezado[]): Observacion[
 
     if (candidata) {
       candidata.lecturas.push(lectura);
-      /*
-       * La caja de consenso se queda con la de la lectura que manda.
-       *
-       * Ojo: es la caja **sin enderezar**, mientras que la comparación de
-       * arriba usa la enderezada. Está medido que corregirlo cambia la
-       * reconstrucción entera —sobre la foto ilegible de Los Calvos 212356 pasa
-       * de un renglón y rechazo a dieciséis renglones inventados y revisión—,
-       * así que la corrección va junto con el control de filas inventadas y no
-       * suelta acá.
-       */
+      // La caja de consenso se queda con la de la lectura que manda.
       candidata.caja = mejorLectura(candidata).caja;
     } else {
       observaciones.push({ caja: fragmento.caja, lecturas: [lectura] });
@@ -375,6 +395,10 @@ export function unirPartidas(renglon: RenglonVisual, alturaTipica: number): Obse
             ),
             pasada: mejorLectura(previa).pasada,
             caja: unir(mejorLectura(previa).caja, mejorLectura(observacion).caja),
+            cajaEnLaFoto: unir(
+              mejorLectura(previa).cajaEnLaFoto,
+              mejorLectura(observacion).cajaEnLaFoto,
+            ),
             alternativas: [],
           },
         ],

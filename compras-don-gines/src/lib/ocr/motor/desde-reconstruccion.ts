@@ -16,6 +16,10 @@ import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
 import { DERIVED_SUGGESTION, sugerenciasDerivadas } from '@/lib/ocr/motor/sugerencias';
 import { reconciliarPie, type PieFiscal } from '@/lib/ocr/motor/pie-fiscal';
 import {
+  medicionVacia,
+  type MedicionDeCandidatas,
+} from '@/lib/ocr/reconstruccion/candidatas-de-tabla';
+import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
   llevaNumeros,
@@ -72,6 +76,14 @@ import {
  *    sólo la suma contra el neto impreso lo delata.
  */
 
+/** Lo medido de una corrida entera, etapa por etapa. */
+export interface Instrumentacion extends MedicionDeCandidatas {
+  /** Cuántas filas del haz semántico salieron de cada candidata de tabla. */
+  lecturasPorCandidata: number[];
+  msInterpretacion: number;
+  ms: number;
+}
+
 export interface InformeReconstruido {
   emisor: EmisorLeido;
   tabla: TablaReconstruida;
@@ -84,6 +96,15 @@ export interface InformeReconstruido {
   /** Cómo se armó la tabla que ganó, y con qué compitió. */
   reconstruccionElegida: string;
   reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
+  /**
+   * Cuánto trabajo hizo cada etapa y cuánto tardó.
+   *
+   * Va en el informe y no en un log porque es lo que permite contestar «¿por
+   * qué este comprobante tardó siete segundos?» sin volver a correrlo: cuántas
+   * líneas se miraron, cuántas llegaron a artículo, cuántos esqueletos y
+   * cuántas combinaciones se probaron, y cuánto costó cada parte.
+   */
+  instrumentacion: Instrumentacion;
   /**
    * El pie fiscal reconciliado, asignación por asignación.
    *
@@ -316,7 +337,8 @@ function interpretarUnaVez(
     return lecturas;
   };
 
-  const armados = candidatasDeTabla(evidencia).map((candidata) => ({
+  const medicion = medicionVacia();
+  const armados = candidatasDeTabla(evidencia, medicion).map((candidata) => ({
     candidata,
     lecturas: interpretarTabla(candidata.tabla, candidata.filasEsperadas),
   }));
@@ -424,6 +446,13 @@ function interpretarUnaVez(
     pendientes,
     resumen: resumir(pendientes),
     reconstruccionElegida: elegido.candidata.origen,
+    instrumentacion: {
+      ...medicion,
+      lecturasPorCandidata: armados.map((a) => a.lecturas.length),
+      msInterpretacion:
+        Date.now() - comienzo - medicion.msReconstruccion - medicion.msCandidatas,
+      ms: Date.now() - comienzo,
+    },
     reconstruccionesProbadas: mejorDeCada.map((a) => ({
       origen: a.candidata.origen,
       puntaje: a.mejor,
@@ -453,7 +482,7 @@ function variantesDeFila(
   const base = (
     elegida: (columna: number) => string | null,
     lugares: (columna: number) => string | undefined = (i) =>
-      renglon.celdas[i]?.procedencia ? lugarDe(renglon.celdas[i]!.procedencia!.caja) : undefined,
+      renglon.celdas[i]?.alternativas[0] ? lugarDe(renglon.celdas[i]!.alternativas[0].caja) : undefined,
   ): FilaDeDatos => {
     let x = 0;
     const celdas: (Celda | null)[] = renglon.celdas.map((celda, i) => {
@@ -521,8 +550,8 @@ function variantesDeFila(
           (j) =>
             j === i
               ? suLugar
-              : renglon.celdas[j]?.procedencia
-                ? lugarDe(renglon.celdas[j]!.procedencia!.caja)
+              : renglon.celdas[j]?.alternativas[0]
+                ? lugarDe(renglon.celdas[j]!.alternativas[0].caja)
                 : undefined,
         ),
       );
@@ -1092,6 +1121,7 @@ function conCeldasConfirmadas(
           {
             texto: confirmada.texto,
             caja: celda?.alternativas[0]?.caja ?? renglon.caja,
+            cajaEnLaFoto: celda?.alternativas[0]?.cajaEnLaFoto ?? renglon.caja,
             pasada: 'confirmada por una persona',
             confianza: 1,
           },

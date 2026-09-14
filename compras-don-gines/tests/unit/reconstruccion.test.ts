@@ -420,7 +420,9 @@ describe('la procedencia de cada valor es auditable', () => {
       expect(celda?.procedencia).not.toBeNull();
       expect(celda!.procedencia!.pasada).toBe('completo:directo');
       expect(celda!.procedencia!.confianza).toBeGreaterThan(0);
-      expect(celda!.procedencia!.caja.x1).toBeGreaterThan(celda!.procedencia!.caja.x0);
+      expect(celda!.procedencia!.cajaEnLaFoto.x1).toBeGreaterThan(
+        celda!.procedencia!.cajaEnLaFoto.x0,
+      );
     }
   });
 
@@ -434,8 +436,8 @@ describe('la procedencia de cada valor es auditable', () => {
     const tabla = reconstruir(tablaBase({ pendiente: PENDIENTE }));
     expect(tabla.seEnderezo).toBe(true);
 
-    const derecha = tabla.renglones[0].celdas[4]!.procedencia!.caja;
-    const izquierda = tabla.renglones[0].celdas[0]!.procedencia!.caja;
+    const derecha = tabla.renglones[0].celdas[4]!.procedencia!.cajaEnLaFoto;
+    const izquierda = tabla.renglones[0].celdas[0]!.procedencia!.cajaEnLaFoto;
     // En la foto original la celda de la derecha está más abajo que la de la
     // izquierda: si se hubiera guardado la caja corregida, estarían a la par.
     expect(derecha.y0).toBeGreaterThan(izquierda.y0);
