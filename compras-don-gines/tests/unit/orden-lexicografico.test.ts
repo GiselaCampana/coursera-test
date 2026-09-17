@@ -5,6 +5,7 @@ import {
   controlarRenglon,
   decidir,
   netoDelRenglon,
+  PISO_UTILIZABLE,
   puntuarTabla,
   type CandidataDeTabla,
   type RenglonCandidato,
@@ -50,6 +51,11 @@ function renglon(parcial: Partial<RenglonCandidato>): RenglonCandidato {
     cantidad: null,
     kilos: null,
     piezas: null,
+    cantidadFacturada: null,
+    campoCantidadFacturada: null,
+    unidadFacturada: null,
+    productoId: null,
+    unidadDeStock: null,
     precioUnitario: null,
     descuentoPct: null,
     precioConDescuento: null,
@@ -62,6 +68,17 @@ function renglon(parcial: Partial<RenglonCandidato>): RenglonCandidato {
     controles: [],
     ...parcial,
   };
+  if (!Object.prototype.hasOwnProperty.call(parcial, 'cantidadFacturada')) {
+    base.cantidadFacturada = base.kilos ?? base.cantidad ??
+      (base.piezas === null ? null : new Decimal(base.piezas));
+    base.campoCantidadFacturada = base.kilos
+      ? 'kilos'
+      : base.cantidad
+        ? 'cantidad'
+        : base.piezas === null
+          ? null
+          : 'piezas';
+  }
   base.controles = controlarRenglon(base);
   return base;
 }
@@ -233,6 +250,34 @@ describe('una interpretación cien veces mayor que cierra consigo misma', () => 
     const { literal, porCien } = dosEscalas();
     expect(decidir([literal, porCien]).ganadora).toBe(literal);
     expect(decidir([porCien, literal]).ganadora).toBe(literal);
+  });
+});
+
+describe('el piso de evidencia sin neto impreso', () => {
+  it('un cierre accidental entre muchas filas ilegibles no alcanza para mandar a revisión', () => {
+    const renglones = Array.from({ length: 15 }, (_, i) =>
+      renglon(
+        i === 0
+          ? {
+              cantidad: new Decimal(1),
+              precioUnitario: new Decimal(100),
+              importe: new Decimal(100),
+            }
+          : {
+              cantidad: new Decimal(i + 2),
+              precioUnitario: new Decimal(100),
+            },
+      ),
+    );
+
+    const candidata = tabla(renglones, null);
+    expect(
+      candidata.renglones.filter(
+        (r) => r.controles.length > 0 && r.controles.every((c) => c.paso),
+      ),
+    ).toHaveLength(1);
+    expect(candidata.puntaje).toBeLessThan(PISO_UTILIZABLE);
+    expect(decidir([candidata]).decision).toBe('rechazo');
   });
 });
 

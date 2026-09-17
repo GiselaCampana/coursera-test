@@ -17,6 +17,7 @@ import {
   type EvidenciaDeRelectura,
 } from '@/lib/ocr/reconstruccion/relectura';
 import { soloBloqueantes } from '@/lib/ocr/motor/pendientes';
+import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
 
 /**
  * La relectura focalizada, sobre las fotos reales.
@@ -46,9 +47,22 @@ function relecturaDe(nombre: string): EvidenciaDeRelectura | undefined {
 }
 
 function interpretar(nombre: string, conRelectura = false): InformeReconstruido {
+  const cantidad =
+    nombre === 'errecalde'
+      ? 23
+      : nombre === 'ezra'
+        ? 6
+        : nombre === 'mabelherdi'
+          ? 9
+          : nombre === 'barraza'
+            ? 2
+            : nombre === 'los-calvos-212356'
+              ? 1
+              : 11;
   return interpretarReconstruccion(leer(nombre), {
     cuitDelReceptor: CUIT_DEL_RECEPTOR,
     relectura: conRelectura ? relecturaDe(nombre) : undefined,
+    asociacionesDeProducto: asociacionesDePrueba(cantidad),
   });
 }
 

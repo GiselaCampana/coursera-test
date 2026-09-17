@@ -133,6 +133,10 @@ export interface Comparacion {
   accionesHumanas: number;
   columnasPorConfirmar: number;
   celdasPorCorregir: number;
+  /** Renglones leídos que todavía no tienen un producto inequívoco. */
+  productosPorAsociar: number;
+  /** Productos asociados cuya unidad de stock todavía no está resuelta. */
+  unidadesPorResolver: number;
   /** El pie desglosado en las cinco cuentas que piden trabajos distintos. */
   balanceFiscal: {
     asignacionesIncorrectas: number;
@@ -296,7 +300,7 @@ function deEscala(
  * `v1` tiraba todos los puntos como separadores de miles. `v2` distingue las
  * cinco escrituras que aparecen entre el acta y una transcripción a mano.
  */
-export const VERSION_DEL_COMPARADOR = 'v2';
+export const VERSION_DEL_COMPARADOR = 'v3';
 
 export function comparar(
   acta: ActaDePrimeraLectura,
@@ -455,7 +459,18 @@ export function comparar(
    * hundía el veredicto de una factura sobre la que no hay nada mal afirmado.
    */
   const columnasPorConfirmar = acta.bloqueosRaiz.filter((b) => b.renglon === null).length;
-  const celdasPorCorregir = acta.bloqueosRaiz.length - columnasPorConfirmar;
+  const productosPorAsociar = acta.bloqueosRaiz.filter(
+    (b) => b.categoria === 'BLOCKING_PRODUCT',
+  ).length;
+  const unidadesPorResolver = acta.bloqueosRaiz.filter(
+    (b) => b.categoria === 'BLOCKING_UNIT',
+  ).length;
+  const celdasPorCorregir = acta.bloqueosRaiz.filter(
+    (b) =>
+      b.renglon !== null &&
+      b.categoria !== 'BLOCKING_PRODUCT' &&
+      b.categoria !== 'BLOCKING_UNIT',
+  ).length;
 
   return {
     imagen: acta.imagen.nombre,
@@ -482,12 +497,16 @@ export function comparar(
     accionesHumanas: acta.bloqueosRaiz.length,
     columnasPorConfirmar,
     celdasPorCorregir,
+    productosPorAsociar,
+    unidadesPorResolver,
     balanceFiscal,
     veredicto: veredictoDe({
       coinciden,
       errores: campos.filter((c) => c.acierto === false).length,
       columnasPorConfirmar,
       celdasPorCorregir,
+      productosPorAsociar,
+      unidadesPorResolver,
       decision: acta.decision,
     }),
   };
@@ -504,6 +523,8 @@ function veredictoDe(datos: {
   errores: number;
   columnasPorConfirmar: number;
   celdasPorCorregir: number;
+  productosPorAsociar: number;
+  unidadesPorResolver: number;
   decision: string;
 }): string {
   if (!datos.coinciden) {
@@ -517,6 +538,20 @@ function veredictoDe(datos: {
   }
   if (datos.decision === 'automatica') {
     return 'Se leyó sola y todo lo afirmado coincide con el papel.';
+  }
+  if (
+    datos.celdasPorCorregir === 0 &&
+    (datos.productosPorAsociar > 0 || datos.unidadesPorResolver > 0)
+  ) {
+    const columnas =
+      datos.columnasPorConfirmar > 0
+        ? ` También quedan ${datos.columnasPorConfirmar} columna(s) por confirmar una sola vez.`
+        : '';
+    return (
+      'Nada afirmado está mal. La lectura contable está resuelta, pero antes de mover stock ' +
+      `faltan ${datos.productosPorAsociar} asociación/es de producto y ` +
+      `${datos.unidadesPorResolver} unidad/es de stock.${columnas}`
+    );
   }
   if (datos.celdasPorCorregir === 0 && datos.columnasPorConfirmar > 0) {
     return (

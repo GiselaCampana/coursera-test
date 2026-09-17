@@ -12,7 +12,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { interpretarReconstruccion } from '@/lib/ocr/motor/desde-reconstruccion';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
-import { soloBloqueantes } from '@/lib/ocr/motor/pendientes';
+import { soloBloqueantes, soloRaices } from '@/lib/ocr/motor/pendientes';
 
 const DIRECTORIO = path.resolve(process.cwd(), 'tests/fixtures/evidencia');
 const CUIT_DEL_RECEPTOR = '27-33342291-9';
@@ -48,8 +48,15 @@ for (const nombre of NOMBRES) {
     relectura,
   });
   const g = informe.veredicto.ganadora;
-  const ok = g?.renglones.filter((r) => r.controles.length > 0 && r.controles.every((c) => c.paso)).length ?? 0;
+  const ok =
+    g?.renglones.filter(
+      (r) => r.controles.length > 0 && r.controles.every((c) => c.paso),
+    ).length ?? 0;
   const bloqueos = soloBloqueantes(informe.pendientes).length;
+  const raices = soloRaices(informe.pendientes);
+  const productos = raices.filter((p) => p.categoria === 'BLOCKING_PRODUCT').length;
+  const unidades = raices.filter((p) => p.categoria === 'BLOCKING_UNIT').length;
+  const lectura = raices.length - productos - unidades;
 
   console.log(
     [
@@ -61,6 +68,9 @@ for (const nombre of NOMBRES) {
       `punt=${(g?.puntaje ?? 0).toFixed(2)}`,
       informe.veredicto.decision.padEnd(22),
       `bloq=${String(bloqueos).padStart(2)}`,
+      `lectura=${String(lectura).padStart(2)}`,
+      `productos=${String(productos).padStart(2)}`,
+      `unidades=${String(unidades).padStart(2)}`,
       `suma=${(g?.sumaDeRenglones ?? 0).toString().padEnd(14)}`,
       `neto=${g?.pie.netTotal?.toString() ?? '-'}`,
       `iva=${g?.pie.ivaTotal?.toString() ?? '-'}`,

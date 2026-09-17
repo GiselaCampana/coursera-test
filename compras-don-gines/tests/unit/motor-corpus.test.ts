@@ -458,8 +458,9 @@ describe('el informe que el motor deja de cada comprobante', () => {
 
   it('con dos cantidades, el informe dice cuál es la que cuesta', () => {
     const texto = informeEnTexto(leer(ESTRUCTURA_KILOS_Y_PIEZAS));
-    expect(texto).toContain('20 (unidad sin determinar) · 5 piezas');
-    expect(texto).toContain('La que cuesta: 20 (las piezas son el movimiento físico, no el costo)');
+    expect(texto).toContain('20 (unidad de facturación sin determinar) · 5 piezas');
+    expect(texto).toContain('Cantidad facturada: 20 (unidad no impresa) (sale de cantidad)');
+    expect(texto).toContain('Destino de stock: (producto sin asociar)');
     expect(texto).toContain('ya tiene el descuento');
   });
 

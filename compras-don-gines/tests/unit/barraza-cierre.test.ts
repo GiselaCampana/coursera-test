@@ -27,6 +27,7 @@ import type {
   RenglonReconstruido,
   TablaReconstruida,
 } from '@/lib/ocr/reconstruccion/reconstruccion';
+import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
 
 /**
  * Cerrar la factura de Lácteos Barraza, y no aparentar que cerró.
@@ -52,6 +53,7 @@ function relecturaDe(nombre: string): EvidenciaDeRelectura | undefined {
 
 const BARRAZA = interpretarReconstruccion(leer('barraza'), {
   cuitDelReceptor: CUIT_DEL_RECEPTOR,
+  asociacionesDeProducto: asociacionesDePrueba(2),
 });
 const RENGLONES = BARRAZA.veredicto.ganadora!.renglones;
 
@@ -247,6 +249,11 @@ describe('el cierre contra el pie no tapa una fila incorrecta', () => {
       cantidad: new Decimal(10),
       kilos: null,
       piezas: null,
+      cantidadFacturada: new Decimal(10),
+      campoCantidadFacturada: 'cantidad',
+      unidadFacturada: null,
+      productoId: null,
+      unidadDeStock: null,
       precioUnitario: new Decimal(100),
       descuentoPct: null,
       precioConDescuento: null,
@@ -259,6 +266,17 @@ describe('el cierre contra el pie no tapa una fila incorrecta', () => {
       controles: [],
       ...campos,
     };
+    if (!Object.prototype.hasOwnProperty.call(campos, 'cantidadFacturada')) {
+      base.cantidadFacturada = base.kilos ?? base.cantidad ??
+        (base.piezas === null ? null : new Decimal(base.piezas));
+      base.campoCantidadFacturada = base.kilos
+        ? 'kilos'
+        : base.cantidad
+          ? 'cantidad'
+          : base.piezas === null
+            ? null
+            : 'piezas';
+    }
     // Los controles se calculan, no se declaran: una fila a la que le falta el
     // precio no tiene ninguno, y eso es justamente lo que se está probando.
     base.controles = controlarRenglon(base);
@@ -430,9 +448,13 @@ describe('las columnas se resuelven juntas, no una por una', () => {
 // ---------------------------------------------------------------------------
 
 describe('Ezra y Mabelherdi no se movieron', () => {
-  const EZRA = interpretarReconstruccion(leer('ezra'), { cuitDelReceptor: '27-33342291-9' });
+  const EZRA = interpretarReconstruccion(leer('ezra'), {
+    cuitDelReceptor: '27-33342291-9',
+    asociacionesDeProducto: asociacionesDePrueba(['KG', 'KG', 'KG', 'KG', 'KG', 'UNIT']),
+  });
   const MABELHERDI = interpretarReconstruccion(leer('mabelherdi'), {
     cuitDelReceptor: '27-33342291-9',
+    asociacionesDeProducto: asociacionesDePrueba(9, 'UNIT'),
   });
 
   it('Ezra sigue siendo automática, con sus seis artículos y su cierre', () => {
@@ -529,6 +551,11 @@ describe('un renglón que no cierra solo no se da por bueno porque cierre el tot
       cantidad: new Decimal(10),
       kilos: null,
       piezas: null,
+      cantidadFacturada: new Decimal(10),
+      campoCantidadFacturada: 'cantidad',
+      unidadFacturada: null,
+      productoId: null,
+      unidadDeStock: null,
       precioUnitario: new Decimal(100),
       descuentoPct: null,
       precioConDescuento: null,

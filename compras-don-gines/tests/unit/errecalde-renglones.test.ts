@@ -7,6 +7,7 @@ import { hipotesisDeEsqueleto, consensoDeFilas } from '@/lib/ocr/reconstruccion/
 import { columnaDe } from '@/lib/ocr/reconstruccion/columnas-espaciales';
 import { textoPreferido } from '@/lib/ocr/reconstruccion/agrupar';
 import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
+import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
 
 /**
  * Contar los artículos de una factura larga, y no contar lo que no es uno.
@@ -30,9 +31,29 @@ function leer(nombre: string): EvidenciaDeLectura {
   return JSON.parse(readFileSync(path.join(DIRECTORIO, `${nombre}.json`), 'utf8'));
 }
 
-const ERRECALDE = interpretarReconstruccion(leer('errecalde'), {
-  cuitDelReceptor: CUIT_DEL_RECEPTOR,
-});
+function cantidadDeRenglones(nombre: string): number {
+  if (nombre === 'errecalde') return 23;
+  if (nombre === 'ezra') return 6;
+  if (nombre === 'mabelherdi') return 9;
+  if (nombre === 'barraza') return 2;
+  if (nombre === 'los-calvos-212356') return 1;
+  return 11;
+}
+
+function unidadesDe(nombre: string): ('KG' | 'UNIT')[] {
+  if (nombre === 'ezra') return ['KG', 'KG', 'KG', 'KG', 'KG', 'UNIT'];
+  if (nombre === 'mabelherdi') return Array.from({ length: 9 }, () => 'UNIT');
+  return Array.from({ length: cantidadDeRenglones(nombre) }, () => 'KG');
+}
+
+function interpretar(nombre: string, cuitDelReceptor = CUIT_DEL_RECEPTOR) {
+  return interpretarReconstruccion(leer(nombre), {
+    cuitDelReceptor,
+    asociacionesDeProducto: asociacionesDePrueba(unidadesDe(nombre)),
+  });
+}
+
+const ERRECALDE = interpretar('errecalde');
 const { contexto } = reconstruirConContexto(leer('errecalde'));
 
 /** Qué columnas ocupa cada línea del cuerpo, para poder clasificarla. */
@@ -182,9 +203,7 @@ describe('el pie fiscal se lee con la coma en su lugar', () => {
      * subtotal en la misma línea y es del mismo orden. No entra: lo que decide
      * es que el valor esté junto a **su** etiqueta y que la ecuación cierre.
      */
-    const barraza = interpretarReconstruccion(leer('barraza'), {
-      cuitDelReceptor: CUIT_DEL_RECEPTOR,
-    });
+    const barraza = interpretar('barraza');
     expect(barraza.pie.netTotal?.toFixed(2)).toBe('473232.44');
     for (const valor of [
       barraza.pie.netTotal,
@@ -269,13 +288,9 @@ describe('los renglones recuperados', () => {
 
 describe('el resto del banco no se movió', () => {
   it('Ezra sigue automática y Mabelherdi y Barraza siguen cerrando', () => {
-    const ezra = interpretarReconstruccion(leer('ezra'), { cuitDelReceptor: CUIT_DEL_RECEPTOR });
-    const mabelherdi = interpretarReconstruccion(leer('mabelherdi'), {
-      cuitDelReceptor: CUIT_DEL_RECEPTOR,
-    });
-    const barraza = interpretarReconstruccion(leer('barraza'), {
-      cuitDelReceptor: CUIT_DEL_RECEPTOR,
-    });
+    const ezra = interpretar('ezra');
+    const mabelherdi = interpretar('mabelherdi');
+    const barraza = interpretar('barraza');
 
     expect(ezra.veredicto.decision).toBe('automatica');
     expect(ezra.veredicto.ganadora!.renglones).toHaveLength(6);
@@ -291,9 +306,7 @@ describe('el resto del banco no se movió', () => {
 
   it('las dos fotos insuficientes siguen rechazadas', () => {
     for (const nombre of ['los-calvos-212356', 'los-calvos-213103']) {
-      const informe = interpretarReconstruccion(leer(nombre), {
-        cuitDelReceptor: CUIT_DEL_RECEPTOR,
-      });
+      const informe = interpretar(nombre);
       expect(informe.veredicto.decision, nombre).toBe('rechazo');
     }
   });
@@ -304,9 +317,7 @@ describe('el resto del banco no se movió', () => {
      * uno inventado no puede mover un solo renglón: si lo moviera, algo estaría
      * decidiendo por identidad y no por evidencia.
      */
-    const conOtro = interpretarReconstruccion(leer('errecalde'), {
-      cuitDelReceptor: '20-11111111-2',
-    });
+    const conOtro = interpretar('errecalde', '20-11111111-2');
     expect(conOtro.tabla.renglones).toHaveLength(ERRECALDE.tabla.renglones.length);
     expect(conOtro.veredicto.ganadora!.sumaDeRenglones.toString()).toBe(
       ERRECALDE.veredicto.ganadora!.sumaDeRenglones.toString(),

@@ -17,6 +17,7 @@ import {
   SALTO,
   TITULOS,
   Y_TITULOS,
+  asociacionesDePrueba,
   evidencia,
   fila,
 } from '@/../tests/fixtures/evidencia-sintetica';
@@ -49,10 +50,12 @@ function relecturaDe(nombre: string): EvidenciaDeRelectura | undefined {
 }
 
 function interpretar(nombre: string, confirmaciones: CeldaConfirmada[] = []): InformeReconstruido {
+  const cantidad = nombre === 'ezra' ? 6 : nombre === 'errecalde' ? 23 : 0;
   return interpretarReconstruccion(leer(nombre), {
     cuitDelReceptor: CUIT_DEL_RECEPTOR,
     relectura: relecturaDe(nombre),
     confirmaciones,
+    asociacionesDeProducto: asociacionesDePrueba(cantidad),
   });
 }
 
@@ -196,6 +199,7 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
 
   const INCOMPLETO = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
     cuitDelReceptor: CUIT_DEL_RECEPTOR,
+    asociacionesDeProducto: asociacionesDePrueba(3),
   });
 
   /** La primera raíz **de celda** cuya confirmación destraba algo. */
@@ -206,6 +210,7 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
       const despues = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
         cuitDelReceptor: CUIT_DEL_RECEPTOR,
         confirmaciones: [{ renglon: raiz.renglon, campo: 'importe', texto: valor }],
+        asociacionesDeProducto: asociacionesDePrueba(3),
       });
       if (despues.resumen.bloqueosUnicos < INCOMPLETO.resumen.bloqueosUnicos) {
         return { raiz, valor, despues };
@@ -332,6 +337,7 @@ describe('confirmar una raíz recalcula sus dependencias', () => {
     const inventado = interpretarReconstruccion(evidencia(SIN_IMPORTE), {
       cuitDelReceptor: CUIT_DEL_RECEPTOR,
       confirmaciones: [{ renglon: 999, campo: 'cantidad', texto: '1,00' }],
+      asociacionesDeProducto: asociacionesDePrueba(3),
     });
     expect(retrato(inventado)).toEqual(retrato(INCOMPLETO));
     expect(inventado.resumen.bloqueosUnicos).toBe(INCOMPLETO.resumen.bloqueosUnicos);

@@ -10,6 +10,7 @@ import {
   type ConvencionDecimal,
   type PieLeido,
   type RenglonCandidato,
+  type UnidadComercial,
   type Veredicto,
 } from '@/lib/ocr/motor/candidatas';
 import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
@@ -230,6 +231,16 @@ export interface OpcionesDelMotorReconstruido {
    * El número de renglón es el del informe, empezando en 1.
    */
   confirmaciones?: CeldaConfirmada[];
+  /**
+   * Productos que el flujo de catálogo ya asoció de forma inequívoca.
+   *
+   * El motor no busca por parecido de nombre ni inventa una asociación. Recibe
+   * el resultado del flujo existente —código/PLU, vínculo aprendido o selección
+   * manual— y lo conserva por renglón. Si falta, el renglón queda con
+   * `BLOCKING_PRODUCT`; si el producto existe pero no trae una unidad de stock,
+   * queda con `BLOCKING_UNIT`.
+   */
+  asociacionesDeProducto?: AsociacionDeProductoConfirmada[];
 }
 
 /** Una celda que una persona leyó del papel y dio por buena. */
@@ -239,6 +250,15 @@ export interface CeldaConfirmada {
   campo: CampoDeColumna;
   /** El valor tal como lo tipeó, en el formato del papel. */
   texto: string;
+}
+
+/** Una asociación ya resuelta fuera del OCR. */
+export interface AsociacionDeProductoConfirmada {
+  /** El renglón del informe, empezando en 1. */
+  renglon: number;
+  productoId: string;
+  /** La unidad viene del producto del catálogo, no del encabezado de la factura. */
+  unidadDeStock: UnidadComercial | null;
 }
 
 export function interpretarReconstruccion(
@@ -272,6 +292,7 @@ export function interpretarReconstruccion(
   const segundo = interpretarUnaVez(sumarRelectura(evidencia, opciones.relectura), {
     cuitDelReceptor: opciones.cuitDelReceptor,
     confirmaciones: opciones.confirmaciones,
+    asociacionesDeProducto: opciones.asociacionesDeProducto,
   });
 
   /*
@@ -408,31 +429,33 @@ function interpretarUnaVez(
 
     for (const convencion of ['ar', 'us'] as ConvencionDecimal[]) {
       const pie = leerPie(textos.completo, convencion);
-      const renglones = elegirParaElDocumento(
+      const lecturasDeRenglones = elegirParaElDocumento(
         tabla.renglones,
         columnas,
         convencion,
         pie.netTotal,
       );
-      const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
-        netTotal: pie.netTotal,
-        /*
-         * Las filas esperadas salen del consenso entre columnas, no de una sola
-         * fuente. Si tres columnas sostienen dos renglones y una sostiene uno
-         * porque el OCR perdió un valor, hay dos.
-         */
-        filasVistas: Math.max(filasEsperadas, tabla.renglones.length),
-      });
-      lecturas.push({
-        convencion,
-        pie,
-        renglones,
-        puntaje,
-        penalizaciones,
-        sumaDeRenglones,
-        cierre,
-        reparaciones: renglones.reduce((total, r) => total + r.reparaciones, 0),
-      });
+      for (const renglones of lecturasDeRenglones) {
+        const { puntaje, penalizaciones, sumaDeRenglones, cierre } = puntuarTabla(renglones, {
+          netTotal: pie.netTotal,
+          /*
+           * Las filas esperadas salen del consenso entre columnas, no de una sola
+           * fuente. Si tres columnas sostienen dos renglones y una sostiene uno
+           * porque el OCR perdió un valor, hay dos.
+           */
+          filasVistas: Math.max(filasEsperadas, tabla.renglones.length),
+        });
+        lecturas.push({
+          convencion,
+          pie,
+          renglones,
+          puntaje,
+          penalizaciones,
+          sumaDeRenglones,
+          cierre,
+          reparaciones: renglones.reduce((total, r) => total + r.reparaciones, 0),
+        });
+      }
     }
 
     return lecturas;
@@ -490,6 +513,16 @@ function interpretarUnaVez(
     tabla = conCeldasConfirmadas(tabla, opciones.confirmaciones);
     candidatas = interpretarTabla(tabla, elegido.candidata.filasEsperadas);
   }
+
+  /*
+   * La asociación se aplica después de elegir la estructura.
+   *
+   * Un producto no puede hacer ganar una lectura del OCR: primero se decide qué
+   * dice el papel y recién después adónde va en el catálogo. Aplicarlo antes
+   * permitiría que un vínculo existente inclinara el reparto de columnas o la
+   * escala numérica, que es exactamente la contaminación que se quiere evitar.
+   */
+  candidatas = conAsociacionesDeProducto(candidatas, opciones.asociacionesDeProducto ?? []);
 
   const inicioDelDetalle = tabla.renglones[0]?.caja.y0;
   const emisor = leerEmisorDeEvidencia(
@@ -568,6 +601,8 @@ function interpretarUnaVez(
       (p) =>
         p.categoria === 'BLOCKING_UNPROVEN_ROW' ||
         p.categoria === 'BLOCKING_UNDECIDED_SCALE' ||
+        p.categoria === 'BLOCKING_PRODUCT' ||
+        p.categoria === 'BLOCKING_UNIT' ||
         p.id === 'emisor:cuit',
     )
     .map((p) => p.motivo);
@@ -661,6 +696,51 @@ function interpretarUnaVez(
     })),
     ms: Date.now() - comienzo,
   };
+}
+
+/**
+ * Adjunta el destino de stock sin participar de la interpretación del papel.
+ *
+ * Dos confirmaciones distintas para el mismo renglón se tratan como ninguna:
+ * no hay una asociación confirmada y elegir la primera sería otra forma de
+ * completar por orden. Las repeticiones idénticas sí representan una sola.
+ */
+function conAsociacionesDeProducto(
+  candidatas: CandidataDeTabla[],
+  asociaciones: AsociacionDeProductoConfirmada[],
+): CandidataDeTabla[] {
+  const porRenglon = new Map<number, AsociacionDeProductoConfirmada | null>();
+
+  for (const asociacion of asociaciones) {
+    if (!Number.isInteger(asociacion.renglon) || asociacion.renglon < 1) continue;
+    const productoId = asociacion.productoId.trim();
+    if (productoId === '') continue;
+    const normalizada = { ...asociacion, productoId };
+    const anterior = porRenglon.get(asociacion.renglon);
+    if (anterior === undefined) {
+      porRenglon.set(asociacion.renglon, normalizada);
+      continue;
+    }
+    if (
+      anterior === null ||
+      anterior.productoId !== normalizada.productoId ||
+      anterior.unidadDeStock !== normalizada.unidadDeStock
+    ) {
+      porRenglon.set(asociacion.renglon, null);
+    }
+  }
+
+  return candidatas.map((candidata) => ({
+    ...candidata,
+    renglones: candidata.renglones.map((renglon, i) => {
+      const asociacion = porRenglon.get(i + 1) ?? null;
+      return {
+        ...renglon,
+        productoId: asociacion?.productoId ?? null,
+        unidadDeStock: asociacion?.unidadDeStock ?? null,
+      };
+    }),
+  }));
 }
 
 /**
@@ -780,7 +860,7 @@ function elegirParaElDocumento(
   columnas: (ColumnaReconocida | null)[],
   convencion: ConvencionDecimal,
   netoImpreso: Decimal | null,
-): RenglonCandidato[] {
+): RenglonCandidato[][] {
   const esNumerica = (columna: number): boolean => llevaNumeros(columnas[columna]?.campo);
 
   /*
@@ -828,6 +908,8 @@ function elegirParaElDocumento(
         c.codigo ?? '',
         c.descripcion,
         cantidadQueCuesta(c)?.toString() ?? '',
+        c.campoCantidadFacturada ?? '',
+        c.unidadFacturada ?? '',
         c.piezas ?? '',
         c.precioUnitario?.toString() ?? '',
         c.descuentoPct?.toString() ?? '',
@@ -846,7 +928,7 @@ function elegirParaElDocumento(
     .map((candidatas) => candidatas[0])
     .filter((c): c is RenglonCandidato => c !== undefined);
 
-  if (!netoImpreso || netoImpreso.lte(0)) return elegidas;
+  if (!netoImpreso || netoImpreso.lte(0)) return conEmpatesDeCantidad(elegidas, porFila);
 
   const suma = (lista: RenglonCandidato[]) =>
     lista.reduce((acc, r) => acc.plus(netoDelRenglon(r) ?? 0), new Decimal(0));
@@ -965,7 +1047,64 @@ function elegirParaElDocumento(
     }
   }
 
-  return mejor;
+  return conEmpatesDeCantidad(mejor, porFila);
+}
+
+/**
+ * Conserva como comprobantes independientes los empates sobre qué magnitud se factura.
+ *
+ * La selección rápida de cada fila toma su primera lectura para no hacer un
+ * producto cartesiano de todas las celdas. Eso no puede borrar un empate entre
+ * kilos, cantidad y piezas: si las dos lecturas tienen exactamente los mismos
+ * controles y costos, ninguna evidencia independiente permite elegir. Se arma
+ * una candidata completa por cada origen empatado y el veredicto ve margen
+ * cero, en vez de aceptar el orden accidental en que se generaron.
+ */
+function conEmpatesDeCantidad(
+  elegidos: RenglonCandidato[],
+  porFila: RenglonCandidato[][],
+): RenglonCandidato[][] {
+  const campos = new Set<NonNullable<RenglonCandidato['campoCantidadFacturada']>>();
+  for (let i = 0; i < elegidos.length; i++) {
+    const incumbente = elegidos[i];
+    if (!incumbente) continue;
+    for (const alternativa of porFila[i] ?? []) {
+      if (mismaFuerzaSalvoCantidad(incumbente, alternativa)) {
+        if (alternativa.campoCantidadFacturada) campos.add(alternativa.campoCantidadFacturada);
+      }
+    }
+  }
+
+  const salida = [elegidos];
+  for (const campo of campos) {
+    const variante = elegidos.map((incumbente, i) =>
+      (porFila[i] ?? []).find(
+        (alternativa) =>
+          alternativa.campoCantidadFacturada === campo &&
+          mismaFuerzaSalvoCantidad(incumbente, alternativa),
+      ) ?? incumbente,
+    );
+    if (variante.some((renglon, i) => renglon !== elegidos[i])) salida.push(variante);
+  }
+  return salida;
+}
+
+function mismaFuerzaSalvoCantidad(
+  izquierda: RenglonCandidato,
+  derecha: RenglonCandidato,
+): boolean {
+  if (izquierda.campoCantidadFacturada === derecha.campoCantidadFacturada) return false;
+  const controles = (renglon: RenglonCandidato): string =>
+    renglon.controles.map((control) => `${control.nombre}:${control.paso}`).join('|');
+  return (
+    puntosDeRenglon(izquierda) === puntosDeRenglon(derecha) &&
+    controles(izquierda) === controles(derecha) &&
+    izquierda.reparaciones === derecha.reparaciones &&
+    izquierda.severidad === derecha.severidad &&
+    izquierda.incoherentes === derecha.incoherentes &&
+    izquierda.escalasAjenas === derecha.escalasAjenas &&
+    (netoDelRenglon(izquierda)?.eq(netoDelRenglon(derecha) ?? NaN) ?? false)
+  );
 }
 
 /** Cuánto vale una lectura de renglón por sí sola. */
@@ -1234,6 +1373,66 @@ export function queFaltaResolver(
             : ''),
       });
     }
+  });
+
+  /*
+   * El cierre contable no decide adónde se mueve el stock.
+   *
+   * Ésta es la separación central de la corrección: `cantidadFacturada` puede
+   * estar perfectamente probada por cantidad × precio = importe, y aun así no
+   * existir un producto al cual aplicarla. El motor no usa la descripción para
+   * inventar ese vínculo. Se pide **una sola acción** por renglón: asociar el
+   * producto. La unidad no se cuenta aparte porque normalmente la asociación la
+   * resuelve sola.
+   *
+   * Sólo cuando ya hay producto y ese producto no tiene unidad de stock aparece
+   * `BLOCKING_UNIT` como raíz propia. La unidad impresa de la factura se muestra
+   * como evidencia de facturación, pero no reemplaza la configuración del
+   * catálogo: facturar «UNIDADES» y mover stock por unidad son decisiones de
+   * capas distintas.
+   */
+  (veredicto.ganadora?.renglones ?? []).forEach((renglon, i) => {
+    if (renglon.productoId === null) {
+      pendientes.push({
+        id: `r${i + 1}:producto`,
+        dependeDe: null,
+        categoria: 'BLOCKING_PRODUCT',
+        renglon: i + 1,
+        campo: 'productoId',
+        columna: 'producto del catálogo',
+        alternativas: [],
+        elegido: null,
+        motivo:
+          `El renglón ${i + 1}${renglon.codigo ? ` (código ${renglon.codigo})` : ''} ` +
+          'todavía no está asociado de forma inequívoca a un producto del catálogo. ' +
+          'La cantidad y los importes pueden cerrar, pero no se puede actualizar stock ni ' +
+          'historial de costos hasta resolverlo por código/PLU, vínculo aprendido o selección ' +
+          'manual; el parecido del nombre no alcanza.',
+      });
+      return;
+    }
+
+    if (renglon.unidadDeStock !== null) return;
+    const impresa =
+      renglon.unidadFacturada === 'KG'
+        ? 'El comprobante factura kilos'
+        : renglon.unidadFacturada === 'UNIT'
+          ? 'El comprobante factura unidades'
+          : 'El comprobante no declara la unidad de la cantidad facturada';
+    pendientes.push({
+      id: `r${i + 1}:unidad`,
+      dependeDe: null,
+      categoria: 'BLOCKING_UNIT',
+      renglon: i + 1,
+      campo: 'unidadDeStock',
+      columna: 'unidad del producto',
+      alternativas: [],
+      elegido: null,
+      motivo:
+        `El producto asociado al renglón ${i + 1} (${renglon.productoId}) no tiene una ` +
+        `unidad de stock resuelta. ${impresa}, pero ese dato no autoriza a cambiar la unidad ` +
+        'comercial del catálogo. Hay que confirmar KG o UNIT antes de registrar el movimiento.',
+    });
   });
 
   /*

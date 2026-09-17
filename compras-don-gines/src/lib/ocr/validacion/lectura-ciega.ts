@@ -91,8 +91,14 @@ export interface RenglonLeido {
   interpretado: {
     codigo: string | null;
     descripcion: string;
+    /** Número que multiplica al precio, sin confundirlo con piezas auxiliares. */
     cantidad: string | null;
+    campoCantidadFacturada: string | null;
+    /** Unidad declarada por el papel; no es todavía la unidad de stock. */
+    unidadFacturada: 'KG' | 'UNIT' | null;
     piezas: number | null;
+    productoId: string | null;
+    unidadDeStock: 'KG' | 'UNIT' | null;
     precioUnitario: string | null;
     descuentoPct: string | null;
     importe: string | null;
@@ -334,8 +340,12 @@ export function actaDePrimeraLectura(entrada: {
         ? {
             codigo: candidato.codigo,
             descripcion: candidato.descripcion,
-            cantidad: comoTexto(candidato.kilos ?? candidato.cantidad),
+            cantidad: comoTexto(candidato.cantidadFacturada),
+            campoCantidadFacturada: candidato.campoCantidadFacturada,
+            unidadFacturada: candidato.unidadFacturada,
             piezas: candidato.piezas,
+            productoId: candidato.productoId,
+            unidadDeStock: candidato.unidadDeStock,
             precioUnitario: comoTexto(candidato.precioConDescuento ?? candidato.precioUnitario),
             descuentoPct: comoTexto(candidato.descuentoPct),
             importe: comoTexto(candidato.importe),

@@ -47,10 +47,16 @@ for (const archivo of readdirSync(COMPARACIONES).sort()) {
 }
 
 /** En qué grupo cae cada comprobante, que es lo que decide el hito siguiente. */
-function grupoDe(fila: Fila): 'automatica' | 'solo-columnas' | 'corregir' {
+function grupoDe(fila: Fila): 'automatica' | 'solo-columnas' | 'asociar' | 'corregir' {
   const { acta, comparacion } = fila;
   if (comparacion.errores > 0) return 'corregir';
   if (acta.decision === 'automatica') return 'automatica';
+  if (
+    comparacion.celdasPorCorregir === 0 &&
+    ((comparacion.productosPorAsociar ?? 0) > 0 || (comparacion.unidadesPorResolver ?? 0) > 0)
+  ) {
+    return 'asociar';
+  }
   if (comparacion.celdasPorCorregir === 0) return 'solo-columnas';
   return 'corregir';
 }
@@ -86,7 +92,8 @@ function informar(titulo: string, deEste: Fila[]) {
         ` errores ${String(c.errores).padStart(2)}` +
         ` pedidos ${String(c.pedidos).padStart(3)}` +
         ` | acciones ${String(c.accionesHumanas).padStart(2)}` +
-        ` (${c.columnasPorConfirmar} col + ${c.celdasPorCorregir} celdas)` +
+        ` (${c.columnasPorConfirmar} col + ${c.celdasPorCorregir} celdas + ` +
+        `${c.productosPorAsociar ?? 0} prod + ${c.unidadesPorResolver ?? 0} unid)` +
         ` | ${acta.decision}`,
     );
   }

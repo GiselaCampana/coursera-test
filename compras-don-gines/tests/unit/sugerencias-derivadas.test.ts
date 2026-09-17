@@ -35,6 +35,11 @@ function renglon(parcial: Partial<RenglonCandidato>): RenglonCandidato {
     cantidad: null,
     kilos: null,
     piezas: null,
+    cantidadFacturada: null,
+    campoCantidadFacturada: null,
+    unidadFacturada: null,
+    productoId: null,
+    unidadDeStock: null,
     precioUnitario: null,
     descuentoPct: null,
     precioConDescuento: null,
@@ -47,6 +52,17 @@ function renglon(parcial: Partial<RenglonCandidato>): RenglonCandidato {
     controles: [],
     ...parcial,
   };
+  if (!Object.prototype.hasOwnProperty.call(parcial, 'cantidadFacturada')) {
+    base.cantidadFacturada = base.kilos ?? base.cantidad ??
+      (base.piezas === null ? null : new Decimal(base.piezas));
+    base.campoCantidadFacturada = base.kilos
+      ? 'kilos'
+      : base.cantidad
+        ? 'cantidad'
+        : base.piezas === null
+          ? null
+          : 'piezas';
+  }
   base.controles = controlarRenglon(base);
   return base;
 }

@@ -4,6 +4,7 @@ import { variantesDeNumero } from '@/lib/ocr/numeros';
 import {
   CAMPOS_NUMERICOS,
   CAMPOS_SIN_CONFIRMAR,
+  normalizarEncabezado,
   type CampoDeColumna,
   type ColumnaReconocida,
 } from '@/lib/ocr/motor/columnas';
@@ -38,6 +39,17 @@ import { compararCandidatas } from '@/lib/ocr/motor/orden-lexicografico';
 /** Cómo escribe los números un comprobante. */
 export type ConvencionDecimal = 'ar' | 'us';
 
+/**
+ * La unidad con la que se factura o se mueve el producto.
+ *
+ * El dominio hoy distingue kilos y unidades. No se usa este tipo para deducir
+ * una de la otra: `unidadFacturada` sale únicamente de lo que imprime el
+ * comprobante y `unidadDeStock` únicamente del producto asociado.
+ */
+export type UnidadComercial = 'KG' | 'UNIT';
+
+export type CampoDeCantidadFacturada = 'cantidad' | 'kilos' | 'piezas';
+
 export interface RenglonCandidato {
   codigo: string | null;
   descripcion: string;
@@ -46,6 +58,29 @@ export interface RenglonCandidato {
   cantidad: Decimal | null;
   kilos: Decimal | null;
   piezas: number | null;
+  /**
+   * El número que efectivamente se multiplica por el precio.
+   *
+   * Se conserva separado de las tres celdas de origen. Una factura puede
+   * imprimir kilos y piezas a la vez, o llamar «UNIDADES» a la única cantidad
+   * del renglón. En ambos casos la aritmética decide qué número se factura sin
+   * borrar qué decía cada columna.
+   */
+  cantidadFacturada: Decimal | null;
+  /** De cuál de las tres celdas salió `cantidadFacturada`. */
+  campoCantidadFacturada: CampoDeCantidadFacturada | null;
+  /**
+   * Unidad que el propio comprobante declara para la cantidad facturada.
+   *
+   * No es la unidad de stock. «UNIDADES» puede probar `UNIT` acá y aun así el
+   * renglón queda pendiente de asociación: el producto del catálogo es quien
+   * determina cómo se mueve el stock.
+   */
+  unidadFacturada: UnidadComercial | null;
+  /** Producto del catálogo resuelto por el flujo de asociación, nunca por nombre. */
+  productoId: string | null;
+  /** Unidad comercial/de stock del producto asociado. */
+  unidadDeStock: UnidadComercial | null;
   precioUnitario: Decimal | null;
   /** Fracción: 0,16 = 16 %. */
   descuentoPct: Decimal | null;
@@ -114,9 +149,61 @@ export interface ControlDeRenglon {
   detalle: string;
 }
 
-/** La cantidad que cuesta: los kilos si los hay, si no la genérica. */
+/** La cantidad que cuesta, ya separada de kilos, piezas y cantidad genérica. */
 export function cantidadQueCuesta(renglon: RenglonCandidato): Decimal | null {
-  return renglon.kilos ?? renglon.cantidad ?? null;
+  return renglon.cantidadFacturada;
+}
+
+/**
+ * Qué número del renglón hace de cantidad facturada.
+ *
+ * La semántica de columnas ya convierte «UNIDADES» en `cantidad` cuando las
+ * igualdades demuestran que es el multiplicador. Si el papel imprime más de una
+ * magnitud, se ofrecen todas: el orden del encabezado no decide si se cobran
+ * kilos, unidades o piezas. La cuenta del propio renglón elige; si dos números
+ * la cumplen igual, la ambigüedad queda visible.
+ */
+function cantidadesFacturadasDe(numeros: Map<CampoDeColumna, Decimal>): {
+  valor: Decimal | null;
+  campo: CampoDeCantidadFacturada | null;
+}[] {
+  const salida: { valor: Decimal; campo: CampoDeCantidadFacturada }[] = [];
+  const kilos = numeros.get('kilos');
+  if (kilos !== undefined) salida.push({ valor: kilos, campo: 'kilos' });
+
+  const cantidad = numeros.get('cantidad');
+  if (cantidad !== undefined) salida.push({ valor: cantidad, campo: 'cantidad' });
+
+  const piezas = numeros.get('piezas');
+  if (piezas !== undefined) salida.push({ valor: piezas, campo: 'piezas' });
+
+  return salida.length > 0 ? salida : [{ valor: null, campo: null }];
+}
+
+const ROTULO_DE_UNIDADES = /^(unidad(?:es)?|unid|uds?)\b/;
+const SUFIJO_KILOS = /(?:^|\s)(?:kg|kgs|kilo|kilos)\.?\s*$/i;
+const SUFIJO_UNIDADES = /(?:^|\s)(?:u|un|ud|uds|unid|unidad|unidades)\.?\s*$/i;
+
+/** La unidad impresa de la cantidad facturada, sin proyectarla al stock. */
+function unidadFacturadaDe(
+  campo: CampoDeCantidadFacturada | null,
+  celdas: ReadonlyMap<CampoDeColumna, string>,
+  columnas: (ColumnaReconocida | null)[],
+): UnidadComercial | null {
+  if (campo === 'kilos') return 'KG';
+  if (campo === 'piezas') return 'UNIT';
+  if (campo !== 'cantidad') return null;
+
+  const texto = celdas.get('cantidad') ?? '';
+  if (SUFIJO_KILOS.test(texto)) return 'KG';
+  if (SUFIJO_UNIDADES.test(texto)) return 'UNIT';
+
+  const columna = columnas.find((c) => c?.campo === 'cantidad');
+  if (columna && ROTULO_DE_UNIDADES.test(normalizarEncabezado(columna.encabezado))) {
+    return 'UNIT';
+  }
+
+  return null;
 }
 
 /**
@@ -343,7 +430,7 @@ export function candidatasDeRenglon(
     }
     if (repetido) continue;
 
-    for (const candidata of combinarNumeros(variante, convencion, formatos)) {
+    for (const candidata of combinarNumeros(variante, columnas, convencion, formatos)) {
       /*
        * Sin descripción **ni cuenta propia** no hay renglón.
        *
@@ -373,6 +460,7 @@ export function candidatasDeRenglon(
 /** Todas las combinaciones de lecturas numéricas de una fila. */
 function combinarNumeros(
   celdas: Map<CampoDeColumna, string>,
+  columnas: (ColumnaReconocida | null)[],
   convencion: ConvencionDecimal,
   formatos: ReadonlyMap<CampoDeColumna, FormatoDeColumna>,
 ): RenglonCandidato[] {
@@ -476,27 +564,43 @@ function combinarNumeros(
       !numeros.has('precioConDescuento');
 
     for (const enElImporte of hayQueDecidir ? [true, false] : [null]) {
-      const renglon: RenglonCandidato = {
-        codigo: celdas.get('codigo')?.replace(/\s/g, '') || null,
-        descripcion: celdas.get('descripcion') ?? '',
-        marca: celdas.get('marca') ?? null,
-        cantidad: numeros.get('cantidad') ?? null,
-        kilos: numeros.get('kilos') ?? null,
-        piezas: numeros.get('piezas')?.toNumber() ?? null,
-        precioUnitario: numeros.get('precioUnitario') ?? null,
-        // Se guarda como fracción, que es como lo consume el dominio.
-        descuentoPct: descuento ? descuento.div(100) : null,
-        precioConDescuento: numeros.get('precioConDescuento') ?? null,
-        importe: numeros.get('importe') ?? null,
-        descuentoEnElImporte: enElImporte,
-        reparaciones,
-        severidad,
-        incoherentes,
-        escalasAjenas,
-        controles: [],
-      };
-      renglon.controles = controlarRenglon(renglon);
-      salida.push(renglon);
+      /*
+       * Si el papel imprime más de una magnitud, ninguna gana por su nombre.
+       *
+       * Kilos y piezas suelen significar «factura kilos», pero no es una ley:
+       * hay comprobantes que informan el peso y cobran las unidades. Se ofrecen
+       * todos los orígenes impresos y la igualdad del propio renglón elige cuál
+       * multiplica al precio. Si dos cierran igual, quedan dos lecturas y el
+       * comprobante va a revisión; no se desempata por este orden.
+       */
+      for (const facturada of cantidadesFacturadasDe(numeros)) {
+        const renglon: RenglonCandidato = {
+          codigo: celdas.get('codigo')?.replace(/\s/g, '') || null,
+          descripcion: celdas.get('descripcion') ?? '',
+          marca: celdas.get('marca') ?? null,
+          cantidad: numeros.get('cantidad') ?? null,
+          kilos: numeros.get('kilos') ?? null,
+          piezas: numeros.get('piezas')?.toNumber() ?? null,
+          cantidadFacturada: facturada.valor,
+          campoCantidadFacturada: facturada.campo,
+          unidadFacturada: unidadFacturadaDe(facturada.campo, celdas, columnas),
+          productoId: null,
+          unidadDeStock: null,
+          precioUnitario: numeros.get('precioUnitario') ?? null,
+          // Se guarda como fracción, que es como lo consume el dominio.
+          descuentoPct: descuento ? descuento.div(100) : null,
+          precioConDescuento: numeros.get('precioConDescuento') ?? null,
+          importe: numeros.get('importe') ?? null,
+          descuentoEnElImporte: enElImporte,
+          reparaciones,
+          severidad,
+          incoherentes,
+          escalasAjenas,
+          controles: [],
+        };
+        renglon.controles = controlarRenglon(renglon);
+        salida.push(renglon);
+      }
     }
   }
   return salida;
@@ -605,7 +709,7 @@ export interface CandidataDeTabla {
  */
 export function leFalta(renglon: RenglonCandidato): string[] {
   const falta: string[] = [];
-  if (!cantidadQueCuesta(renglon) && renglon.piezas === null) falta.push('la cantidad');
+  if (!cantidadQueCuesta(renglon)) falta.push('la cantidad');
   if (!renglon.precioUnitario && !renglon.precioConDescuento) falta.push('el precio');
   if (!renglon.importe) falta.push('el importe');
   return falta;
@@ -689,20 +793,23 @@ export function puntuarTabla(
   }
 
   /*
-   * Y el caso peor, que hasta acá no pesaba nada: **no haber verificado nada**.
+   * Y el caso peor, que hasta acá no pesaba lo suficiente: **casi no haber
+   * verificado nada**.
    *
-   * Ningún renglón con aritmética propia y ningún neto impreso contra el cual
-   * comparar la suma quiere decir que lo leído no se apoya en un solo hecho del
-   * comprobante. No es «una lectura con dudas»: es una lista de textos. Sobre la
-   * foto ilegible de Los Calvos eso son nueve descripciones y nueve kilos sin un
-   * solo precio, y mandarlo a revisión le pide a una persona que tipee la
-   * factura entera mirando una foto que no se lee, cuando lo que corresponde es
-   * decirle que la saque de nuevo.
+   * Un único renglón que cierra por casualidad entre muchas líneas y ningún neto
+   * impreso no alcanza para sostener una lectura. No es «una lectura con dudas»:
+   * es una lista de textos con una coincidencia aislada. Mandarla a revisión le
+   * pide a una persona que tipee la factura entera mirando una foto que no se
+   * lee, cuando lo que corresponde es decirle que la saque de nuevo.
    */
-  if (hechos === 0 && !pie.netTotal) {
+  const comprobadosSolos = renglones.filter(
+    (r) => r.controles.length > 0 && r.controles.every((control) => control.paso),
+  ).length;
+  if (!pie.netTotal && comprobadosSolos * 4 < renglones.length) {
     penalizar(
-      'No se pudo comprobar ni un solo renglón y tampoco hay un neto impreso contra el ' +
-        'cual comparar la suma: la lectura no se apoya en ningún hecho del comprobante.',
+      `Sólo ${comprobadosSolos} de ${renglones.length} renglones se pudieron comprobar ` +
+        'solos y tampoco hay un neto impreso contra el cual comparar la suma: la lectura ' +
+        'no tiene apoyo suficiente para mandar la foto a revisión.',
       0.5,
     );
   }
@@ -946,6 +1053,8 @@ function firmaDeLectura(candidata: CandidataDeTabla): string {
         r.descripcion,
         r.codigo ?? '',
         cantidadQueCuesta(r)?.toString() ?? '',
+        r.campoCantidadFacturada ?? '',
+        r.unidadFacturada ?? '',
         r.piezas ?? '',
         netoDelRenglon(r)?.toString() ?? '',
       ].join('~'),

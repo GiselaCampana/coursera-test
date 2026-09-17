@@ -3,6 +3,8 @@ import type {
   Fragmento,
   Pasada,
 } from '@/lib/ocr/reconstruccion/evidencia';
+import type { AsociacionDeProductoConfirmada } from '@/lib/ocr/motor/desde-reconstruccion';
+import type { UnidadComercial } from '@/lib/ocr/motor/candidatas';
 
 /**
  * Evidencia armada a mano, para probar la reconstrucción caso por caso.
@@ -132,6 +134,29 @@ export const RENGLONES: [string, number][][] = [
 
 export const Y_TITULOS = 0.30;
 export const SALTO = 0.02;
+
+/**
+ * Asociaciones inequívocas para pruebas que miden sólo OCR/estructura.
+ *
+ * La corrección de cantidades hace que, por defecto, una factura bien leída
+ * siga en revisión hasta que sus renglones tengan destino de stock. Las pruebas
+ * de otras capas pueden declarar ese dato resuelto sin meter nombres de
+ * proveedores ni una búsqueda ficticia por descripción.
+ */
+export function asociacionesDePrueba(
+  unidades: readonly (UnidadComercial | null)[] | number,
+  unidadComun: UnidadComercial = 'KG',
+): AsociacionDeProductoConfirmada[] {
+  const lista =
+    typeof unidades === 'number'
+      ? Array.from({ length: unidades }, () => unidadComun)
+      : [...unidades];
+  return lista.map((unidadDeStock, i) => ({
+    renglon: i + 1,
+    productoId: `producto-${i + 1}`,
+    unidadDeStock,
+  }));
+}
 
 /** La tabla base, con un fragmento por celda y una sola pasada. */
 export function tablaBase(opciones: OpcionesDePalabra = {}): Fragmento[] {

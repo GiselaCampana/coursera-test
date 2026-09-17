@@ -92,7 +92,9 @@ for (const nombre of nombres) {
   );
   console.log(
     `  acciones humanas: ${resultado.accionesHumanas} ` +
-      `(${resultado.columnasPorConfirmar} columnas, ${resultado.celdasPorCorregir} celdas)`,
+      `(${resultado.columnasPorConfirmar} columnas, ${resultado.celdasPorCorregir} celdas, ` +
+      `${resultado.productosPorAsociar} productos, ` +
+      `${resultado.unidadesPorResolver} unidades)`,
   );
   if (Object.keys(resultado.porCausa).length > 0) {
     console.log('  causas:', JSON.stringify(resultado.porCausa));

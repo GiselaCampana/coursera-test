@@ -10,6 +10,7 @@ import {
   type HuellaDelMotor,
 } from '@/lib/ocr/validacion/lectura-ciega';
 import { comparar, type VerdadDelPapel } from '@/lib/ocr/validacion/comparar';
+import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
 
 /**
  * El acta de la primera lectura ciega.
@@ -33,11 +34,15 @@ const MOTOR: HuellaDelMotor = {
   arbolSucio: false,
 };
 
-function actaDe(nombre: string): ActaDePrimeraLectura {
+function actaDe(nombre: string, asociar = true): ActaDePrimeraLectura {
   const evidencia: EvidenciaDeLectura = JSON.parse(
     readFileSync(path.join(DIRECTORIO, `${nombre}.json`), 'utf8'),
   );
-  const informe = interpretarReconstruccion(evidencia, { cuitDelReceptor: CUIT_DEL_RECEPTOR });
+  const cantidad = nombre === 'barraza' ? 2 : nombre === 'errecalde' ? 23 : 0;
+  const informe = interpretarReconstruccion(evidencia, {
+    cuitDelReceptor: CUIT_DEL_RECEPTOR,
+    asociacionesDeProducto: asociar ? asociacionesDePrueba(cantidad) : [],
+  });
   return actaDePrimeraLectura({
     motor: MOTOR,
     imagen: { nombre: `${nombre}.jpg`, sha256: 'b'.repeat(64), bytes: 1234567 },
@@ -91,6 +96,13 @@ describe('el acta registra lo que hace la medición atribuible', () => {
     }
   });
 
+  it('separa la unidad impresa de la unidad del producto asociado', () => {
+    const interpretados = BARRAZA.renglones.map((r) => r.interpretado).filter(Boolean);
+    expect(interpretados.every((r) => r!.campoCantidadFacturada !== null)).toBe(true);
+    expect(interpretados.every((r) => r!.productoId !== null)).toBe(true);
+    expect(interpretados.every((r) => r!.unidadDeStock === 'KG')).toBe(true);
+  });
+
   it('separa el pie en leído, inferido, calculado y faltante', () => {
     for (const asignacion of ERRECALDE.pie.asignaciones) {
       expect([
@@ -112,7 +124,10 @@ describe('el acta registra lo que hace la medición atribuible', () => {
     const evidencia: EvidenciaDeLectura = JSON.parse(
       readFileSync(path.join(DIRECTORIO, 'errecalde.json'), 'utf8'),
     );
-    const informe = interpretarReconstruccion(evidencia, { cuitDelReceptor: CUIT_DEL_RECEPTOR });
+    const informe = interpretarReconstruccion(evidencia, {
+      cuitDelReceptor: CUIT_DEL_RECEPTOR,
+      asociacionesDeProducto: asociacionesDePrueba(23),
+    });
 
     // Muchos menos que los bloqueantes, y la diferencia está informada aparte.
     expect(ERRECALDE.bloqueosRaiz.length).toBeLessThan(bloqueantesDe(informe));
@@ -262,6 +277,17 @@ describe('comparar contra el papel es un diagnóstico, no una nota', () => {
     const conError = verdadIgualA(BARRAZA);
     conError.renglones[0] = { ...conError.renglones[0], importe: '1,00' };
     expect(comparar(BARRAZA, conError).veredicto).toContain('carencia del motor');
+  });
+
+  it('asociar productos no se cuenta como corregir celdas del OCR', () => {
+    const sinAsociar = actaDe('barraza', false);
+    const resultado = comparar(sinAsociar, verdadIgualA(sinAsociar));
+
+    expect(resultado.errores).toBe(0);
+    expect(resultado.productosPorAsociar).toBe(2);
+    expect(resultado.unidadesPorResolver).toBe(0);
+    expect(resultado.celdasPorCorregir).toBe(0);
+    expect(resultado.veredicto).toContain('antes de mover stock');
   });
 
   it('comparar no modifica el acta', () => {

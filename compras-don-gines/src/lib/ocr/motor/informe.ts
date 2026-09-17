@@ -95,18 +95,36 @@ function describirRenglon(renglon: RenglonCandidato): string[] {
    */
   const cantidades: string[] = [];
   if (renglon.kilos) cantidades.push(`${renglon.kilos} kg`);
-  if (renglon.cantidad && !renglon.kilos) cantidades.push(`${renglon.cantidad} (unidad sin determinar)`);
+  if (renglon.cantidad) {
+    cantidades.push(
+      renglon.unidadFacturada === 'KG'
+        ? `${renglon.cantidad} kg facturados`
+        : renglon.unidadFacturada === 'UNIT'
+          ? `${renglon.cantidad} unidades facturadas`
+          : `${renglon.cantidad} (unidad de facturación sin determinar)`,
+    );
+  }
   if (renglon.piezas !== null) cantidades.push(`${renglon.piezas} piezas`);
   l.push(`      Cantidad: ${cantidades.join(' · ') || '—'}`);
 
-  // Cuál de las dos cantidades es la que cuesta, dicho y no supuesto.
+  // Cuál cantidad se factura, dicho y no supuesto.
   const cuesta = cantidadQueCuesta(renglon);
-  if (cuesta && renglon.piezas !== null && cantidades.length > 1) {
+  if (cuesta) {
+    const unidad =
+      renglon.unidadFacturada === 'KG'
+        ? ' kg'
+        : renglon.unidadFacturada === 'UNIT'
+          ? ' unidades'
+          : ' (unidad no impresa)';
     l.push(
-      `      La que cuesta: ${cuesta}${renglon.kilos ? ' kg' : ''} ` +
-        `(las piezas son el movimiento físico, no el costo)`,
+      `      Cantidad facturada: ${cuesta}${unidad} ` +
+        `(sale de ${renglon.campoCantidadFacturada ?? 'ninguna columna'})`,
     );
   }
+  l.push(
+    `      Destino de stock: ${renglon.productoId ?? '(producto sin asociar)'} · ` +
+      `${renglon.unidadDeStock ?? '(unidad de stock sin resolver)'}`,
+  );
 
   const precios: string[] = [];
   if (renglon.precioUnitario) precios.push(`lista ${renglon.precioUnitario}`);

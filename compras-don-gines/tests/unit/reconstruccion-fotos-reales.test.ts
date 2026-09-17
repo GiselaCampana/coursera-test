@@ -7,6 +7,7 @@ import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
 import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
 import { bloquea } from '@/lib/ocr/motor/pendientes';
 import { netoDelRenglon } from '@/lib/ocr/motor/candidatas';
+import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
 
 /**
  * La reconstrucción completa sobre las fotos reales, sin ningún analizador de
@@ -29,7 +30,22 @@ function leer(nombre: string): EvidenciaDeLectura {
 }
 
 function interpretar(nombre: string): InformeReconstruido {
-  return interpretarReconstruccion(leer(nombre), { cuitDelReceptor: CUIT_DEL_RECEPTOR });
+  const unidades =
+    nombre === 'ezra'
+      ? (['KG', 'KG', 'KG', 'KG', 'KG', 'UNIT'] as const)
+      : nombre === 'mabelherdi'
+        ? Array.from({ length: 9 }, () => 'UNIT' as const)
+        : nombre === 'barraza'
+          ? Array.from({ length: 2 }, () => 'KG' as const)
+          : nombre === 'errecalde'
+            ? Array.from({ length: 23 }, () => 'KG' as const)
+            : nombre === 'los-calvos-212356'
+              ? Array.from({ length: 1 }, () => 'KG' as const)
+              : Array.from({ length: 11 }, () => 'KG' as const);
+  return interpretarReconstruccion(leer(nombre), {
+    cuitDelReceptor: CUIT_DEL_RECEPTOR,
+    asociacionesDeProducto: asociacionesDePrueba(unidades),
+  });
 }
 
 const ERRECALDE = interpretar('errecalde');

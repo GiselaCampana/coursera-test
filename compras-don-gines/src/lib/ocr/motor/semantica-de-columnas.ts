@@ -629,21 +629,121 @@ export interface OpcionesDeSemantica {
   netosPosibles?: Decimal[];
 }
 
+/**
+ * «Unidad/es» no dice por sí sola si la columna es la cantidad facturada o el
+ * número de piezas físicas.
+ *
+ * La diferencia no es terminológica sino contable: la cantidad facturada es la
+ * que multiplica al precio; las piezas acompañan a otra cantidad (por ejemplo,
+ * kilos) y no forman esa cuenta. «Piezas», «Bultos» y «Cajas» sí son rótulos
+ * inequívocos y quedan fuera de esta regla.
+ */
+function esRotuloDeUnidadesAmbiguo(titulo: string | null): boolean {
+  if (!titulo) return false;
+  return /^(unidad(?:es)?|unid|uds?)\b/.test(normalizarEncabezado(titulo));
+}
+
+interface FuerzaDeCantidad {
+  columna: number;
+  cierran: number;
+  probados: number;
+}
+
+/**
+ * Qué columna demostró, de manera única, ser la que se multiplica por el precio.
+ *
+ * Se reúne primero la mejor relación de cada columna para no contar dos veces
+ * la misma evidencia por haberla probado con y sin descuento. Si dos columnas
+ * quedan exactamente empatadas, no se desempata por posición, encabezado ni
+ * cierre global: no hay una respuesta probada todavía.
+ */
+function cantidadProbadaPorLaAritmetica(
+  relaciones: RelacionAritmetica[],
+): number | null {
+  const porColumna = new Map<number, FuerzaDeCantidad>();
+  const comparar = (a: FuerzaDeCantidad, b: FuerzaDeCantidad): number =>
+    b.cierran - a.cierran ||
+    b.cierran / b.probados - a.cierran / a.probados ||
+    b.probados - a.probados;
+
+  for (const relacion of relaciones) {
+    const fuerza: FuerzaDeCantidad = {
+      columna: relacion.cantidad,
+      cierran: relacion.cierran,
+      probados: relacion.probados,
+    };
+    const anterior = porColumna.get(relacion.cantidad);
+    if (!anterior || comparar(fuerza, anterior) < 0) {
+      porColumna.set(relacion.cantidad, fuerza);
+    }
+  }
+
+  const ordenadas = [...porColumna.values()].sort(comparar);
+  const primera = ordenadas[0];
+  const segunda = ordenadas[1];
+  if (!primera) return null;
+  if (
+    segunda &&
+    primera.cierran === segunda.cierran &&
+    primera.probados === segunda.probados
+  ) {
+    return null;
+  }
+  return primera.columna;
+}
+
 export function asignarSemantica(
   columnas: ContenidoDeColumna[],
   opciones: OpcionesDeSemantica = {},
 ): AsignacionDeColumna[] {
   const perfiles = columnas.map((c) => perfilDeContenido(c.celdas));
   const porColumna: Evidencia[][] = columnas.map(() => []);
+  const relaciones = relacionesAritmeticas(columnas);
+  const cantidadAritmetica = cantidadProbadaPorLaAritmetica(relaciones);
 
   // --- 1. El encabezado, tal cual está impreso -----------------------------
   const exactos = columnas.map((c) => (c.titulo ? reconocerColumna(c.titulo) : null));
   exactos.forEach((reconocida, i) => {
     if (!reconocida || reconocida.campo === 'ignorada') return;
+    const peso = 0.5 + reconocida.confianza * 0.35;
+
+    if (reconocida.campo === 'piezas' && esRotuloDeUnidadesAmbiguo(columnas[i].titulo)) {
+      const multiplicativa = cantidadAritmetica;
+      const hayOtraCantidadExplicita = exactos.some(
+        (otra, j) =>
+          j !== i &&
+          otra !== null &&
+          (otra.campo === 'cantidad' || otra.campo === 'kilos'),
+      );
+
+      let campos: ('cantidad' | 'piezas')[];
+      if (multiplicativa === i) campos = ['cantidad'];
+      else if (multiplicativa !== null || hayOtraCantidadExplicita) campos = ['piezas'];
+      else campos = ['cantidad', 'piezas'];
+
+      for (const campo of campos) {
+        porColumna[i].push({
+          familia: 'encabezado',
+          campo,
+          peso,
+          detalle:
+            campos.length === 2
+              ? `El encabezado «${reconocida.encabezado}» nombra una cantidad en unidades, ` +
+                'pero no distingue si es la cantidad facturada o las piezas físicas.'
+              : campo === 'cantidad'
+                ? `El encabezado «${reconocida.encabezado}» nombra unidades y ésta es la ` +
+                  'columna que la aritmética del renglón demuestra que se factura.'
+                : `El encabezado «${reconocida.encabezado}» nombra las piezas físicas; ` +
+                  'otra columna contiene la cantidad que se factura.',
+        });
+      }
+      return;
+    }
+
     porColumna[i].push({
       familia: 'encabezado',
       campo: reconocida.campo,
-      peso: 0.5 + reconocida.confianza * 0.35,
+      peso,
       detalle: `El encabezado «${reconocida.encabezado}» es un sinónimo conocido de ${reconocida.campo}.`,
     });
   });
@@ -787,7 +887,12 @@ export function asignarSemantica(
   });
 
   // --- 7. Las igualdades que la tabla hace cerrar --------------------------
-  for (const relacion of relacionesAritmeticas(columnas).slice(0, 3)) {
+  const relacionesInformadas = relaciones.slice(0, 3);
+  const quePruebaLaCantidad = relaciones.find((r) => r.cantidad === cantidadAritmetica);
+  if (quePruebaLaCantidad && !relacionesInformadas.includes(quePruebaLaCantidad)) {
+    relacionesInformadas.push(quePruebaLaCantidad);
+  }
+  for (const relacion of relacionesInformadas) {
     const cuanto = relacion.cierran / relacion.probados;
     const como = relacion.descuento === null ? '' : ' con el descuento aplicado';
     const detalle =
@@ -975,8 +1080,23 @@ function resolver(
        * conjetura, y una conjetura sobre el nombre más una celda ilegible no son
        * dos evidencias, son ninguna.
        */
+      const camposDelEncabezado = new Set(
+        evidencias.filter((e) => e.familia === 'encabezado').map((e) => e.campo),
+      );
       const porElEncabezado = ganador.evidencias.some((e) => e.familia === 'encabezado');
-      if (porElEncabezado && !contradice(ganador.campo, perfiles[indice])) {
+      /*
+       * El atajo vale cuando el encabezado nombra **un** campo. «UNIDADES» es
+       * distinto: el texto se leyó perfecto, pero puede significar cantidad
+       * facturada o piezas. Usar por un margen de centésimas el que mejor se
+       * parece por contenido volvería a congelar exactamente la ambigüedad que
+       * se está intentando conservar.
+       */
+      const encabezadoEsUnivoco = camposDelEncabezado.size === 1;
+      if (
+        porElEncabezado &&
+        encabezadoEsUnivoco &&
+        !contradice(ganador.campo, perfiles[indice])
+      ) {
         return {
           campo: ganador.campo,
           origen: 'EXACT_HEADER',
@@ -1064,7 +1184,14 @@ function sinResolver(
   margen: number,
   favorito?: CampoDeColumna,
 ): AsignacionDeColumna {
-  const campo = marcadorSegunContenido(perfil);
+  const camposDelEncabezado = new Set(
+    evidencias.filter((e) => e.familia === 'encabezado').map((e) => e.campo),
+  );
+  const esCantidadEnUnidadesSinDecidir =
+    camposDelEncabezado.has('cantidad') && camposDelEncabezado.has('piezas');
+  const campo = esCantidadEnUnidadesSinDecidir
+    ? 'UNKNOWN_NUMERIC'
+    : marcadorSegunContenido(perfil);
   return {
     campo,
     origen: 'UNRESOLVED',
