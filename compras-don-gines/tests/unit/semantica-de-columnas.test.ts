@@ -305,6 +305,114 @@ describe('una columna desconocida no significa renglones inexistentes', () => {
     expect(cierra!.importe?.toString()).toBe('234997.69');
   });
 
+  it('recupera la continuación de la descripción dentro del corredor de texto', () => {
+    /*
+     * Un espacio grande dentro del nombre puede fabricar dos columnas sin
+     * encabezado. Sólo el texto entre Descripción y la primera columna numérica
+     * confirmada continúa el nombre; una unidad aislada sigue siendo una
+     * unidad y no una palabra del artículo.
+     */
+    const textos = ['10', 'BARRA', 'UN', 'SABOR MIX X20U.KG', '1.000,00', '2.000,00'];
+    const fila: FilaDeDatos = {
+      linea: 0,
+      cruda: textos.join('  '),
+      celdas: textos.map((texto, i) => ({ texto, desde: i, hasta: i })),
+      sobrantes: [],
+    };
+    const desconocida = (campo: 'UNKNOWN_TEXT' | 'UNKNOWN_NUMERIC'): ColumnaReconocida => ({
+      campo,
+      encabezado: '',
+      confianza: 0,
+      origen: 'UNRESOLVED',
+      requiereConfirmacion: true,
+    });
+    const columnas: (ColumnaReconocida | null)[] = [
+      reconocerColumna('Codigo'),
+      reconocerColumna('Descripcion'),
+      desconocida('UNKNOWN_TEXT'),
+      desconocida('UNKNOWN_TEXT'),
+      reconocerColumna('Precio'),
+      reconocerColumna('Importe'),
+    ];
+
+    const candidatas = candidatasDeRenglon(fila, columnas, 'ar');
+    expect(candidatas.length).toBeGreaterThan(0);
+    for (const candidata of candidatas) {
+      expect(candidata.descripcion).toBe('BARRA SABOR MIX X20U.KG');
+      expect(candidata.descripcion).not.toMatch(/\bUN\b/);
+    }
+  });
+
+  it('recupera una palabra del artículo que dos pasadas dejaron fuera de las columnas', () => {
+    const textos = ['30', 'PLAN', 'BARRAZA', '2,00', '1.000,00', '2.000,00'];
+    const fila: FilaDeDatos = {
+      linea: 0,
+      cruda: textos.join('  '),
+      celdas: textos.map((texto, i) => ({ texto, desde: i, hasta: i })),
+      sobrantes: [
+        { texto: 'MUZZA', desde: 0, hasta: 0 },
+        { texto: 'MUZZA', desde: 0, hasta: 0 },
+        { texto: 'KG', desde: 0, hasta: 0 },
+        { texto: 'RUIDO', desde: 0, hasta: 0 },
+      ],
+    };
+    const anonima: ColumnaReconocida = {
+      campo: 'UNKNOWN_TEXT',
+      encabezado: '',
+      confianza: 0,
+      origen: 'UNRESOLVED',
+      requiereConfirmacion: true,
+    };
+    const columnas: (ColumnaReconocida | null)[] = [
+      reconocerColumna('Codigo'),
+      reconocerColumna('Descripcion'),
+      anonima,
+      reconocerColumna('Cantidad'),
+      reconocerColumna('Precio'),
+      reconocerColumna('Importe'),
+    ];
+
+    const candidatas = candidatasDeRenglon(fila, columnas, 'ar');
+    expect(candidatas.length).toBeGreaterThan(0);
+    for (const candidata of candidatas) {
+      expect(candidata.descripcion).toBe('PLAN BARRAZA MUZZA');
+      expect(candidata.descripcion).not.toContain('RUIDO');
+      expect(candidata.descripcion).not.toMatch(/\bKG\b/);
+    }
+  });
+
+  it('una columna anónima con UN es cantidad, no dinero ni kilos por omisión', () => {
+    const textos = ['10', 'BARRA', '2,00 UN', '1.000,00', '2.000,00'];
+    const fila: FilaDeDatos = {
+      linea: 0,
+      cruda: textos.join('  '),
+      celdas: textos.map((texto, i) => ({ texto, desde: i, hasta: i })),
+      sobrantes: [],
+    };
+    const anonima: ColumnaReconocida = {
+      campo: 'UNKNOWN_NUMERIC',
+      encabezado: '',
+      confianza: 0,
+      origen: 'UNRESOLVED',
+      requiereConfirmacion: true,
+    };
+    const columnas: (ColumnaReconocida | null)[] = [
+      reconocerColumna('Codigo'),
+      reconocerColumna('Descripcion'),
+      anonima,
+      reconocerColumna('Precio'),
+      reconocerColumna('Importe'),
+    ];
+
+    const cierra = candidatasDeRenglon(fila, columnas, 'ar').find((c) =>
+      c.controles.some((control) => control.paso),
+    );
+    expect(cierra?.cantidad?.toString()).toBe('2');
+    expect(cierra?.cantidadFacturada?.toString()).toBe('2');
+    expect(cierra?.unidadFacturada).toBe('UNIT');
+    expect(cierra?.kilos).toBeNull();
+  });
+
   it('sin la columna de texto, el renglón sobrevive por su aritmética', () => {
     /*
      * La descripción es lo que identifica el artículo para una persona, pero no

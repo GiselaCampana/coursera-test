@@ -1,5 +1,9 @@
 import type { Decimal } from '@/lib/money';
-import { esFilaDeEncabezados, llevaNumeros } from '@/lib/ocr/motor/columnas';
+import {
+  esFilaDeEncabezados,
+  llevaNumeros,
+  reconocerColumnas,
+} from '@/lib/ocr/motor/columnas';
 import {
   alto,
   centroY,
@@ -165,6 +169,14 @@ export interface OpcionesDeReconstruccion {
   desdeY?: number;
   hastaY?: number;
   /**
+   * Inicio propuesto del cuerpo, ya en el espacio canónico.
+   *
+   * Es distinto de `desdeY`: no recorta la evidencia antes de medir la
+   * inclinación ni de agrupar pasadas. Se usa para hacer competir una tabla que
+   * empieza en un bloque repetido cuando el OCR perdió por completo sus títulos.
+   */
+  desdeYDelCuerpo?: number;
+  /**
    * Qué candidata de banda de artículos usar, de las que propone la evidencia.
    *
    * Cero es la más generosa —conserva todo— y las siguientes van cortando. Que
@@ -257,13 +269,21 @@ export function reconstruirConContexto(
   }));
 
   // --- La fila de títulos --------------------------------------------------
-  const titulos = encontrarTitulos(visuales);
+  const titulos = encontrarTitulos(visuales, alturaTipica);
   if (!titulos) notas.push('No se encontró una fila de títulos entre los renglones visibles.');
 
-  const cuerpo = cortarEnElPie(
-    titulos ? visuales.filter((r) => r.y > titulos.y) : visuales,
-    notas,
-  );
+  const debajoDelEncabezado = titulos ? visuales.filter((r) => r.y > titulos.y) : visuales;
+  const desdeElInicioPropuesto =
+    opciones.desdeYDelCuerpo === undefined
+      ? debajoDelEncabezado
+      : debajoDelEncabezado.filter((r) => r.y >= opciones.desdeYDelCuerpo!);
+  if (opciones.desdeYDelCuerpo !== undefined) {
+    notas.push(
+      `Se probó el cuerpo desde ${opciones.desdeYDelCuerpo.toFixed(4)}, ` +
+        'inicio sostenido por un bloque repetido de renglones numéricos.',
+    );
+  }
+  const cuerpo = cortarEnElPie(desdeElInicioPropuesto, notas);
 
   // --- Columnas ------------------------------------------------------------
   const limites = detectarColumnas(cuerpo, titulos, alturaTipica, opciones.netosPosibles ?? []);
@@ -640,6 +660,21 @@ const ETIQUETA_FISCAL =
   /^(neto\s*(gravado|no\s*gravado)?|no\s*gravado|totales?|percep\w*|sub\s?-?\s?totales?|son\s+pesos)$/i;
 
 /**
+ * Una condición tributaria del emisor o del receptor no es el IVA del pie.
+ *
+ * «I.V.A. RESPONSABLE INSCRIPTO» aparece arriba de la tabla en comprobantes
+ * perfectamente válidos. Como `EMPIEZA_EL_PIE` acepta «IVA» al principio, esa
+ * línea cortaba el documento antes del primer artículo cuando el OCR no había
+ * conseguido leer la fila de títulos. Se excluye por la frase completa, no por
+ * la posición ni por el proveedor.
+ */
+const CONDICION_FRENTE_AL_IVA =
+  /^i\.?\s*v\.?\s*a\.?\s*:?[\s-]*(responsable|monotrib|exento|consumidor)\b/i;
+
+/** Un rótulo vacío del encabezado logístico, no un importe del pie. */
+const TRANSPORTE_DEL_ENCABEZADO = /^transporte\s*:?\s*$/i;
+
+/**
  * Corta la tabla donde empieza el pie.
  *
  * El pie tiene números grandes y creíbles repartidos en columnas, así que sus
@@ -666,7 +701,10 @@ function cortarEnElPie(renglones: RenglonVisual[], notas: string[]): RenglonVisu
     const textos = renglones[i].observaciones.map((o) => textoPreferido(o).trim());
     const primeras = textos.slice(0, 2).join(' ').trim();
 
-    const porElPrincipio = EMPIEZA_EL_PIE.test(primeras);
+    const porElPrincipio =
+      EMPIEZA_EL_PIE.test(primeras) &&
+      !CONDICION_FRENTE_AL_IVA.test(primeras) &&
+      !TRANSPORTE_DEL_ENCABEZADO.test(primeras);
     const fiscal = textos.find((t) => ETIQUETA_FISCAL.test(t));
     if (!porElPrincipio && fiscal === undefined) continue;
 
@@ -686,12 +724,97 @@ function cortarEnElPie(renglones: RenglonVisual[], notas: string[]): RenglonVisu
  * el primero, y el criterio de «el que más reconoce» elegiría cualquiera de los
  * dos según cómo salió la foto.
  */
-function encontrarTitulos(renglones: RenglonVisual[]): RenglonVisual | null {
-  for (const renglon of renglones) {
-    const textos = renglon.observaciones.map((o) => textoPreferido(o));
-    if (textos.length < 3) continue;
-    if (esFilaDeEncabezados(textos)) return renglon;
+function encontrarTitulos(
+  renglones: RenglonVisual[],
+  alturaTipica: number,
+): RenglonVisual | null {
+  for (let i = 0; i < renglones.length; i++) {
+    const renglon = renglones[i];
+    const siguiente = renglones[i + 1];
+    const candidatas = [renglon];
+
+    /*
+     * Una fila impresa puede llegar como dos renglones visuales.
+     *
+     * En una factura del lote, «Artículo · Unid. · Descripción» quedó unas
+     * décimas de carácter más arriba que «Cantidad · Bonif. · Precio · IVA ·
+     * Importe». La primera mitad ya alcanzaba el umbral de tres campos, así que
+     * el motor la tomaba sola y convertía toda la derecha en columnas anónimas.
+     * Se ofrece también la unión con la línea inmediatamente contigua y, para
+     * el mismo lugar del documento, gana la que reconoce más campos distintos.
+     */
+    if (siguiente && siguiente.y - renglon.y <= alturaTipica * 1.1) {
+      candidatas.push({
+        y: Math.max(renglon.y, siguiente.y),
+        caja: unirCajas(renglon.caja, siguiente.caja),
+        observaciones: [...renglon.observaciones, ...siguiente.observaciones].sort(
+          (a, b) => a.caja.x0 - b.caja.x0,
+        ),
+      });
+    }
+
+    const validas = candidatas
+      .map((candidata) => {
+        const textos = candidata.observaciones.map((o) => textoPreferido(o));
+        const campos = new Set(
+          reconocerColumnas(textos)
+            .filter((c) => c !== null && c.campo !== 'ignorada')
+            .map((c) => c!.campo),
+        );
+        return { candidata, textos, campos: campos.size };
+      })
+      .filter((x) => x.textos.length >= 3 && esFilaDeEncabezados(x.textos))
+      .sort((a, b) => b.campos - a.campos);
+
+    if (validas[0]) return validas[0].candidata;
   }
+  return null;
+}
+
+/**
+ * Propone dónde empieza una tabla cuyos títulos no fueron legibles.
+ *
+ * No alcanza con una línea que tenga muchos números: el encabezado fiscal trae
+ * CUIT, fecha, número de factura y teléfono. Una tabla, en cambio, repite a
+ * intervalos regulares al menos tres valores numéricos y algún texto durante
+ * tres renglones consecutivos. La propuesta conserva un margen superior para
+ * que un código o el principio de la primera descripción, leídos unos píxeles
+ * más arriba, sigan pudiendo entrar.
+ *
+ * Es una propuesta, no un corte definitivo: `candidatasDeTabla` conserva
+ * también la reconstrucción de página completa y deja que ambas compitan.
+ */
+export function inicioProbableDelDetalle(
+  renglones: RenglonVisual[],
+  alturaTipica: number,
+): number | null {
+  if (alturaTipica <= 0) return null;
+
+  const esDenso = (renglon: RenglonVisual) => {
+    const textos = renglon.observaciones.map((o) => textoPreferido(o).trim());
+    const numeros = textos.filter((texto) =>
+      /^[\s$%()+\-.,\d]+(?:\s*(?:u|un|uni|ud|kg|kgs?|pza|pzas?))?$/i.test(texto),
+    ).length;
+    const tieneTexto = textos.some((texto) => /\p{L}{3}/u.test(texto));
+    return numeros >= 3 && tieneTexto;
+  };
+
+  for (let i = 0; i < renglones.length; i++) {
+    if (!esDenso(renglones[i])) continue;
+    let seguidos = 1;
+    let anterior = renglones[i];
+    for (let j = i + 1; j < renglones.length; j++) {
+      const actual = renglones[j];
+      if (actual.y - anterior.y > alturaTipica * 2.3) break;
+      if (!esDenso(actual)) break;
+      seguidos += 1;
+      anterior = actual;
+      if (seguidos >= 3) {
+        return Math.max(0, renglones[i].y - alturaTipica * 2.5);
+      }
+    }
+  }
+
   return null;
 }
 

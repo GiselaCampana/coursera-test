@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { reconstruirTabla } from '@/lib/ocr/reconstruccion/reconstruccion';
+import {
+  inicioProbableDelDetalle,
+  reconstruirConContexto,
+  reconstruirTabla,
+} from '@/lib/ocr/reconstruccion/reconstruccion';
 import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
 import { medirInclinacion } from '@/lib/ocr/reconstruccion/inclinacion';
 import {
@@ -62,6 +66,82 @@ describe('la tabla base, para tener contra qué comparar', () => {
 
   it('la evidencia está normalizada', () => {
     expect(evidenciaNormalizada(evidencia(tablaBase()))).toBe(true);
+  });
+});
+
+describe('el inicio de la tabla no depende de un único renglón de títulos', () => {
+  it('une las dos mitades de un encabezado impreso en alturas contiguas', () => {
+    /*
+     * Tres campos en la primera mitad ya alcanzan el umbral de encabezado. Si
+     * se acepta ahí, Precio e Importe quedan como columnas anónimas aunque el
+     * papel los haya impreso apenas más abajo. La unión compite en el mismo
+     * lugar y gana por reconocer más campos distintos.
+     */
+    const partida = [
+      ...fila(Y_TITULOS, [
+        ['Codigo', 0.05],
+        ['Descripcion', 0.20],
+        ['Cantidad', 0.50],
+      ]),
+      ...fila(Y_TITULOS + ALTO * 0.9, [
+        ['Precio', 0.65],
+        ['Importe', 0.82],
+      ]),
+      ...RENGLONES.flatMap((celdas, i) =>
+        fila(Y_TITULOS + 0.03 + SALTO * i, celdas),
+      ),
+    ];
+
+    const tabla = reconstruir(partida);
+    expect(tabla.encabezados).toEqual([
+      'Codigo',
+      'Descripcion',
+      'Cantidad',
+      'Precio',
+      'Importe',
+    ]);
+    expect(comoTexto(tabla)).toEqual(comoTexto(reconstruir(tablaBase())));
+  });
+
+  it('una condición de IVA y TRANSPORTE no cortan una tabla sin títulos', () => {
+    /*
+     * Sin encabezado legible, el documento entero llega a la búsqueda del
+     * cuerpo. «IVA RESPONSABLE INSCRIPTO» describe al emisor y «TRANSPORTE:»
+     * es un rótulo logístico vacío: ninguno es el pie fiscal. Tres renglones
+     * densos y consecutivos sí proponen el inicio del detalle.
+     */
+    const ys = [0.40, 0.415, 0.43];
+    const fragmentos = [
+      ...fila(0.10, [
+        ['FACTURA', 0.10],
+        ['0001-00012345', 0.70],
+      ]),
+      ...fila(0.14, [
+        ['IVA RESPONSABLE INSCRIPTO', 0.10],
+        ['30-12345678-9', 0.70],
+      ]),
+      ...fila(0.18, [['TRANSPORTE:', 0.10]]),
+      ...ys.flatMap((y, i) =>
+        fila(y, [
+          [['ALFA', 'BETA', 'GAMMA'][i], 0.15],
+          [`${i + 2},00 UN`, 0.45],
+          [`${i + 1}.000,00`, 0.62],
+          [`${(i + 1) * (i + 2)}.000,00`, 0.85],
+        ]),
+      ),
+      ...fila(0.80, [
+        ['Neto', 0.60],
+        ['20.000,00', 0.85],
+      ]),
+    ];
+    const { tabla, contexto } = reconstruirConContexto(evidencia(fragmentos));
+    const inicio = inicioProbableDelDetalle(contexto.cuerpo, contexto.alturaTipica);
+
+    expect(inicio).not.toBeNull();
+    expect(inicio!).toBeLessThan(ys[0]);
+    expect(tabla.renglones).toHaveLength(3);
+    expect(comoTexto(tabla).join('\n')).not.toContain('RESPONSABLE INSCRIPTO');
+    expect(comoTexto(tabla).join('\n')).not.toContain('TRANSPORTE');
   });
 });
 

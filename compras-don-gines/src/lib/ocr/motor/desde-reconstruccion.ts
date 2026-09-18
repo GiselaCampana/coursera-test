@@ -155,7 +155,12 @@ export interface InformeReconstruido {
   resumen: ResumenDePendientes;
   /** Cómo se armó la tabla que ganó, y con qué compitió. */
   reconstruccionElegida: string;
-  reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
+  reconstruccionesProbadas: {
+    origen: string;
+    puntaje: number;
+    renglones: number;
+    apoyoEstructural: number;
+  }[];
   /**
    * Cuánto trabajo hizo cada etapa y cuánto tardó.
    *
@@ -491,9 +496,15 @@ function interpretarUnaVez(
     const ordenadas = [...armado.lecturas].sort(compararCandidatas);
     return { ...armado, mejor: ordenadas[0].puntaje, reparaciones: ordenadas[0].reparaciones };
   });
-  const elegido = mejorDeCada.reduce((a, b) =>
-    b.mejor > a.mejor || (b.mejor === a.mejor && b.reparaciones < a.reparaciones) ? b : a,
-  );
+  const elegido = mejorDeCada.reduce((a, b) => {
+    if (b.mejor !== a.mejor) return b.mejor > a.mejor ? b : a;
+    if (b.reparaciones !== a.reparaciones) {
+      return b.reparaciones < a.reparaciones ? b : a;
+    }
+    return (b.candidata.apoyoEstructural ?? 0) > (a.candidata.apoyoEstructural ?? 0)
+      ? b
+      : a;
+  });
 
   /*
    * Y recién acá se aplican las confirmaciones de una persona.
@@ -693,6 +704,7 @@ function interpretarUnaVez(
       origen: a.candidata.origen,
       puntaje: a.mejor,
       renglones: a.candidata.tabla.renglones.length,
+      apoyoEstructural: a.candidata.apoyoEstructural ?? 0,
     })),
     ms: Date.now() - comienzo,
   };

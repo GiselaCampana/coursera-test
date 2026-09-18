@@ -94,6 +94,6 @@ describe('regresiones de escala: lo que nunca puede volver a pasar', () => {
   });
 
   it('el resultado dice con qué versión del comparador se midió', () => {
-    expect(VERSION_DEL_COMPARADOR).toBe('v3');
+    expect(VERSION_DEL_COMPARADOR).toBe('v4');
   });
 });

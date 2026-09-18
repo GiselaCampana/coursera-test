@@ -298,9 +298,10 @@ function deEscala(
  * La versión del comparador, que va en cada resultado.
  *
  * `v1` tiraba todos los puntos como separadores de miles. `v2` distingue las
- * cinco escrituras que aparecen entre el acta y una transcripción a mano.
+ * cinco escrituras que aparecen entre el acta y una transcripción a mano. `v4`
+ * compara varios IVA por alícuota y no por el orden en que los encontró.
  */
-export const VERSION_DEL_COMPARADOR = 'v3';
+export const VERSION_DEL_COMPARADOR = 'v4';
 
 export function comparar(
   acta: ActaDePrimeraLectura,
@@ -382,8 +383,32 @@ export function comparar(
     });
   }
 
+  const ivasLeidosUsados = new Set<number>();
   (verdad.pie.iva ?? []).forEach((iva, i) => {
-    const leido = acta.pie.iva[i]?.valor ?? null;
+    const indicePorAlicuota = acta.pie.iva.findIndex(
+      (candidato, indice) =>
+        !ivasLeidosUsados.has(indice) &&
+        iva.alicuota !== undefined &&
+        iva.alicuota !== null &&
+        candidato.alicuota !== null &&
+        igual(candidato.alicuota, iva.alicuota),
+    );
+    /*
+     * Si el papel informa la alícuota, otra alícuota no es un reemplazo por
+     * posición. Un IVA 10,5 % no puede ocupar el casillero del 21 % sólo porque
+     * sea el único que leyó el OCR: eso produce a la vez una asignación
+     * incorrecta y una omisión ficticia. El recurso posicional queda únicamente
+     * para transcripciones antiguas que no declaraban la tasa.
+     */
+    const tieneAlicuota = iva.alicuota !== undefined && iva.alicuota !== null;
+    const indice =
+      indicePorAlicuota >= 0
+        ? indicePorAlicuota
+        : tieneAlicuota
+          ? -1
+          : acta.pie.iva.findIndex((_, candidato) => !ivasLeidosUsados.has(candidato));
+    if (indice >= 0) ivasLeidosUsados.add(indice);
+    const leido = indice >= 0 ? acta.pie.iva[indice]?.valor ?? null : null;
     const acierto = igual(leido, iva.valor);
     campos.push({
       renglon: null,

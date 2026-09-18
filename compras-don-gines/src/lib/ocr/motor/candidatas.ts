@@ -280,6 +280,11 @@ function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
   const lugares = new Map<CampoDeColumna, string>();
   const textosSinConfirmar: string[] = [];
   const montosSinConfirmar: { texto: string; lugar?: string }[] = [];
+  const cantidadesSinConfirmar: {
+    campo: 'cantidad' | 'kilos';
+    texto: string;
+    lugar?: string;
+  }[] = [];
 
   columnas.forEach((columna, i) => {
     if (!columna || columna.campo === 'ignorada') return;
@@ -287,6 +292,17 @@ function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
     if (!celda || celda.texto.trim() === '') return;
     if (columna.campo === 'UNKNOWN_TEXT') {
       textosSinConfirmar.push(celda.texto.trim());
+      return;
+    }
+    if (
+      (columna.campo === 'UNKNOWN_NUMERIC' || columna.campo === 'UNKNOWN_MONEY') &&
+      (SUFIJO_KILOS.test(celda.texto.trim()) || SUFIJO_UNIDADES.test(celda.texto.trim()))
+    ) {
+      cantidadesSinConfirmar.push({
+        campo: SUFIJO_KILOS.test(celda.texto.trim()) ? 'kilos' : 'cantidad',
+        texto: celda.texto.trim(),
+        lugar: celda.lugar,
+      });
       return;
     }
     if (columna.campo === 'UNKNOWN_MONEY') {
@@ -322,6 +338,101 @@ function porCampo(fila: FilaDeDatos, columnas: (ColumnaReconocida | null)[]) {
    */
   if (!mapa.has('descripcion') && textosSinConfirmar.length > 0) {
     mapa.set('descripcion', textosSinConfirmar.join(' ').replace(/\s+/g, ' ').trim());
+  }
+
+  /*
+   * Una unidad impresa resuelve la naturaleza de una columna sin encabezado.
+   *
+   * «6,000 UN» puede parecer un monto si se mira sólo la puntuación, pero `UN`
+   * no es un separador: declara que el número es una cantidad. Se usa únicamente
+   * cuando hay una sola candidata para ese campo; dos columnas con unidades
+   * seguirían siendo una ambigüedad estructural y no se elige la primera.
+   */
+  for (const campo of ['cantidad', 'kilos'] as const) {
+    const suyas = cantidadesSinConfirmar.filter((c) => c.campo === campo);
+    if (mapa.has(campo) || suyas.length !== 1) continue;
+    mapa.set(campo, suyas[0].texto);
+    if (suyas[0].lugar) lugares.set(campo, suyas[0].lugar!);
+  }
+
+  /*
+   * Una descripción reconocida puede continuar en franjas sin semántica.
+   *
+   * Con pocos renglones, los espacios alineados dentro de descripciones largas
+   * parecen corredores de columnas. El principio queda bajo «Descripción» y
+   * «MIX», «OREADA X180 GR X20U.KG» o «NEGRO C/V KG» quedan en columnas
+   * anónimas. No son campos nuevos: ocupan el corredor que va desde la
+   * descripción hasta la primera columna numérica confirmada.
+   *
+   * Sólo se agregan columnas no resueltas y sólo dentro de ese corredor. Una
+   * unidad aislada —«UNI», «KG», «Pza.»— no es parte del nombre; un texto mixto
+   * como «X20U.KG» sí lo es. Así se recupera lo impreso sin tragarse cantidades
+   * ni inventar semántica para las columnas.
+   */
+  const indiceDescripcion = columnas.findIndex((c) => c?.campo === 'descripcion');
+  if (indiceDescripcion >= 0 && mapa.has('descripcion')) {
+    const siguienteNumerica = columnas.findIndex(
+      (c, i) => i > indiceDescripcion && c !== null && CAMPOS_NUMERICOS.has(c.campo),
+    );
+    const hasta = siguienteNumerica < 0 ? columnas.length : siguienteNumerica;
+    const UNIDAD_AISLADA =
+      /^(?:u|un|uni|ud|uds|unid|unidad(?:es)?|kg|kgs?|kilo(?:s)?|pza|pzas|pieza(?:s)?)\.?$/i;
+    const NUMERO_CON_UNIDAD =
+      /^[\d.,]+\s*(?:u|un|uni|ud|uds|unid|unidad(?:es)?|kg|kgs?|kilo(?:s)?|pza|pzas|pieza(?:s)?)\.?$/i;
+    const partes: string[] = [];
+
+    for (let i = indiceDescripcion + 1; i < hasta; i++) {
+      const columna = columnas[i];
+      if (columna && !CAMPOS_SIN_CONFIRMAR.has(columna.campo)) continue;
+      const texto = fila.celdas[i]?.texto.trim();
+      if (!texto || UNIDAD_AISLADA.test(texto) || NUMERO_CON_UNIDAD.test(texto)) continue;
+      if (!/\p{L}/u.test(texto)) continue;
+      partes.push(texto);
+    }
+
+    if (partes.length > 0) {
+      mapa.set(
+        'descripcion',
+        [mapa.get('descripcion')!, ...partes].join(' ').replace(/\s+/g, ' ').trim(),
+      );
+    }
+  }
+
+  /*
+   * Una palabra que varias pasadas dejaron justo fuera de las columnas sigue
+   * siendo evidencia del renglón.
+   *
+   * Se exige repetición porque los sobrantes también contienen jirones de la
+   * grilla y del fondo. Dos observaciones independientes de «MUZZA» sostienen
+   * una continuación; un «To», un «ECN» o una unidad aislada vistos una sola
+   * vez no. Se agrega una sola vez y únicamente si la descripción todavía no
+   * la contiene.
+   */
+  if (mapa.has('descripcion') && fila.sobrantes.length > 0) {
+    const repetidos = new Map<string, { texto: string; veces: number }>();
+    for (const sobrante of fila.sobrantes) {
+      const texto = sobrante.texto.trim();
+      const clave = normalizarEncabezado(texto);
+      const letras = clave.replace(/[^a-z]/g, '');
+      if (letras.length < 4) continue;
+      if (/^(?:unid(?:ad(?:es)?)?|pzas?|piezas?|kgs?|kilos?)$/.test(clave)) continue;
+      const anterior = repetidos.get(clave);
+      repetidos.set(clave, {
+        texto: anterior?.texto ?? texto,
+        veces: (anterior?.veces ?? 0) + 1,
+      });
+    }
+
+    const partes = [...repetidos.entries()]
+      .filter(([, apoyo]) => apoyo.veces >= 2)
+      .filter(([clave]) => !normalizarEncabezado(mapa.get('descripcion')!).includes(clave))
+      .map(([, apoyo]) => apoyo.texto);
+    if (partes.length > 0) {
+      mapa.set(
+        'descripcion',
+        [mapa.get('descripcion')!, ...partes].join(' ').replace(/\s+/g, ' ').trim(),
+      );
+    }
   }
 
   return { mapa, lugares, montosSinConfirmar };

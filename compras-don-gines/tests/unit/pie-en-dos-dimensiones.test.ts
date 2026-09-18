@@ -226,6 +226,13 @@ describe('una frase que contiene la palabra no es el concepto', () => {
     expect(nombraOtraCosa('Cantidad Total')).toBe(true);
   });
 
+  it('una dirección, un código postal y un teléfono tampoco son importes', () => {
+    expect(nombraOtraCosa('Lugar de entrega')).toBe(true);
+    expect(nombraOtraCosa('Domicilio')).toBe(true);
+    expect(nombraOtraCosa('Código Postal')).toBe(true);
+    expect(nombraOtraCosa('Teléfono')).toBe(true);
+  });
+
   it('el veto es por palabras enteras, nunca por pedazo de palabra', () => {
     /*
      * La garantía que hace segura la lista. Si se comparara por subcadena,
@@ -440,6 +447,143 @@ describe('las relaciones fiscales comprueban asignaciones, no las crean', () => 
     );
     expect(resultado.total?.toFixed(2)).toBe('121000.00');
   });
+
+  it('un TOTAL rotulado no se convierte en neto aunque iguale la suma del detalle', () => {
+    /*
+     * Algunos comprobantes detallan importes finales: sus renglones suman el
+     * total con IVA, no el neto. La igualdad no puede borrar el significado de
+     * los rótulos impresos.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['IVA 10,5%', 0.58],
+          ['10.500,00', 0.82],
+        ]),
+        ...filaDelPie(0.44, [
+          ['TOTAL', 0.58],
+          ['110.500,00', 0.82],
+        ]),
+      ],
+      // Es deliberado: el detalle está expresado con IVA incluido.
+      '110500.00',
+    );
+
+    expect(resultado.netoGravado?.toFixed(2)).toBe('100000.00');
+    expect(resultado.total?.toFixed(2)).toBe('110500.00');
+    expect(resultado.iva[0]?.valor.toFixed(2)).toBe('10500.00');
+  });
+
+  it('un total sin separadores y con dos escalas queda sin asignar si no cierra', () => {
+    /*
+     * Todos los tokens de la columna llegaron dañados, de modo que ninguna
+     * lectura literal fija su escala. El rótulo TOTAL identifica la casilla,
+     * pero no autoriza a elegir entre 7.069.850 y 70.698,50 cuando ninguna de
+     * las dos cierra. El número sigue visible y la cuenta va aparte.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.50],
+          ['58.420.3', 0.62],
+          ['Subtotal', 0.74],
+          ['3025', 0.89],
+        ]),
+        ...filaDelPie(0.42, [
+          ['IVA 21%', 0.74],
+          ['12.268.26', 0.89],
+        ]),
+        ...filaDelPie(0.44, [
+          ['Total', 0.74],
+          ['7069850]', 0.89],
+        ]),
+      ],
+      '58420.30',
+    );
+
+    expect(resultado.totalCalculado).toBe(true);
+    expect(resultado.total?.toFixed(2)).toBe('70688.56');
+    expect(resultado.sinAsignar.some((x) => x.texto === '7069850]')).toBe(true);
+    expect(
+      resultado.asignaciones.some(
+        (a) => a.concepto === 'total' && a.origen.texto === '7069850]',
+      ),
+    ).toBe(false);
+  });
+
+  it('un neto al que le falta el último centavo no se completa con cero', () => {
+    /*
+     * La etiqueta identifica el concepto, pero `58.420.3` no identifica el
+     * último dígito. Con varios renglones la tolerancia del IVA alcanza a hacer
+     * compatible `58.420,30` con un impuesto cercano; eso no autoriza a afirmar
+     * que el dígito ausente era cero. Si el detalle tampoco lo fija, queda una
+     * pregunta sobre el importe que sí se leyó.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.50],
+          ['58.420.3', 0.72],
+        ]),
+        ...filaDelPie(0.42, [
+          ['IVA 21%', 0.50],
+          ['12.268,27', 0.72],
+        ]),
+      ],
+      // Deliberadamente no coincide: la suma del detalle no prueba el cero.
+      '58420.90',
+    );
+
+    expect(resultado.netoGravado).toBeNull();
+    expect(resultado.sinAsignar.some((x) => x.texto === '58.420.3')).toBe(true);
+    expect(
+      resultado.asignaciones.some(
+        (a) => a.concepto === 'netoGravado' && a.valor.eq('58420.30'),
+      ),
+    ).toBe(false);
+  });
+
+  it('el detalle sí puede confirmar el valor de un neto con el último centavo mutilado', () => {
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.50],
+          ['58.420.3', 0.72],
+        ]),
+      ],
+      '58420.30',
+    );
+
+    expect(resultado.netoGravado?.toFixed(2)).toBe('58420.30');
+  });
+
+  it('un total con separador final se conserva aunque falte un concepto', () => {
+    const resultado = pie(
+      [
+        ...filaDelPie(0.40, [
+          ['Neto', 0.58],
+          ['100.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.42, [
+          ['IVA 21%', 0.58],
+          ['21.000,00', 0.82],
+        ]),
+        ...filaDelPie(0.44, [
+          ['TOTAL', 0.58],
+          ['125.000,', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+
+    expect(resultado.totalCalculado).toBe(false);
+    expect(resultado.total?.toFixed(2)).toBe('125000.00');
+    expect(resultado.residuo?.toFixed(2)).toBe('4000.00');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -494,6 +638,50 @@ describe('las regiones compiten enteras', () => {
 
     const resultado = pie(fragmentos, '100000.00');
     expect(resultado.region).toBeTruthy();
+  });
+
+  it('reúne una percepción temprana y un resumen fiscal remoto sin arrastrar la dirección', () => {
+    /*
+     * El pie está partido en dos islas: la percepción va justo debajo del
+     * detalle y neto/IVA/total, al pie. En el medio hay entrega, CP y CAE. Los
+     * conceptos fiscales se conservan todos y las cifras administrativas no se
+     * convierten en preguntas monetarias.
+     */
+    const resultado = pie(
+      [
+        ...filaDelPie(0.34, [
+          ['Percepcion IIBB', 0.50],
+          ['1.500,00', 0.82],
+        ]),
+        ...filaDelPie(0.55, [
+          ['Lugar de entrega', 0.12],
+          ['4967', 0.34],
+          ['1419', 0.48],
+        ]),
+        ...filaDelPie(0.70, [
+          ['CAE', 0.55],
+          ['86372544943365', 0.75],
+        ]),
+        ...filaDelPie(0.80, [
+          ['NETO', 0.48],
+          ['IVA', 0.65],
+          ['TOTAL', 0.82],
+        ]),
+        ...filaDelPie(0.82, [
+          ['100.000,00', 0.48],
+          ['21.000,00', 0.65],
+          ['122.500,00', 0.82],
+        ]),
+      ],
+      '100000.00',
+    );
+
+    expect(resultado.estado).toBe('completo');
+    expect(resultado.netoGravado?.toFixed(2)).toBe('100000.00');
+    expect(valores(resultado.iva)).toContain('21000');
+    expect(valores(resultado.percepciones)).toContain('1500');
+    expect(resultado.total?.toFixed(2)).toBe('122500.00');
+    expect(resultado.sinAsignar.map((x) => x.texto)).not.toContain('1419');
   });
 });
 

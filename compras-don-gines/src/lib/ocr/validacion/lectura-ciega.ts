@@ -238,7 +238,12 @@ export interface ActaDePrimeraLectura {
   /** Qué decía la segunda candidata, para poder ver si eran dos respuestas. */
   segundaCandidata: { convencion: string; puntaje: number; sumaDeRenglones: string } | null;
   reconstruccionElegida: string;
-  reconstruccionesProbadas: { origen: string; puntaje: number; renglones: number }[];
+  reconstruccionesProbadas: {
+    origen: string;
+    puntaje: number;
+    renglones: number;
+    apoyoEstructural: number;
+  }[];
 
   /**
    * En qué escala se leyó cada columna numérica, y con qué evidencia.

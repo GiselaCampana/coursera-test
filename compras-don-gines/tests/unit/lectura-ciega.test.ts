@@ -213,6 +213,32 @@ describe('comparar contra el papel es un diagnóstico, no una nota', () => {
     expect(resultado.causaPrincipal).toBeNull();
   });
 
+  it('compara cada IVA por alícuota y no por la posición de la lista', () => {
+    /*
+     * El papel puede imprimir primero un IVA 21 % en cero y después el 10,5 %
+     * efectivo, mientras el motor conserva sólo el segundo. Emparejar por
+     * posición convertía el 10,5 % correcto en un 21 % incorrecto y, además,
+     * declaraba omitido el propio 10,5 %.
+     */
+    const acta: ActaDePrimeraLectura = structuredClone(BARRAZA);
+    acta.pie.iva = [{ alicuota: '0.105', valor: '105.00' }];
+    const verdad = verdadIgualA(acta);
+    verdad.pie.iva = [
+      { alicuota: '0.21', valor: '0.00' },
+      { alicuota: '0.105', valor: '105.00' },
+    ];
+
+    const resultado = comparar(acta, verdad);
+    const alVeintiuno = resultado.campos.find((c) => c.campo === 'pie.iva[0]');
+    const alDiezYMedio = resultado.campos.find((c) => c.campo === 'pie.iva[1]');
+
+    expect(alVeintiuno?.leido).toBeNull();
+    expect(alDiezYMedio?.leido).toBe('105.00');
+    expect(alDiezYMedio?.acierto).toBe(true);
+    expect(resultado.balanceFiscal.asignacionesIncorrectas).toBe(0);
+    expect(resultado.balanceFiscal.conceptosOmitidos).toBe(1);
+  });
+
   it('un valor cien veces más grande se clasifica como formato numérico', () => {
     /*
      * La clasificación es por **etapa**, no por síntoma. Un importe leído cien

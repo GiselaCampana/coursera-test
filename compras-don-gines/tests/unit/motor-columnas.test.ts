@@ -40,6 +40,7 @@ describe('reconocer una columna por su encabezado', () => {
     ['Unidades', 'piezas'],
     ['Unid.', 'piezas'],
     ['Piezas', 'piezas'],
+    ['Pza.', 'piezas'],
     ['Importe', 'importe'],
     ['Subtotal', 'importe'],
   ] as [string, CampoDeColumna][])('«%s» es %s', (encabezado, esperado) => {

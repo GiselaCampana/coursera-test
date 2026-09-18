@@ -37,6 +37,7 @@ import {
   articulosConSusContinuaciones,
   bandasDe,
   conOtraBanda,
+  inicioProbableDelDetalle,
   reconstruirConContexto,
   type CeldaReconstruida,
   type LecturaDeCelda,
@@ -70,6 +71,14 @@ export interface CandidataDeReconstruccion {
   tabla: TablaReconstruida;
   /** Qué se sabe de la cantidad de renglones, según evidencia independiente. */
   filasEsperadas: number;
+  /**
+   * Evidencia independiente sobre dónde empieza la tabla.
+   *
+   * Cero es la página completa o una tabla encabezada. Uno significa que,
+   * además, la sostiene un bloque repetido de renglones con texto y tres
+   * valores numéricos. Sólo desempata estructuras con el mismo resultado.
+   */
+  apoyoEstructural?: number;
   /** Por qué esta candidata puede ser buena o mala. */
   notas: string[];
 }
@@ -143,7 +152,33 @@ export function candidatasDeTabla(
     .map((convencion) => leerPie(completo, convencion).netTotal)
     .filter((neto): neto is Decimal => neto !== null && neto.gt(0));
 
-  const { tabla, contexto } = reconstruirConContexto(evidencia, { netosPosibles });
+  const base = reconstruirConContexto(evidencia, { netosPosibles });
+  let { tabla, contexto } = base;
+  let tablaDePaginaCompleta: TablaReconstruida | null = null;
+
+  /*
+   * Si no hubo títulos, el encabezado entero y la tabla no deben compartir las
+   * mismas columnas.
+   *
+   * Se busca un bloque repetido de líneas con texto y varios números. Cuando
+   * existe, se reconstruye otra tabla desde ahí. La página completa se conserva
+   * como candidata: el bloque sólo propone el inicio y después manda el mismo
+   * orden lexicográfico que decide todas las demás hipótesis.
+   */
+  if (contexto.encabezados.length === 0) {
+    const inicio = inicioProbableDelDetalle(contexto.cuerpo, contexto.alturaTipica);
+    if (inicio !== null) {
+      const focalizada = reconstruirConContexto(evidencia, {
+        netosPosibles,
+        desdeYDelCuerpo: inicio,
+      });
+      if (focalizada.tabla.renglones.length > 0) {
+        tablaDePaginaCompleta = tabla;
+        tabla = focalizada.tabla;
+        contexto = focalizada.contexto;
+      }
+    }
+  }
   medicion.msReconstruccion = Date.now() - comienzo;
   medicion.hipotesisDeRenglon = tabla.hipotesis.length;
   for (const h of tabla.hipotesis) {
@@ -212,12 +247,13 @@ export function candidatasDeTabla(
       .map((r) => `${r.y.toFixed(4)}|${r.celdas.map((c) => c?.texto ?? '').join('~')}`)
       .join('\n');
 
-  const agregar = (candidata: CandidataDeReconstruccion) => {
+  const agregar = (candidata: CandidataDeReconstruccion, conCortes = true) => {
     if (candidatas.length >= CANDIDATAS_MAXIMAS) return;
     const firma = firmaDe(candidata.tabla);
     if (firmas.has(firma)) return;
     firmas.add(firma);
     candidatas.push(candidata);
+    if (!conCortes) return;
     for (const banda of cortes) {
       if (candidatas.length >= CANDIDATAS_MAXIMAS) return;
       // Un final de tabla no puede llevarse puesto un artículo que se prueba solo.
@@ -240,6 +276,7 @@ export function candidatasDeTabla(
         origen: `${candidata.origen}, cortada en ${banda.origen}`,
         tabla: resemantizada(cortada, netosPosibles),
         filasEsperadas: Math.min(candidata.filasEsperadas, esperadasHasta(banda.hastaY)),
+        apoyoEstructural: candidata.apoyoEstructural,
         notas: [
           ...candidata.notas,
           `La tabla se corta en ${banda.origen}: ` +
@@ -249,10 +286,24 @@ export function candidatasDeTabla(
     }
   };
 
+  if (tablaDePaginaCompleta) {
+    agregar(
+      {
+        origen: 'cercanía',
+        tabla: resemantizada(tablaDePaginaCompleta, netosPosibles),
+        filasEsperadas: tablaDePaginaCompleta.renglones.length,
+        apoyoEstructural: 0,
+        notas: ['Se conservó la lectura de página completa para que compita con el bloque repetido.'],
+      },
+      false,
+    );
+  }
+
   agregar({
-    origen: 'cercanía',
+    origen: tablaDePaginaCompleta ? 'cercanía desde bloque repetido' : 'cercanía',
     tabla: resemantizada(tabla, netosPosibles),
     filasEsperadas: consenso.esperadas,
+    apoyoEstructural: tablaDePaginaCompleta ? 1 : 0,
     notas: ['Cada valor fue al renglón que tenía más cerca.', ...consenso.discrepancias],
   });
 
@@ -285,6 +336,7 @@ export function candidatasDeTabla(
         origen: `esqueleto de ${esqueleto.origen}${combinacion.nombre}`,
         tabla: resemantizada(armada.tabla, netosPosibles),
         filasEsperadas: consenso.esperadas,
+        apoyoEstructural: tablaDePaginaCompleta ? 1 : 0,
         notas: [esqueleto.nota, ...armada.notas, ...consenso.discrepancias],
       });
     }

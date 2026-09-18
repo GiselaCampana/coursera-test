@@ -172,6 +172,13 @@ const NUNCA_SON_IMPORTES: string[][] = [
   ['fecha'],
   ['vencimiento'],
   ['vto'],
+  /* Datos de entrega y contacto: sus cifras son direcciones, CP o teléfonos. */
+  ['lugar', 'de', 'entrega'],
+  ['direccion'],
+  ['domicilio'],
+  ['telefono'],
+  ['codigo', 'postal'],
+  ['cp'],
   /*
    * Y los totales que cuentan cosas en vez de plata. Casi toda factura de
    * fiambrería trae un «Total Kgs.» al pie del detalle.
@@ -286,7 +293,7 @@ export function regionesDelPie(
   const limpios = sinRepetidos(fragmentos);
   const centroY = (f: Fragmento) => (f.caja.y0 + f.caja.y1) / 2;
 
-  const propuestas: { origen: string; desde: number }[] = [
+  const propuestas: { origen: string; desde?: number; fragmentos?: Fragmento[] }[] = [
     { origen: 'la franja debajo del encabezado', desde: opciones.desdeY },
   ];
   if (opciones.finDelDetalle !== undefined) {
@@ -304,10 +311,32 @@ export function regionesDelPie(
   const bloque = bloqueDeTotales(limpios, opciones);
   if (bloque !== null) propuestas.push({ origen: 'el recuadro de totales', desde: bloque });
 
+  /*
+   * Un pie puede estar partido en **islas fiscales**.
+   *
+   * Hay comprobantes que imprimen una percepción justo debajo del último
+   * artículo y el resumen de neto/IVA/total en un recuadro al pie de la hoja.
+   * Entre las dos cosas quedan la dirección de entrega, una marca de agua y
+   * mucho blanco. Una región que toma todo ese intervalo deja que direcciones,
+   * teléfonos y el CAE definan las columnas; una región que toma sólo el bloque
+   * final pierde la percepción impresa.
+   *
+   * Se propone por eso una región **discontinua**, sostenida por la geometría:
+   * filas con vocabulario fiscal y alguna cifra, o filas con dos importes
+   * posibles en casillas distintas. Se agregan sus filas vecinas inmediatas
+   * para conservar los encabezados que van encima de los importes. No se
+   * asigna ningún concepto acá; la región completa compite después contra las
+   * demás y la reconciliación decide qué significa cada número.
+   */
+  const islas = fragmentosDeIslasFiscales(limpios, opciones);
+  if (islas.length > 0) {
+    propuestas.push({ origen: 'las islas fiscales comprobables', fragmentos: islas });
+  }
+
   const vistas = new Set<string>();
   const regiones: RegionDelPie[] = [];
   for (const propuesta of propuestas) {
-    const dentro = limpios.filter((f) => centroY(f) >= propuesta.desde);
+    const dentro = propuesta.fragmentos ?? limpios.filter((f) => centroY(f) >= propuesta.desde!);
     if (dentro.length === 0) continue;
 
     // Dos propuestas que agarran los mismos fragmentos son una sola región.
@@ -321,6 +350,92 @@ export function regionesDelPie(
     regiones.push(armarRegion(propuesta.origen, dentro, opciones));
   }
   return regiones;
+}
+
+/**
+ * Los fragmentos que forman las islas fiscales de un comprobante.
+ *
+ * La condición deliberadamente admite cifras mutiladas —«59.630.2» o
+ * «7218200»—: esta capa propone dónde mirar, no decide cómo se lee el número.
+ * Fechas y los identificadores de AFIP quedan afuera por su forma. Si comparten
+ * una fila con un total verdadero pueden entrar como contexto, pero los vetos
+ * y las igualdades los descartan más adelante.
+ */
+function fragmentosDeIslasFiscales(
+  fragmentos: Fragmento[],
+  opciones: OpcionesDeRegion,
+): Fragmento[] {
+  const desde = opciones.finDelDetalle ?? opciones.desdeY;
+  const filas = enFilas(
+    fragmentos.filter((f) => (f.caja.y0 + f.caja.y1) / 2 >= desde),
+    opciones.alturaTipica,
+  );
+  if (filas.length === 0) return [];
+
+  const palabrasFiscales = new Set([
+    'neto',
+    'gravado',
+    'subtotal',
+    'iva',
+    'total',
+    'percepcion',
+    'percepciones',
+    'iibb',
+    'exento',
+    'imponible',
+    'impuesto',
+  ]);
+  const pareceCifraFiscal = (fragmento: Fragmento) => {
+    const texto = fragmento.texto.trim();
+    if (!/\d/.test(texto) || texto.includes('%') || /\d\s*[/-]\s*\d/.test(texto)) return false;
+    if (/\p{L}/u.test(texto.replace(/\s*(?:kgs?|un|u|lts?|grs?)\.?\s*$/iu, ''))) return false;
+    const digitos = texto.replace(/\D/g, '');
+    if (digitos.length < 3) return false;
+    if (!/[.,:]/.test(texto) && (digitos.length === 11 || digitos.length === 14)) return false;
+    return /[.,:]/.test(texto) || digitos.length >= 4;
+  };
+
+  const datos = filas.map((fila) => {
+    const fisicos = sinSolapados(fila);
+    const numeros = fisicos.filter(pareceCifraFiscal);
+    const palabras = fisicos.flatMap((f) => enPalabras(f.texto));
+    const textoDeLaFila = fisicos.map((f) => f.texto).join(' ');
+    const nombraAlgoFiscal =
+      palabras.some((p) => palabrasFiscales.has(p)) && !nombraOtraCosa(textoDeLaFila);
+    return {
+      fila: fisicos,
+      y: mediana(fisicos.map((f) => (f.caja.y0 + f.caja.y1) / 2)),
+      /*
+       * Dos cifras solas también son una dirección y su teléfono. Tres casillas
+       * monetarias en una misma línea ya describen un resumen horizontal; con
+       * una sola alcanza únicamente cuando la propia fila trae vocabulario
+       * fiscal.
+       */
+      ancla: numeros.length >= 3 || (numeros.length >= 1 && nombraAlgoFiscal),
+      nombraAlgoFiscal,
+    };
+  });
+
+  const indices = new Set<number>();
+  datos.forEach((dato, i) => {
+    if (!dato.ancla) return;
+    indices.add(i);
+    /*
+     * Un encabezado de casillas suele quedar una línea arriba del valor. Sólo
+     * entra una vecina que también trae vocabulario fiscal o cifras posibles;
+     * el resto de la hoja no vuelve a colarse por expansión.
+     */
+    for (const vecino of [i - 1, i + 1]) {
+      const otro = datos[vecino];
+      if (!otro) continue;
+      if (Math.abs(otro.y - dato.y) > Math.max(opciones.alturaTipica * 3, 0.02)) continue;
+      if (otro.nombraAlgoFiscal) indices.add(vecino);
+    }
+  });
+
+  return [...indices]
+    .sort((a, b) => a - b)
+    .flatMap((i) => datos[i].fila);
 }
 
 /**
@@ -699,9 +814,9 @@ function esIdentificadorDeAfip(limpio: string): boolean {
  * una banda, es un número suelto.
  */
 function bandaDeImportes(casillas: CasillaDelPie[]): { x0: number; x1: number } | null {
-  const importes = casillas
-    .filter((c) => c.esNumero && pareceImporte(c.fragmento.texto))
-    .map((c) => c.fragmento.caja);
+  const importes = casillas.filter(
+    (c) => c.esNumero && pareceImporte(c.fragmento.texto),
+  );
   if (importes.length < 2) return null;
 
   /*
@@ -709,22 +824,43 @@ function bandaDeImportes(casillas: CasillaDelPie[]): { x0: number; x1: number } 
    * los montos: un importe de seis cifras y uno de tres empiezan en lugares
    * distintos y terminan en el mismo.
    */
-  const anchoTipico = mediana(importes.map((c) => c.x1 - c.x0));
-  const ordenados = [...importes].sort((a, b) => a.x1 - b.x1);
+  const anchoTipico = mediana(
+    importes.map((c) => c.fragmento.caja.x1 - c.fragmento.caja.x0),
+  );
+  const ordenados = [...importes].sort(
+    (a, b) => a.fragmento.caja.x1 - b.fragmento.caja.x1,
+  );
 
   const grupos: (typeof importes)[] = [];
-  for (const caja of ordenados) {
+  for (const casilla of ordenados) {
     const abierto = grupos[grupos.length - 1];
     const ultimo = abierto?.[abierto.length - 1];
-    if (abierto && ultimo && caja.x1 - ultimo.x1 <= anchoTipico) abierto.push(caja);
-    else grupos.push([caja]);
+    if (
+      abierto &&
+      ultimo &&
+      casilla.fragmento.caja.x1 - ultimo.fragmento.caja.x1 <= anchoTipico
+    ) {
+      abierto.push(casilla);
+    } else grupos.push([casilla]);
   }
 
-  const mayor = grupos.reduce((a, b) => (b.length > a.length ? b : a));
-  if (mayor.length < 2) return null;
+  /*
+   * Una banda es vertical: dos importes de la **misma fila** son dos casillas
+   * de un recuadro horizontal, no una columna. Contarlos como apoyo hacía que
+   * el neto y la alícuota de un resumen de seis casillas se convirtieran en la
+   * supuesta columna monetaria.
+   */
+  const filasDistintas = (grupo: typeof importes) => new Set(grupo.map((c) => c.fila)).size;
+  const mayor = grupos.reduce((a, b) =>
+    filasDistintas(b) > filasDistintas(a) ||
+    (filasDistintas(b) === filasDistintas(a) && b.length > a.length)
+      ? b
+      : a,
+  );
+  if (filasDistintas(mayor) < 2) return null;
   return {
-    x0: Math.min(...mayor.map((c) => c.x0)),
-    x1: Math.max(...mayor.map((c) => c.x1)),
+    x0: Math.min(...mayor.map((c) => c.fragmento.caja.x0)),
+    x1: Math.max(...mayor.map((c) => c.fragmento.caja.x1)),
   };
 }
 
@@ -805,6 +941,16 @@ export function noPuedenSerImportes(region: RegionDelPie): Set<Fragmento> {
     if (region.esImporte(casilla.fragmento)) continue;
 
     const hermanos = porFila.get(casilla.fila) ?? [];
+    const anterior = hermanos
+      .filter((c) => c.esNumero && c.fragmento.caja.x1 <= casilla.fragmento.caja.x0)
+      .reduce((x, c) => Math.max(x, c.fragmento.caja.x1), -Infinity);
+    const tieneRotuloPropio = hermanos.some(
+      (c) =>
+        !c.esNumero &&
+        /\p{L}/u.test(c.fragmento.texto) &&
+        c.fragmento.caja.x1 <= casilla.fragmento.caja.x0 + 0.002 &&
+        c.fragmento.caja.x0 >= anterior,
+    );
     const importeDeLaFila = hermanos.find(
       (c) => c.esNumero && region.esImporte(c.fragmento) && c.fragmento.caja.x0 >= casilla.fragmento.caja.x1,
     );
@@ -852,7 +998,18 @@ export function noPuedenSerImportes(region: RegionDelPie): Set<Fragmento> {
      * importe chico sea sospechoso. Lo que se pide es que esté escrito como los
      * demás importes del mismo recuadro.
      */
-    if (!pareceImporte(casilla.fragmento.texto)) fuera.add(casilla.fragmento);
+    /*
+     * Un número mutilado con rótulo propio sigue siendo candidato.
+     *
+     * «Neto: 59.630.2» no está bien escrito, pero el papel sí dice qué casilla
+     * es y la lectura numérica puede repararse contra el IVA. La banda sirve
+     * para interpretar una cifra dañada, no para borrar una casilla que su
+     * propio rótulo identifica. Sin rótulo, en cambio, el formato sigue siendo
+     * la única defensa contra restos de grilla y números de página.
+     */
+    if (!pareceImporte(casilla.fragmento.texto) && !tieneRotuloPropio) {
+      fuera.add(casilla.fragmento);
+    }
   }
   return fuera;
 }

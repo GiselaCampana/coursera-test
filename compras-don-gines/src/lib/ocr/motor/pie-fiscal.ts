@@ -236,6 +236,22 @@ export function decimalesEscritos(texto: string): number {
   return forma.si ? forma.decimales : -1;
 }
 
+/**
+ * ¿El OCR dejó escrito sólo el primero de los dos centavos?
+ *
+ * No alcanza con mirar el valor ya convertido: `59.630.2` termina como
+ * `59630.2` y `Decimal` no puede decir si el papel imprimía un decimal o si al
+ * OCR le faltó el último dígito. La diferencia está en el texto. Una forma que
+ * ya es válida no se toca; una forma inválida cuyo último separador conserva
+ * un solo dígito es una lectura incompleta, no un importe de dos decimales.
+ */
+function tieneCentavosIncompletos(texto: string): boolean {
+  const limpio = repararDigitos(texto).replace(/[^\d.,]/g, '').trim();
+  if (limpio === '' || bienEscrito(limpio).si) return false;
+  const ultimoSeparador = Math.max(limpio.lastIndexOf('.'), limpio.lastIndexOf(','));
+  return ultimoSeparador >= 0 && /^\d$/.test(limpio.slice(ultimoSeparador + 1));
+}
+
 /** ¿Es este número el identificador que anuncia la última palabra de su etiqueta? */
 export function esIdentificador(etiqueta: string): boolean {
   const palabras = enPalabras(etiqueta);
@@ -872,10 +888,9 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
    * después ninguna lectura —ni la de líneas, ni las de la grilla— puede
    * proponerlos como importes.
    */
-  const descartados = new Set<Fragmento>(lecturasPisadas(delPie, opciones.alturaTipica));
-  for (const region of regiones) {
-    for (const fragmento of noPuedenSerImportes(region)) descartados.add(fragmento);
-  }
+  const descartadosGlobales = new Set<Fragmento>(
+    lecturasPisadas(delPie, opciones.alturaTipica),
+  );
 
   /*
    * Y los centavos que el OCR dejó en una caja aparte vuelven a su número.
@@ -888,7 +903,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
    * medio es el mismo número contado dos veces.
    */
   const { pegados: centavos, piezas } = centavosPartidos(delPie, opciones.alturaTipica);
-  for (const pieza of piezas) descartados.add(pieza);
+  for (const pieza of piezas) descartadosGlobales.add(pieza);
 
   /*
    * Y la escala de los importes también vale para todas las lecturas.
@@ -899,8 +914,6 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
    * catorce cifras seguidas no es un importe en un recuadro donde todos los
    * importes llevan su separador.
    */
-  const escalaDeImportes = formatoDeColumna(regiones.flatMap((r) => textosDeLaBanda(r)));
-
   /*
    * Qué números tienen, **en la grilla**, una etiqueta que los explica como otra
    * cosa.
@@ -922,29 +935,63 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
     origen: string;
     candidatas: Candidata[];
     asignacion: AsignacionDeRegion | null;
+    escala: FormatoDeColumna | null;
   }[] = [
     {
       origen: 'líneas',
-      candidatas: candidatasPorLineas(delPie, opciones, descartados, escalaDeImportes, centavos),
+      /*
+       * La lectura por líneas no tiene una banda propia. Prestarle la escala de
+       * otra región hacía que una hipótesis geométrica mala corrigiera números
+       * antes de competir. Sin formato se conservan todas las lecturas y las
+       * relaciones fiscales deciden, que es justamente para lo que compite.
+       */
+      candidatas: candidatasPorLineas(
+        delPie,
+        opciones,
+        descartadosGlobales,
+        null,
+        centavos,
+      ),
       asignacion: null,
+      escala: null,
     },
   ];
 
   for (const region of regiones) {
+    /*
+     * La banda y sus descartes pertenecen a **esta** región.
+     *
+     * Antes se unían los descartes de todas las regiones en un único conjunto.
+     * Bastaba entonces que una candidata contaminada por direcciones o por la
+     * tabla ubicara mal la banda para borrar el neto de la candidata correcta.
+     * Regiones que compiten no pueden censurarse entre sí: cada una interpreta
+     * su propia geometría y recién después se comparan los pies completos.
+     */
+    const descartadosDeLaRegion = new Set(descartadosGlobales);
+    for (const fragmento of noPuedenSerImportes(region)) {
+      descartadosDeLaRegion.add(fragmento);
+    }
+    const escalaDeLaRegion = formatoDeColumna(textosDeLaBanda(region));
     const { candidatas, asignacion } = candidatasPorCasillas(
       region,
       opciones,
-      descartados,
-      escalaDeImportes,
+      descartadosDeLaRegion,
+      escalaDeLaRegion,
       centavos,
     );
-    juegos.push({ origen: region.origen, candidatas, asignacion });
+    juegos.push({
+      origen: region.origen,
+      candidatas,
+      asignacion,
+      escala: escalaDeLaRegion,
+    });
   }
 
   let mejor: PieFiscal | null = null;
   let origenElegido = 'ninguna';
   let segundoOrigen: string | null = null;
   let mejorEsGlobal = false;
+  let escalaElegida: FormatoDeColumna | null = null;
   for (const juego of juegos) {
     if (juego.candidatas.length === 0) continue;
     const pie = reconciliarConCandidatas(juego.candidatas, opciones);
@@ -1009,9 +1056,22 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       const valor = candidata.lecturas[0]?.valor ?? null;
       if (valor !== null && valoresAsignados.has(valor.toString())) continue;
       // Sólo lo que tiene forma de plata: un resto de la grilla no es una
-      // pregunta que alguien pueda contestar.
-      if (!pareceImporte(candidata.fragmento.texto)) continue;
-      if (!enElPie(candidata.fragmento)) continue;
+      // pregunta que alguien pueda contestar. La excepción es una cifra
+      // reconociblemente mutilada **con su propio rótulo fiscal**: no se puede
+      // afirmar, pero sí es exactamente la pregunta que una persona puede
+      // resolver mirando el último centavo del comprobante.
+      if (
+        !pareceImporte(candidata.fragmento.texto) &&
+        !(candidata.porEtiqueta !== null && tieneCentavosIncompletos(candidata.fragmento.texto))
+      ) {
+        continue;
+      }
+      if (
+        !enElPie(candidata.fragmento) &&
+        !(candidata.porEtiqueta !== null && tieneCentavosIncompletos(candidata.fragmento.texto))
+      ) {
+        continue;
+      }
       /*
        * Lo que el papel **ya explica** no se pregunta. Un saldo de cuenta
        * corriente no está sin asignar: está asignado a otra cosa, y el papel lo
@@ -1067,6 +1127,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       mejor = pie;
       origenElegido = juego.origen;
       mejorEsGlobal = juego.asignacion !== null;
+      escalaElegida = juego.escala;
       segundoOrigen = mejor === pie ? segundoOrigen : segundoOrigen;
     }
   }
@@ -1156,7 +1217,7 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
   for (const inferida of inferidas) {
     const unica = inferida.segunda === null || inferida.margen > 0;
     const independientes = conEtiquetaPropia >= 1;
-    const respaldada = escalaDeImportes === null || inferida.lecturaLiteral !== null;
+    const respaldada = escalaElegida === null || inferida.lecturaLiteral !== null;
     if (unica && independientes && respaldada) continue;
 
     desasignar(mejor, inferida, origenElegido);
@@ -2174,6 +2235,39 @@ function alternativasDe(lecturas: LecturaNumerica[], elegida: Decimal) {
     .map((l) => ({ valor: l.valor, reparaciones: l.reparaciones, comoSeLeyo: l.comoSeLeyo }));
 }
 
+/** ¿Dos pasadas están leyendo la misma casilla física del comprobante? */
+function mismoLugarFiscal(a: Caja, b: Caja): boolean {
+  const anchoMenor = Math.min(a.x1 - a.x0, b.x1 - b.x0);
+  const altoMenor = Math.min(a.y1 - a.y0, b.y1 - b.y0);
+  if (anchoMenor <= 0 || altoMenor <= 0) return false;
+  const solapeX = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+  const solapeY = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+  return solapeX > anchoMenor * 0.5 && solapeY > altoMenor * 0.5;
+}
+
+/**
+ * Conceptos que alguna pasada consiguió leer junto a esta misma casilla.
+ *
+ * Las pasadas no compiten como documentos distintos: son observaciones del
+ * mismo papel. Si una perdió el rótulo y otra leyó «TOTAL», la versión sin
+ * rótulo no queda habilitada para llamar neto a ese número sólo porque cierre
+ * una cuenta. La etiqueta legible gobierna todas las lecturas del lugar.
+ */
+function conceptosImpresosEnElLugar(
+  candidata: Candidata,
+  candidatas: Candidata[],
+): Set<ConceptoFiscal> {
+  return new Set(
+    candidatas
+      .filter(
+        (otra) =>
+          otra.porEtiqueta !== null &&
+          mismoLugarFiscal(candidata.fragmento.caja, otra.fragmento.caja),
+      )
+      .map((otra) => otra.porEtiqueta!.concepto),
+  );
+}
+
 /**
  * Elige el neto gravado.
  *
@@ -2208,6 +2302,23 @@ function elegirNeto(
 
   for (const candidata of candidatas) {
     if (usadas.has(candidata.fragmento)) continue;
+    /*
+     * Una igualdad no cambia el significado de una etiqueta impresa.
+     *
+     * Si el fragmento está rotulado como TOTAL, IVA o percepción, no puede
+     * convertirse en neto sólo porque por casualidad coincide con la suma del
+     * detalle. Esto ocurre en comprobantes cuyo detalle OCR incluye el impuesto:
+     * el total cierra la cuenta, pero sigue siendo el total. Las relaciones
+     * confirman una lectura compatible; nunca pisan un concepto explícito.
+     */
+    const conceptosDelLugar = conceptosImpresosEnElLugar(candidata, candidatas);
+    if (
+      (candidata.porEtiqueta !== null &&
+        candidata.porEtiqueta.concepto !== 'netoGravado') ||
+      (conceptosDelLugar.size > 0 && !conceptosDelLugar.has('netoGravado'))
+    ) {
+      continue;
+    }
     const etiquetaCompatible =
       candidata.porEtiqueta?.concepto === 'netoGravado' || candidata.porEtiqueta === null;
     for (const lectura of candidata.lecturas) {
@@ -2225,34 +2336,68 @@ function elegirNeto(
   if (posibles.length === 0) return null;
 
   /*
-   * El orden de preferencias, aplicado: literal, etiqueta compatible, relación
-   * exacta, menos reparaciones. Y el margen sale de comparar la primera con la
-   * segunda: si las dos cierran y son valores distintos, no hay una respuesta.
+   * Primero un rótulo de neto **entero**; después las relaciones
+   * independientes y recién después cómo salió escrito.
+   *
+   * La literalidad distingue dos lecturas del mismo número cuando ninguna otra
+   * evidencia las separa. No puede ganarle a una igualdad: un fragmento
+   * literal de «59.630,25» puede ser sólo «3025», mientras que la lectura
+   * reparada conserva todos los dígitos y es la única que tiene en la página su
+   * IVA del 21 %. Preferir el pedazo literal en ese caso convierte “no supuso
+   * un separador” en una evidencia más fuerte que otra cuenta del documento.
+   *
+   * Un rótulo exacto va antes del cierre contra el detalle porque no todos los
+   * comprobantes imprimen importes netos en sus renglones: algunos detallan
+   * precios finales y, en ellos, la suma del detalle coincide con TOTAL. El
+   * papel que dice «Neto» resuelve esa diferencia semántica sin adivinarla.
+   *
+   * Sigue sin elegirse por el cierre global: la relación del IVA se comprueba
+   * contra otra casilla impresa. Entre candidatos sin rótulo exacto, el cierre
+   * del detalle y esa igualdad siguen siendo más fuertes que la literalidad.
    */
   posibles.sort(
     (a, b) =>
-      Number(b.lectura.literal) - Number(a.lectura.literal) ||
+      Number(
+        b.candidata.porEtiqueta?.concepto === 'netoGravado' &&
+          b.candidata.porEtiqueta.exacta,
+      ) -
+        Number(
+          a.candidata.porEtiqueta?.concepto === 'netoGravado' &&
+            a.candidata.porEtiqueta.exacta,
+        ) ||
+      Number(b.cierra) - Number(a.cierra) ||
+      Number(b.conIva) - Number(a.conIva) ||
       Number(b.candidata.porEtiqueta?.concepto === 'netoGravado') -
         Number(a.candidata.porEtiqueta?.concepto === 'netoGravado') ||
       Number(b.candidata.porEtiqueta?.exacta === true) -
         Number(a.candidata.porEtiqueta?.exacta === true) ||
-      Number(b.cierra) - Number(a.cierra) ||
-      /*
-       * Y cuando ninguna cierra contra el detalle —porque el detalle todavía
-       * tiene celdas ilegibles—, decide **otra relación del grafo**: que en la
-       * página exista un número que sea el IVA de esta candidata. Es lo que
-       * distingue el neto verdadero de cualquier otro número con una etiqueta
-       * parecida: un 74 suelto no tiene su 15,54 al lado, y un neto de tres
-       * millones y medio tiene sus ochocientos mil.
-       *
-       * No es elegir por magnitud: es pedirle a la candidata que participe de
-       * una igualdad, que es lo único que el pie sabe comprobar.
-       */
-      Number(b.conIva) - Number(a.conIva) ||
+      Number(b.lectura.literal) - Number(a.lectura.literal) ||
       a.lectura.reparaciones - b.lectura.reparaciones,
   );
 
   const gana = posibles[0];
+
+  /*
+   * Un rótulo exacto prueba que la casilla es el neto; no prueba el dígito que
+   * el OCR no leyó.
+   *
+   * `59.630.2`, por ejemplo, conserva sólo un centavo. Interpretarlo como
+   * `59.630,20` inventa el último cero. La holgura acumulada del IVA puede
+   * hacer que esa invención parezca compatible con el 21 %, pero sigue sin ser
+   * un dato del papel. Sólo se afirma si una relación externa más fuerte —la
+   * suma del detalle— fija ese valor; en caso contrario la casilla queda como
+   * importe leído sin asignar y se pide revisión.
+   */
+  if (
+    gana.candidata.porEtiqueta?.concepto === 'netoGravado' &&
+    gana.candidata.porEtiqueta.exacta &&
+    !gana.lectura.literal &&
+    !gana.cierra &&
+    tieneCentavosIncompletos(gana.candidata.fragmento.texto)
+  ) {
+    return null;
+  }
+
   const otra = posibles.find((p) => !p.lectura.valor.eq(gana.lectura.valor)) ?? null;
   const margen = margenEntre(gana, otra);
 
@@ -2501,6 +2646,30 @@ function elegirTotal(
   );
 
   const gana = posibles[0];
+
+  /*
+   * Un rótulo exacto prueba el **concepto**, no la escala del número.
+   *
+   * Si no hay un total esperable a partir de los demás conceptos, o ninguna
+   * lectura cierra contra él, y la misma casilla conserva dos escalas que la
+   * columna no pudo descartar, afirmar la literal es volver a la regla
+   * prohibida de elegir una cifra sólo porque vino escrita sin separador. El
+   * importe queda leído pero sin asignar y el total calculado se ofrece aparte
+   * como sugerencia. Una casilla con una sola lectura posible, o con sus
+   * separadores efectivamente visibles —aunque el último haya quedado
+   * colgando— sí conserva su valor impreso aunque falte una percepción y por
+   * eso el sistema no cierre.
+   */
+  if (esperado === null || !posibles.some((posible) => posible.cierra)) {
+    const lecturasVigentes = new Set(
+      gana.candidata.lecturas
+        .filter((lectura) => !lectura.ajenaALaEscala)
+        .map((lectura) => lectura.valor.toString()),
+    );
+    const tieneSeparadorImpreso = /[.,]/.test(gana.candidata.fragmento.texto);
+    if (lecturasVigentes.size > 1 && !tieneSeparadorImpreso) return null;
+  }
+
   const otra = posibles.find((p) => !p.lectura.valor.eq(gana.lectura.valor)) ?? null;
   const margen = margenEntre(gana, otra);
 

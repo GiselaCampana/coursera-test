@@ -158,7 +158,7 @@ const ALIAS: Alias[] = [
 
   // --- Cantidades, que son las que más se confunden entre sí -------------
   { campo: 'kilos', patron: /^(kilos?|kgs?|peso)\b/, especificidad: 1 },
-  { campo: 'piezas', patron: /^(piezas?|unidad(?:es)?|unid|uds?|bultos?|cajas?)\b/, especificidad: 1 },
+  { campo: 'piezas', patron: /^(piezas?|pzas?|unidad(?:es)?|unid|uds?|bultos?|cajas?)\b/, especificidad: 1 },
   { campo: 'cantidad', patron: /^(cantidad|cant|ctd)\b/, especificidad: 0.8 },
 
   // --- Identificación y texto --------------------------------------------
@@ -285,7 +285,7 @@ export const PALABRAS_DE_CAMPO: ReadonlyMap<CampoDeColumna, readonly string[]> =
   ['marca', ['marca']],
   ['cantidad', ['cantidad', 'cant', 'ctd']],
   ['kilos', ['kilos', 'kilo', 'kgs', 'peso']],
-  ['piezas', ['piezas', 'unidad', 'unidades', 'unid', 'bultos', 'cajas']],
+  ['piezas', ['piezas', 'pieza', 'pzas', 'pza', 'unidad', 'unidades', 'unid', 'bultos', 'cajas']],
   ['precioUnitario', ['precio', 'preciounitario', 'prunit', 'punit', 'preciolista']],
   ['precioConDescuento', ['preciocondescuento', 'pudesc', 'precioneto', 'prunitdesc']],
   ['descuentoPct', ['descuento', 'bonificacion', 'bonif', 'dto', 'dcto']],
