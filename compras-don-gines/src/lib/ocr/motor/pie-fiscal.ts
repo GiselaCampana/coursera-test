@@ -641,13 +641,13 @@ export function conceptoSegunEtiqueta(
   }
 
   let mejor: { concepto: ConceptoFiscal; parecido: number; exacta: boolean } | null = null;
-  const nombrados = new Set<ConceptoFiscal>();
+  const exactas: { concepto: ConceptoFiscal; canonica: string }[] = [];
   for (const [concepto, canonicas] of ETIQUETAS) {
     for (const canonica of canonicas) {
       const cuanto = cuantoSeParece(palabras, canonica);
       if (cuanto.parecido < PARECIDO_DE_ETIQUETA) continue;
       if (!cuanto.exacta && SOLO_FRASE_EXACTA.has(concepto)) continue;
-      if (cuanto.exacta) nombrados.add(concepto);
+      if (cuanto.exacta) exactas.push({ concepto, canonica });
       if (!mejor || cuanto.parecido > mejor.parecido) {
         mejor = { concepto, parecido: cuanto.parecido, exacta: cuanto.exacta };
       }
@@ -666,9 +666,43 @@ export function conceptoSegunEtiqueta(
    * Sigue valiendo como parecido —la etiqueta dice algo— pero deja de ser la
    * evidencia que cierra la discusión, así que el empate vuelve a decidir.
    */
+  /*
+   * Y una frase que **contiene** a otra no nombra dos cosas: nombra la larga.
+   *
+   * «No Gravado» trae adentro la palabra «gravado», que es una de las maneras
+   * de decir el neto, y «Percepción IVA» trae «IVA». No son dos conceptos
+   * compitiendo: es uno solo, y el otro es un pedazo suyo. Contarlos como dos
+   * dejaba sin rótulo exacto justamente a las frases más específicas del pie
+   * —que son las que mejor lo nombran— y con eso un «No Gravado: 0,00» perdía
+   * la única evidencia que un cero puede tener.
+   */
+  const propias = exactas.filter(
+    (una) =>
+      !exactas.some(
+        (otra) => otra !== una && contieneLaFrase(otra.canonica, una.canonica),
+      ),
+  );
+  const nombrados = new Set(propias.map((e) => e.concepto));
   if (mejor && nombrados.size > 1) mejor = { ...mejor, exacta: false };
 
   return mejor;
+}
+
+/**
+ * ¿Está `chica` adentro de `grande`, como palabras enteras y seguidas?
+ *
+ * Por palabras y no por letras: «neto» está adentro de «neto gravado» y «total»
+ * no está adentro de «subtotal», que es una palabra distinta y no una frase que
+ * contenga a la otra.
+ */
+function contieneLaFrase(grande: string, chica: string): boolean {
+  if (grande === chica) return false;
+  const suyas = grande.split(' ');
+  const partes = chica.split(' ');
+  for (let i = 0; i + partes.length <= suyas.length; i += 1) {
+    if (suyas.slice(i, i + partes.length).join(' ') === chica) return true;
+  }
+  return false;
 }
 
 /**
@@ -741,6 +775,30 @@ function cuantoSeParece(
   }
 
   /*
+   * Y la frase **sin el espacio**, que es una sola caja del OCR.
+   *
+   * El reconocedor pierde el blanco entre dos palabras igual que pierde una
+   * coma: el papel imprime «No Gravado:» y la caja llega como «NoGravado». No
+   * es una lectura degradada —no falta ninguna letra— así que el parecido por
+   * letras comidas no la encuentra, y el concepto quedaba sin nombrar teniendo
+   * la frase entera impresa.
+   *
+   * Se pide **coincidencia exacta** de las letras pegadas, nunca parecido: eso
+   * mantiene la regla tan estricta como la frase separada, que es la que dice
+   * qué se reconoce y qué no.
+   */
+  const pegada = canonica.replace(/ /g, '');
+  if (partes.length > 1) {
+    for (let largo = 1; largo <= partes.length; largo += 1) {
+      for (let i = 0; i + largo <= palabras.length; i += 1) {
+        if (palabras.slice(i, i + largo).join('') === pegada) {
+          return { parecido: 1, exacta: true };
+        }
+      }
+    }
+  }
+
+  /*
    * Y el prefijo, sólo para una canónica de una palabra: una etiqueta abreviada
    * es un prefijo, no un parecido. Cuenta como exacta cuando son al menos
    * cuatro letras, que es lo que distingue «perc» de «pe».
@@ -806,6 +864,14 @@ interface Candidata {
   lecturas: LecturaNumerica[];
   porEtiqueta: { concepto: ConceptoFiscal; parecido: number; exacta: boolean } | null;
   alicuota: Decimal | null;
+  /**
+   * La alícuota impresa en su propia columna, sin el signo de porcentaje.
+   *
+   * Va aparte de `alicuota` a propósito: ésta no prueba nada y no restringe
+   * ninguna igualdad. La usa **sólo** un importe en cero, que es el único que no
+   * tiene una relación aritmética con que averiguar de qué alícuota es.
+   */
+  alicuotaAlLado: Decimal | null;
 }
 
 export interface OpcionesDelPie {
@@ -1224,6 +1290,23 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
   }
 
   /*
+   * Y los conceptos que el papel imprime **en cero** se conservan, gane la
+   * región que gane.
+   *
+   * Son un hecho del comprobante y no una opinión de ningún lector, igual que
+   * la geometría que descarta un número: «I.V.A. 21 %: 0,00» dice que a esa
+   * alícuota no hay nada gravado, y «No Gravado: 0,00» dice que no hay nada sin
+   * gravar. Que la región ganadora no los alcance no los borra del papel.
+   *
+   * Se pueden agregar después de la competencia justamente porque **suman
+   * cero**: no cambian ninguna cuenta, no pueden mejorar ni empeorar el cierre
+   * de ninguna región, y por eso no tenían con qué ganar la competencia
+   * teniendo el rótulo impreso al lado. Lo único que aportan es lo que el papel
+   * dice, que es lo que se estaba perdiendo.
+   */
+  conservarLosCerosImpresos(mejor, juegos[0]?.candidatas ?? []);
+
+  /*
    * Y con qué compitió, para poder auditar la decisión: dos regiones del mismo
    * comprobante dan dos pies distintos y quien revise tiene que poder ver cuál
    * ganó, contra cuál, y buscarlas en la foto.
@@ -1235,6 +1318,70 @@ export function reconciliarPie(fragmentos: Fragmento[], opciones: OpcionesDelPie
       .find(() => true) ?? null;
 
   return { ...mejor, region: origenElegido, segundaRegion: segundoOrigen };
+}
+
+/**
+ * Conserva los conceptos que el comprobante imprime en cero.
+ *
+ * Tres condiciones, y las tres son del papel:
+ *
+ *  1. el número está escrito como un cero —un cero, su coma y sus decimales— y
+ *     no es el resto de algo que no se pudo leer;
+ *  2. su etiqueta nombra **exactamente** un concepto, pegada a su casilla;
+ *  3. el pie no tiene ya ese concepto. Un cero nunca pisa lo que otra
+ *     evidencia asignó: si la región ganadora leyó un IVA del 21 % de noventa
+ *     mil, el «0,00» que quedó suelto en otra parte no lo contradice, y el que
+ *     manda es el que tiene con qué comprobarse.
+ *
+ * El total y el neto gravado quedan afuera a propósito, y no por su nombre:
+ * son los dos números con los que el resto de la aplicación paga, controla y
+ * costea, y ahí un cero es indistinguible de no haber podido leer. Los demás
+ * conceptos son componentes que suman al total, y un componente en cero es una
+ * afirmación verificable del papel.
+ */
+function conservarLosCerosImpresos(pie: PieFiscal, candidatas: Candidata[]): void {
+  const puestos = new Set<string>();
+
+  for (const candidata of candidatas) {
+    if (!valeCero(candidata) || !elCeroTieneRotulo(candidata)) continue;
+
+    const concepto = candidata.porEtiqueta!.concepto;
+    if (concepto === 'total' || concepto === 'netoGravado') continue;
+
+    // La de su rótulo, o la que el papel imprime en la columna de al lado.
+    const alicuota = candidata.alicuota ?? candidata.alicuotaAlLado;
+    const clave = `${concepto}|${alicuota?.toString() ?? ''}`;
+    if (puestos.has(clave)) continue;
+
+    // Lo que ya está asignado no se toca: un cero no le gana a una lectura.
+    if (concepto === 'iva') {
+      const suya = (a: Decimal | null) => a?.toString() ?? '';
+      if (pie.iva.some((i) => suya(i.alicuota) === suya(alicuota))) continue;
+    }
+    if (concepto === 'noGravado' && pie.noGravado !== null) continue;
+    if (concepto === 'baseImponible' && pie.basesImponibles.length > 0) continue;
+    if (
+      concepto === 'percepcion' &&
+      pie.percepciones.some((p) => p.etiqueta === candidata.etiqueta)
+    ) {
+      continue;
+    }
+
+    const asignacion = asignarSimple(candidata, concepto);
+    if (!asignacion) continue;
+    asignacion.alicuota = alicuota;
+
+    puestos.add(clave);
+    pie.asignaciones.push(asignacion);
+    if (concepto === 'iva') pie.iva.push({ alicuota, valor: asignacion.valor });
+    if (concepto === 'noGravado') pie.noGravado = asignacion.valor;
+    if (concepto === 'baseImponible') {
+      pie.basesImponibles.push({ alicuota, valor: asignacion.valor });
+    }
+    if (concepto === 'percepcion') {
+      pie.percepciones.push({ etiqueta: candidata.etiqueta, valor: asignacion.valor });
+    }
+  }
 }
 
 /**
@@ -1474,14 +1621,18 @@ function candidatasPorLineas(
        */
       if (vetada(etiqueta)) continue;
 
-      candidatas.push({
+      const candidata: Candidata = {
         linea,
         fragmento,
         etiqueta,
         lecturas,
         porEtiqueta,
         alicuota: alicuotaDeLaEtiqueta(etiqueta),
-      });
+        alicuotaAlLado: soloCeros(lecturas) ? alicuotaDeAlLado(linea, fragmento) : null,
+      };
+      // Un cero sin rótulo propio no es un importe: es un cero suelto.
+      if (valeCero(candidata) && !elCeroTieneRotulo(candidata)) continue;
+      candidatas.push(candidata);
     }
   }
   return candidatas;
@@ -1548,14 +1699,24 @@ function candidatasPorCasillas(
   for (const par of asignacion.pares) {
     const fragmento = par.numero.fragmento;
     const etiqueta = etiquetaEfectiva(par.etiqueta.texto);
-    candidatas.push({
-      linea: lineaDe(fragmento),
+    const suLinea = lineaDe(fragmento);
+    const suyas = lecturasDelFragmento(fragmento, escalaDeImportes, centavos);
+    const candidata: Candidata = {
+      linea: suLinea,
       fragmento,
       etiqueta,
-      lecturas: lecturasDelFragmento(fragmento, escalaDeImportes, centavos),
+      lecturas: suyas,
       porEtiqueta: conceptoSegunEtiqueta(etiqueta),
       alicuota: alicuotaDeLaEtiqueta(par.etiqueta.texto),
-    });
+      alicuotaAlLado: soloCeros(suyas) ? alicuotaDeAlLado(suLinea, fragmento) : null,
+    };
+    /*
+     * Un cero necesita las **dos** cosas: la casilla que la grilla le asignó y
+     * un rótulo que diga exactamente un concepto. La casilla la tiene por estar
+     * acá; el rótulo se pregunta aparte.
+     */
+    if (valeCero(candidata) && !elCeroTieneRotulo(candidata)) continue;
+    candidatas.push(candidata);
   }
 
   /*
@@ -1563,16 +1724,24 @@ function candidatasPorCasillas(
    * que después puede identificar una igualdad fiscal, y los que si no se
    * identifican quedan explícitamente sin asignar. Perderlos acá sería perder
    * justamente los que el papel imprimió sin rótulo legible.
+   *
+   * Menos un cero. Un cero sin etiqueta no es un importe que no supimos nombrar
+   * —no cierra ninguna cuenta, así que ninguna relación podría nombrarlo
+   * después— y preguntarlo sería pedirle a una persona que le ponga nombre a
+   * algo que el papel no nombró.
    */
   for (const casilla of asignacion.sinAsignar) {
-    candidatas.push({
+    const candidata: Candidata = {
       linea: lineaDe(casilla.fragmento),
       fragmento: casilla.fragmento,
       etiqueta: '',
       lecturas: lecturasDelFragmento(casilla.fragmento, escalaDeImportes, centavos),
       porEtiqueta: null,
       alicuota: null,
-    });
+      alicuotaAlLado: null,
+    };
+    if (valeCero(candidata)) continue;
+    candidatas.push(candidata);
   }
 
   return { candidatas, asignacion };
@@ -1594,6 +1763,7 @@ function lecturasDelFragmento(
 ): LecturaNumerica[] {
   const propias = lecturasDeCelda(fragmento.texto, escala);
   const pieza = centavos.get(fragmento);
+  if (propias.length === 0 && pieza === undefined) return ceroImpreso(fragmento.texto);
   if (!pieza) return propias;
 
   const juntas = lecturasDeCelda(`${fragmento.texto},${pieza.texto.trim()}`, escala).map(
@@ -1607,6 +1777,106 @@ function lecturasDelFragmento(
 
   const yaEstan = new Set(propias.map((l) => l.valor.toString()));
   return [...propias, ...juntas.filter((l) => !yaEstan.has(l.valor.toString()))];
+}
+
+/**
+ * La alícuota impresa **al lado del importe**, sin el signo de porcentaje.
+ *
+ * Media factura imprime «I.V.A. 21,00  46.491,65»: la alícuota es una columna
+ * propia, sin el «%», y como es un número el alcance de la etiqueta se corta
+ * antes de llegar a ella. Con un IVA que cumple su igualdad eso no se nota
+ * —la relación devuelve la alícuota— pero un **IVA impreso en cero no tiene
+ * igualdad que lo diga**, y sin esto un comprobante con dos alícuotas informa
+ * la segunda sin saber de cuál es.
+ *
+ * Lo que la hace segura es **dónde se usa**: sólo para un importe en cero, que
+ * es el único que no tiene ninguna otra manera de saber su alícuota. Para todos
+ * los demás sigue mandando la igualdad, que prueba la alícuota en vez de
+ * suponerla, y por eso este número no puede restringir ninguna comprobación ni
+ * hacer desaparecer un IVA por elegirle mal el porcentaje.
+ *
+ * Y se acepta sólo si el número es una de las alícuotas que existen: el «1,50»
+ * de una percepción de ingresos brutos no es ninguna, y queda afuera solo.
+ */
+function alicuotaDeAlLado(linea: LineaFiscal, numero: Fragmento): Decimal | null {
+  const suyos = [...linea.numericos]
+    .filter((otro) => otro !== numero && otro.caja.x1 <= numero.caja.x0)
+    .sort((a, b) => a.caja.x0 - b.caja.x0);
+
+  // La más pegada al importe, que es la de su propia casilla.
+  for (const otro of suyos.reverse()) {
+    const valor = alicuotaDeLaEtiqueta(otro.texto);
+    if (valor !== null) return valor;
+  }
+  return null;
+}
+
+/**
+ * Un **cero impreso**, que en el pie es un dato y no una falta de lectura.
+ *
+ * Para una celda del detalle el cero no es una lectura, y eso está bien: sale
+ * de separadores sueltos sin dígitos alrededor, suma cero, no rompe ninguna
+ * igualdad y deja dos artículos cargados en cero sin que nada se queje. Un
+ * renglón sin importe tiene que quedar sin importe y pedirlo.
+ *
+ * En el pie es al revés. «No Gravado: 0,00» y «I.V.A. 21 %: 0,00» son
+ * afirmaciones del comprobante: dicen que **no hay** nada no gravado y que **no
+ * hay** nada al 21 %. Perderlas no es prudencia, es tirar lo que el papel dice,
+ * y encima esconde que la factura tiene dos alícuotas.
+ *
+ * La diferencia entre las dos cosas es el texto, y por eso se pide entero: un
+ * cero escrito **como este papel escribe la plata**, con su separador y sus
+ * decimales, y todos ceros. Las dos mitades hacen falta y rechazan cosas
+ * distintas: «,00» son los decimales que quedaron de un número que no se pudo
+ * leer, y un «0» pelado es cualquier cosa —un número de página, un resto de la
+ * grilla— que además ningún pie imprime así teniendo todos sus importes con
+ * coma. Y aun así el cero solo no alcanza: quien lo use tiene que exigirle
+ * además su etiqueta y su casilla.
+ */
+function ceroImpreso(texto: string): LecturaNumerica[] {
+  const limpio = texto.replace(/[^\d.,]/g, '').trim();
+  const escrito = /^0+[.,](0+)$/.exec(limpio);
+  if (!escrito) return [];
+
+  return [
+    {
+      valor: new Decimal(0),
+      literal: true,
+      decimalesEscritos: escrito[1].length,
+      ajenaALaEscala: false,
+      textoOriginal: texto,
+      reparaciones: 0,
+      severidad: 0,
+      coherente: true,
+      comoSeLeyo: 'un cero impreso, tal como está en el papel',
+    },
+  ];
+}
+
+/**
+ * ¿Vale este cero como concepto fiscal?
+ *
+ * Sólo con **etiqueta y casilla inequívocas**: la frase que lo nombra tiene que
+ * decir exactamente un concepto, no parecerse a uno. Un cero no cierra ninguna
+ * cuenta —sumar cero no prueba nada— así que es el único importe del pie que no
+ * puede apoyarse en una igualdad: o lo sostiene su rótulo impreso, o no está.
+ *
+ * Por eso tampoco se pregunta. Un cero sin etiqueta no es «un importe que no
+ * supimos nombrar»: es un cero suelto, y convertirlo en una pregunta le pide a
+ * una persona que nombre algo que el papel no nombró.
+ */
+function elCeroTieneRotulo(candidata: Candidata): boolean {
+  return candidata.porEtiqueta !== null && candidata.porEtiqueta.exacta;
+}
+
+/** ¿Esta candidata vale cero? */
+function valeCero(candidata: Candidata): boolean {
+  return soloCeros(candidata.lecturas);
+}
+
+/** ¿Todas las lecturas de este lugar dan cero? */
+function soloCeros(lecturas: LecturaNumerica[]): boolean {
+  return lecturas.length > 0 && lecturas.every((l) => l.valor.isZero());
 }
 
 /**
@@ -1974,7 +2244,12 @@ function reconciliarConCandidatas(
      */
     let asignacion: AsignacionFiscal | null = null;
     let suBase: AsignacionFiscal | null = null;
-    for (const base of bases) {
+    /*
+     * Un IVA impreso en cero no se busca base: sumar cero no comprueba nada, y
+     * atarlo a una base sería escribir una igualdad que el papel desmiente. Lo
+     * que ese cero dice es que a esa alícuota **no hay** nada gravado.
+     */
+    for (const base of valeCero(candidata) ? [] : bases) {
       /*
        * Una alícuota impresa en los dos lados tiene que coincidir: el IVA del
        * 10,5 % no se comprueba contra la base del 21 %. Y cuando falta de un
@@ -2303,6 +2578,15 @@ function elegirNeto(
   for (const candidata of candidatas) {
     if (usadas.has(candidata.fragmento)) continue;
     /*
+     * Un cero no puede ser el neto gravado.
+     *
+     * Es uno de los dos números con los que el resto de la aplicación paga,
+     * controla y costea, y ahí un cero impreso es indistinguible de no haber
+     * podido leer. Lo que corresponde es que falte y se pida, no que se afirme
+     * en cero y arrastre a todas las cuentas que se apoyan en él.
+     */
+    if (valeCero(candidata)) continue;
+    /*
      * Una igualdad no cambia el significado de una etiqueta impresa.
      *
      * Si el fragmento está rotulado como TOTAL, IVA o percepción, no puede
@@ -2527,6 +2811,26 @@ function asignarIva(
     if (!mejor && !(neto && neto.gt(0)) && candidata.porEtiqueta?.exacta) {
       mejor = { lectura, alicuota: candidata.alicuota, igualdad: null };
     }
+
+    /*
+     * Y un IVA impreso en **cero** se acepta por su rótulo, haya o no neto.
+     *
+     * Pedirle la igualdad sería pedirle que cero sea el veintiuno por ciento de
+     * un neto que no es cero, que es justamente lo que el papel está diciendo
+     * que no pasa: a esa alícuota no hay nada gravado. Un comprobante con
+     * artículos al 10,5 % imprime las dos líneas, y perder la del 21 % esconde
+     * que la factura tiene dos alícuotas.
+     *
+     * No entra por ausencia ni para completar ninguna cuenta: entra porque está
+     * impreso, con su etiqueta exacta y su casilla, y suma cero.
+     */
+    if (!mejor && lectura.valor.isZero() && candidata.porEtiqueta?.exacta) {
+      mejor = {
+        lectura,
+        alicuota: candidata.alicuota ?? candidata.alicuotaAlLado,
+        igualdad: null,
+      };
+    }
   }
   if (!mejor) return null;
 
@@ -2619,6 +2923,14 @@ function elegirTotal(
 
   for (const candidata of candidatas) {
     if (usadas.has(candidata.fragmento)) continue;
+    /*
+     * Un cero no puede ser el total del comprobante.
+     *
+     * Es el número contra el que se paga, y ahí un cero impreso es
+     * indistinguible de no haber podido leer. Lo que corresponde es que falte y
+     * se pida: una factura de cero pesos no es una compra.
+     */
+    if (valeCero(candidata)) continue;
     const etiquetaCompatible = candidata.porEtiqueta?.concepto === 'total';
     for (const lectura of candidata.lecturas) {
       const cierra = esperado !== null && dentroDeLaPrecision(lectura.valor, esperado);
