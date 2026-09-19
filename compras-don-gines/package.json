@@ -21,7 +21,7 @@
     "test:rendimiento": "vitest run --config vitest.rendimiento.config.ts",
     "test:e2e": "node scripts/preparar-e2e.mjs && playwright test",
     "test:all": "vitest run && node scripts/preparar-e2e.mjs && playwright test",
-    "e2e:seed": "tsx tests/e2e/sembrar.ts",
+    "e2e:seed": "node scripts/sembrar-e2e.mjs",
     "e2e:server": "node scripts/servidor-e2e.mjs",
     "ocr:preparar": "node scripts/preparar-ocr.mjs"
   },
