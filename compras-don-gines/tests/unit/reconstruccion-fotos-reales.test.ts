@@ -1,68 +1,32 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-import { interpretarReconstruccion } from '@/lib/ocr/motor/desde-reconstruccion';
-import type { InformeReconstruido } from '@/lib/ocr/motor/desde-reconstruccion';
-import type { EvidenciaDeLectura } from '@/lib/ocr/reconstruccion/evidencia';
-import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
 import { bloquea } from '@/lib/ocr/motor/pendientes';
 import { netoDelRenglon } from '@/lib/ocr/motor/candidatas';
-import { asociacionesDePrueba } from '@/../tests/fixtures/evidencia-sintetica';
+import { evidenciaNormalizada } from '@/lib/ocr/reconstruccion/evidencia';
+import {
+  BARRAZA,
+  CALVOS_212356,
+  CALVOS_213103,
+  CUIT_DEL_RECEPTOR,
+  ERRECALDE,
+  EZRA,
+  MABELHERDI,
+  TODAS,
+  leerEvidencia as leer,
+} from '@/../tests/fixtures/reconstruccion-de-las-fotos';
 
 /**
  * La reconstrucción completa sobre las fotos reales, sin ningún analizador de
  * proveedor.
  *
- * La evidencia está capturada de las fotos de verdad con `scripts/capturar-
- * evidencia.mjs` y guardada como fixture, así que esto corre en CI en
- * milisegundos y es determinístico: la misma foto da siempre la misma tabla.
- *
  * Es la medida honesta de dónde está el motor. Lo que se afirma acá es lo que
  * hace hoy, incluido lo que todavía no hace, y cada vez que algo mejore esta
  * prueba tiene que fallar para que se actualice.
+ *
+ * Todo lo de este archivo es **determinístico**: afirma qué se leyó, no cuánto
+ * tardó. Lo que mide tiempo vive en `tests/rendimiento/`, aparte, porque
+ * depende de la máquina y no puede decidir si una lectura correcta cuenta o no.
+ * La reconstrucción en sí se arma una sola vez, en el fixture compartido.
  */
-
-const DIRECTORIO = path.resolve(__dirname, '../fixtures/evidencia');
-const CUIT_DEL_RECEPTOR = '27-33342291-9';
-
-function leer(nombre: string): EvidenciaDeLectura {
-  return JSON.parse(readFileSync(path.join(DIRECTORIO, `${nombre}.json`), 'utf8'));
-}
-
-function interpretar(nombre: string): InformeReconstruido {
-  const unidades =
-    nombre === 'ezra'
-      ? (['KG', 'KG', 'KG', 'KG', 'KG', 'UNIT'] as const)
-      : nombre === 'mabelherdi'
-        ? Array.from({ length: 9 }, () => 'UNIT' as const)
-        : nombre === 'barraza'
-          ? Array.from({ length: 2 }, () => 'KG' as const)
-          : nombre === 'errecalde'
-            ? Array.from({ length: 23 }, () => 'KG' as const)
-            : nombre === 'los-calvos-212356'
-              ? Array.from({ length: 1 }, () => 'KG' as const)
-              : Array.from({ length: 11 }, () => 'KG' as const);
-  return interpretarReconstruccion(leer(nombre), {
-    cuitDelReceptor: CUIT_DEL_RECEPTOR,
-    asociacionesDeProducto: asociacionesDePrueba(unidades),
-  });
-}
-
-const ERRECALDE = interpretar('errecalde');
-const MABELHERDI = interpretar('mabelherdi');
-const EZRA = interpretar('ezra');
-const BARRAZA = interpretar('barraza');
-const CALVOS_212356 = interpretar('los-calvos-212356');
-const CALVOS_213103 = interpretar('los-calvos-213103');
-
-const TODAS = [
-  ['Errecalde', ERRECALDE],
-  ['Mabelherdi', MABELHERDI],
-  ['Ezra', EZRA],
-  ['Barraza', BARRAZA],
-  ['Los Calvos 212356', CALVOS_212356],
-  ['Los Calvos 213103', CALVOS_213103],
-] as const;
 
 describe('la evidencia capturada', () => {
   it('está normalizada en las seis fotos', () => {
@@ -461,14 +425,5 @@ describe('qué le queda por resolver a una persona', () => {
   it('las dos fotos de Los Calvos se siguen rechazando por calidad', () => {
     expect(CALVOS_212356.veredicto.decision).toBe('rechazo');
     expect(CALVOS_213103.veredicto.decision).toBe('rechazo');
-  });
-});
-
-describe('el costo de reconstruir', () => {
-  it('cada comprobante se reconstruye e interpreta en menos de un segundo', () => {
-    // Corre en el navegador, después del OCR y sobre el mismo teléfono.
-    for (const [nombre, informe] of TODAS) {
-      expect(informe.ms, nombre).toBeLessThan(1000);
-    }
   });
 });
