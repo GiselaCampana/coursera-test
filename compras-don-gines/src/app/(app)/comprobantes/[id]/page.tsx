@@ -151,6 +151,17 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
         ) : null}
       </div>
 
+      {/*
+        La vista previa de la compra: qué se va a escribir si se confirma, con
+        el egreso y la mercadería separados. No escribe nada, así que se puede
+        abrir en cualquier estado del comprobante.
+      */}
+      <p style={{ marginBottom: 14 }}>
+        <Link href={`/comprobantes/${documento.id}/vista-previa`} className="chico">
+          Ver la vista previa de la compra →
+        </Link>
+      </p>
+
       {documento.status === 'ANULADO' && documento.voidReason ? (
         <div className="mensaje mensaje-error">
           <strong>Comprobante anulado.</strong> Motivo: {documento.voidReason}
