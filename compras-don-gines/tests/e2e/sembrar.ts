@@ -13,6 +13,7 @@ import { normalizeText } from '../../src/lib/domain/matching';
 import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
 import { addDays, arToday } from '../../src/lib/datetime';
+import { sembrarLaCompraDeEzra } from '../fixtures/compra-de-ezra';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 
@@ -523,6 +524,18 @@ async function sembrarCon(prisma: PrismaClient) {
     kilos: '8.50',
     precio: '16037',
   });
+
+  /*
+   * La compra de Ezra, sin confirmar, para la vista previa.
+   *
+   * Va acá y no en la prueba porque la pantalla se mira en el navegador con
+   * estos mismos datos: lo que prueba Playwright y lo que abre una persona
+   * tienen que ser la misma compra, o una de las dos cosas no significa nada.
+   *
+   * Deja dos comprobantes —uno que se puede aplicar y otro frenado— porque lo
+   * que hay que poder ver es la diferencia.
+   */
+  await sembrarLaCompraDeEzra(prisma, { sucursalId: devoto.id, autorId: admin.id });
 
   console.log('Datos de prueba listos.');
 }

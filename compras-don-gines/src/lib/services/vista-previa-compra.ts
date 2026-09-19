@@ -5,6 +5,8 @@ import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/ses
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { acceptReadDocument, matchItemsToProducts } from '@/lib/services/documents';
+import { getSupplierConditions } from '@/lib/services/suppliers';
+import { describeTerm, type TermType } from '@/lib/domain/payments';
 import type { MatchMethod } from '@/lib/domain/matching';
 
 /**
@@ -46,14 +48,17 @@ export type Procedencia =
   /** Está impreso en el comprobante y se leyó de ahí. */
   | 'LEIDO'
   /**
-   * Lo ubicó una relación del documento, no su etiqueta.
+   * No está impreso, pero hay evidencia registrada que lo determina.
    *
-   * El motor la distingue —un IVA que se reconoció porque cumple neto × 21 %
-   * tiene esa procedencia— pero el comprobante guardado todavía no la conserva
-   * campo por campo: guarda el valor impreso y el calculado, y nada entre medio.
-   * Así que hoy esta pantalla no la produce, y decirlo es parte de lo que
-   * informa: cuando la lectura empiece a guardar la procedencia de cada
-   * concepto, entra por acá sin tocar nada más.
+   * Hoy la produce la condición de pago que está configurada **en la ficha de
+   * este proveedor**: no se lee del papel, pero alguien la acordó y la cargó, y
+   * eso es distinto de una cuenta del motor.
+   *
+   * El motor distingue además las relaciones del propio documento —un IVA que
+   * se reconoció porque cumple neto × 21 %— pero el comprobante guardado
+   * todavía no conserva esa procedencia campo por campo: guarda el valor
+   * impreso y el calculado, y nada entre medio. Cuando la lectura empiece a
+   * guardarla, entra por acá sin tocar nada más.
    */
   | 'INFERIDO'
   /** Es una cuenta que el motor ofrece como ayuda. No es un dato del papel. */
@@ -111,7 +116,7 @@ export interface VistaPreviaDeCompra {
   egreso: {
     total: ValorConProcedencia;
     vencimiento: string | null;
-    condicion: string | null;
+    condicion: ValorConProcedencia;
     yaAgendado: boolean;
   };
   /** Lo que va a mover de mercadería: un movimiento por renglón asociado. */
@@ -123,6 +128,16 @@ export interface VistaPreviaDeCompra {
       cantidad: string;
       unidad: string;
       costoTotal: string;
+      /**
+       * Por qué la unidad del movimiento no es la del renglón, cuando no lo es.
+       *
+       * Pasa de verdad: la factura de Ezra imprime «3,000» para tres bolsas
+       * igual que imprime «4,240» para cuatro kilos y pico de queso, y el papel
+       * no trae nada que las distinga. La unidad la pone el catálogo, que es
+       * donde alguien ya decidió cómo se compra ese artículo, y el movimiento
+       * dice que la puso de ahí en vez de cambiarla en silencio.
+       */
+      porQueEsaUnidad: string | null;
     }[];
     renglonesSinMovimiento: number;
   };
@@ -170,6 +185,59 @@ function delPie(
     };
   }
   return { etiqueta, valor: null, procedencia: 'PENDIENTE', detalle: 'Falta en el comprobante.' };
+}
+
+/**
+ * La condición de pago, y de dónde salió.
+ *
+ * Una condición de pago equivocada se paga: decide cuándo sale la plata. Por
+ * eso acá no vale cualquier número que esté guardado en el comprobante, sino
+ * uno que se pueda atribuir a **este** proveedor.
+ *
+ * Lo que se acepta es la condición cargada en la ficha del proveedor, vigente
+ * a la fecha del comprobante. Lo que no se acepta —y es el caso que importa—
+ * es un plazo que quedó escrito en el comprobante sin que este proveedor tenga
+ * ninguno configurado: no se sabe de dónde salió, y lo más probable es que sea
+ * el de otro. Mostrarlo sería prestarle a un proveedor nuevo las condiciones
+ * del habitual, que es exactamente lo que una compra excepcional no puede
+ * heredar. Se dice que falta y se define al aplicar.
+ *
+ * Todavía no entra el caso de la condición **impresa en la factura**: el
+ * comprobante guardado no tiene dónde conservarla. Cuando la lectura la
+ * guarde, entra como LEIDO y gana sobre la ficha, porque sería el papel.
+ */
+export function condicionDePago(entrada: {
+  /** La de la ficha de este proveedor, vigente a la fecha del comprobante. */
+  deLaFicha: { termType: TermType; days: number; paymentMethod: string } | null;
+  /** La que quedó escrita en el comprobante, sea cual sea su origen. */
+  enElComprobante: { termType: string | null; days: number | null };
+}): ValorConProcedencia {
+  if (entrada.deLaFicha) {
+    return {
+      etiqueta: 'Condición',
+      valor: describeTerm(entrada.deLaFicha),
+      procedencia: 'INFERIDO',
+      detalle: 'Configurada en la ficha de este proveedor. No está impresa en el comprobante.',
+    };
+  }
+
+  if (entrada.enElComprobante.days !== null || entrada.enElComprobante.termType !== null) {
+    return {
+      etiqueta: 'Condición',
+      valor: null,
+      procedencia: 'PENDIENTE',
+      detalle:
+        'El comprobante trae un plazo que este proveedor no tiene configurado. No se muestra, ' +
+        'porque sería la condición de otro proveedor. Se define al aplicar.',
+    };
+  }
+
+  return {
+    etiqueta: 'Condición',
+    valor: null,
+    procedencia: 'PENDIENTE',
+    detalle: 'Este proveedor no tiene condición de pago configurada. Se define al aplicar.',
+  };
 }
 
 /**
@@ -341,26 +409,49 @@ export async function vistaPreviaDeCompra(
 
   // --- El egreso ----------------------------------------------------------
   const total = delPie('Total a pagar', documento.total, sumaDeRenglones.total);
+  /*
+   * Las condiciones se buscan con la misma función que usa la carga, y a la
+   * fecha del comprobante: un plazo que cambió el mes pasado no puede mover el
+   * vencimiento de una factura vieja.
+   */
+  const deLaFicha = documento.supplierId
+    ? (await getSupplierConditions(documento.supplierId, documento.issueDate ?? new Date())).term
+    : null;
+
   const egreso = {
     total,
     vencimiento: documento.paymentSchedule?.dueDate
       ? formatDateAr(documento.paymentSchedule.dueDate)
       : null,
-    condicion: documento.appliedTermDays != null ? `${documento.appliedTermDays} días` : null,
+    condicion: condicionDePago({
+      deLaFicha,
+      enElComprobante: {
+        termType: documento.appliedTermType,
+        days: documento.appliedTermDays,
+      },
+    }),
     yaAgendado: documento.paymentSchedule !== null,
   };
 
   // --- El movimiento de mercadería ---------------------------------------
   const conProducto = renglones.filter((r) => r.producto.estado === 'INEQUIVOCA');
   const stock = {
-    movimientos: conProducto.map((r) => ({
-      renglon: r.numero,
-      productoId: r.producto.id as string,
-      producto: r.producto.nombre ?? '(sin nombre)',
-      cantidad: r.cantidad,
-      unidad: r.producto.unidadDelCatalogo ?? r.unidad,
-      costoTotal: r.importe,
-    })),
+    movimientos: conProducto.map((r) => {
+      const unidad = r.producto.unidadDelCatalogo ?? r.unidad;
+      return {
+        renglon: r.numero,
+        productoId: r.producto.id as string,
+        producto: r.producto.nombre ?? '(sin nombre)',
+        cantidad: r.cantidad,
+        unidad,
+        costoTotal: r.importe,
+        porQueEsaUnidad:
+          unidad === r.unidad
+            ? null
+            : `El comprobante dice «${r.unidad}» en este renglón; la unidad sale del catálogo, ` +
+              'donde ya está decidido cómo se compra este artículo.',
+      };
+    }),
     renglonesSinMovimiento: renglones.length - conProducto.length,
   };
 

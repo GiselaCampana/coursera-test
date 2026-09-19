@@ -202,15 +202,21 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
           <p className="ayuda">Un solo movimiento económico: lo que se va a pagar y cuándo.</p>
           <div className="indicadores" style={{ gridTemplateColumns: '1fr', marginBottom: 10 }}>
             <Valor {...previa.egreso.total} dinero />
+            {/*
+              La condición va con su procedencia y no como un dato suelto: un
+              plazo que no se puede atribuir a este proveedor decide cuándo sale
+              la plata, y ahí conviene que diga que falta en vez de mostrar un
+              número prestado.
+            */}
+            <Valor
+              {...previa.egreso.condicion}
+              valor={previa.egreso.condicion.valor ?? 'a definir al aplicar'}
+            />
           </div>
           <dl>
             <div className="dato">
               <dt>Vencimiento</dt>
               <dd>{previa.egreso.vencimiento ?? 'a definir al aplicar'}</dd>
-            </div>
-            <div className="dato">
-              <dt>Condición</dt>
-              <dd>{previa.egreso.condicion ?? '—'}</dd>
             </div>
           </dl>
         </section>
@@ -231,6 +237,9 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
                     {formatQty(movimiento.cantidad, 3)} {movimiento.unidad} ·{' '}
                     {formatARS(movimiento.costoTotal)}
                   </div>
+                  {movimiento.porQueEsaUnidad ? (
+                    <div className="chico suave">{movimiento.porQueEsaUnidad}</div>
+                  ) : null}
                 </li>
               ))}
             </ul>
