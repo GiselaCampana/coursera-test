@@ -1,23 +1,46 @@
-# Receta para levantar la vista previa hospedada, aislada de producción.
+# La vista previa hospedada, aislada de producción.
 #
-# NO se aplica solo. Render lee blueprints de un `render.yaml` en la raíz del
-# repositorio; éste vive acá, con otro nombre, justamente para que no lo tome
-# por su cuenta y para que no pueda tocar el servicio de producción. Para
-# usarlo hay que copiarlo a la raíz a propósito, o cargar los mismos valores a
-# mano en el panel.
+# Levanta DOS recursos nuevos y ninguno más: un servicio web y su propia base.
+# No comparte nada con producción —ni base, ni almacenamiento, ni credenciales,
+# ni variables— y los nombres son distintos de los de producción, así que este
+# Blueprint no administra ningún recurso que ya exista. Los datos son los
+# inventados del sembrado de pruebas, con la factura de Ezra cargada para poder
+# recorrer la pantalla.
 #
-# Lo que levanta es un servicio nuevo y una base nueva. No comparte nada con
-# producción: ni la base, ni el almacenamiento, ni las credenciales. Los datos
-# son los inventados del sembrado de pruebas, con la factura de Ezra cargada
-# para poder recorrer la pantalla.
+# QUÉ NO PUEDE TOCAR, y por qué:
 #
-# ANTES DE APLICARLO, dos cosas que hay que mirar en el panel:
+#  - producción es OTRO archivo: el `render.yaml` de la raíz del repositorio,
+#    que declara el servicio `compras-don-gines`, en Oregon, con su base y su
+#    almacenamiento en Supabase cargados a mano en el panel. Acá los nombres
+#    son `compras-vista-previa-demo` y `compras-demo-db`: distintos, así que
+#    Render no los confunde ni los administra juntos;
 #
-#  1. que los planes declarados abajo estén disponibles sin cargo en la cuenta.
-#     Si Render pide contratar o ampliar un plan, el despliegue falla en vez de
-#     cobrar, pero conviene verlo antes;
-#  2. que la URL que queda es pública: cualquiera que la tenga entra con el
-#     usuario de demostración. Por eso no lleva un solo dato real.
+#    LO QUE HAY QUE VERIFICAR EN EL PANEL, y es lo único que este archivo no
+#    puede garantizar por sí solo: que el Blueprint esté leyendo ESTE archivo y
+#    no el de la raíz. En la lista de recursos del Blueprint tienen que
+#    aparecer exactamente dos, los dos de acá. Si aparece `compras-don-gines`,
+#    el Blueprint está apuntando al archivo equivocado y pasaría a administrar
+#    producción: hay que borrarlo sin sincronizar;
+#
+#  - `previews.generation: off` evita que se creen entornos de vista previa por
+#    cada rama o pull request, que serían recursos —y costos— que nadie pidió;
+#  - no hay ninguna variable de Control de Stock ni la del endpoint de precios,
+#    así que esta instancia no habla con ningún servicio real.
+#
+# DOS COSAS QUE CONVIENE SABER DE ANTEMANO:
+#
+#  1. la URL que queda es pública: cualquiera que la tenga entra con el usuario
+#     de demostración. Por eso no lleva un solo dato real;
+#  2. en plan gratuito el servicio se duerme tras un rato sin visitas, y al
+#     despertarse vuelve a migrar y sembrar. La primera carga después de una
+#     siesta tarda, y la base vuelve al estado conocido: si alguien aplicó la
+#     compra de demostración, al rato aparece otra vez sin aplicar.
+
+previews:
+  # Ningún entorno de vista previa automático: serían recursos —y costos— que
+  # nadie pidió. Va entre comillas a propósito: sin ellas, YAML lee `off` como
+  # el booleano falso y Render espera la palabra.
+  generation: "off"
 
 databases:
   # El nombre tiene que contener "demo", "test" o "e2e": es lo que mira la
@@ -25,15 +48,27 @@ databases:
   - name: compras-demo-db
     databaseName: compras_demo
     plan: free
+    # La misma región que producción, pero es otra base: acá el servicio y su
+    # base quedan juntos y no se hablan por medio mundo.
+    region: oregon
 
 services:
   - type: web
     name: compras-vista-previa-demo
     runtime: node
     plan: free
+    region: oregon
     branch: motor-general-facturas
     rootDir: compras-don-gines
-    buildCommand: npm ci && npm run build
+    # El mismo endpoint tonto que usa producción: contesta 200 si el proceso
+    # está vivo, sin tocar cookies, sesión ni base. Un chequeo que consultara
+    # la base dejaría el servicio reiniciándose en loop en vez de degradado.
+    healthCheckPath: /api/health
+    # `--include=dev` no es decorativo: Render corre con NODE_ENV=production y
+    # ahí `npm ci` se saltea las dependencias de desarrollo. Sin ellas no hay
+    # compilador de TypeScript para `next build` ni `tsx` para sembrar, y el
+    # despliegue muere en el primer paso.
+    buildCommand: npm ci --include=dev && npm run build
     # Migrar, sembrar los datos inventados y arrancar. El sembrado corre en
     # cada arranque a propósito: es una demostración, y conviene que vuelva
     # sola al estado conocido después de que alguien aplique la compra.
