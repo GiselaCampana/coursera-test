@@ -67,9 +67,19 @@ test.describe('la vista previa de la compra', () => {
     await expect(page.getByText('Distribuidora Ezra').first()).toBeVisible();
     await expect(page.locator('tbody tr')).toHaveCount(6);
 
-    // El sexto renglón es el que no se factura por kilo.
+    /*
+     * El sexto renglón: tres bolsas que Ezra cobra para transportar la compra.
+     * Se pagan con la factura y no entran al stock, así que tienen que verse
+     * —en unidades, no en kilos— y verse APARTE de la mercadería.
+     */
     await expect(page.getByText('BOLSA GRANDE').first()).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Sin impacto en stock' })).toBeVisible();
     await expect(page.getByText('3,000 unidades')).toBeVisible();
+    await expect(page.getByText('Bolsas del transporte').first()).toBeVisible();
+
+    // Y la mercadería son cinco, no seis.
+    const mercaderia = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
+    await expect(mercaderia.locator('ul.lista-simple').first().locator('li')).toHaveCount(5);
 
     // El egreso, por el total que dice el papel.
     await expect(page.getByText('$ 267.880,50').first()).toBeVisible();
@@ -129,6 +139,10 @@ test.describe('la vista previa de la compra', () => {
       const caja = await seccion.boundingBox();
       expect(caja!.width).toBeLessThanOrEqual(testInfo.project.use.viewport!.width);
     }
+
+    // El gasto sin impacto en stock también se lee en la pantalla angosta.
+    await expect(page.getByRole('heading', { name: 'Sin impacto en stock' })).toBeVisible();
+    await expect(page.getByText('3,000 unidades')).toBeVisible();
 
     // Y el botón se puede tocar con el pulgar.
     await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeVisible();

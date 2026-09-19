@@ -6,7 +6,12 @@ import { crearProveedorDesdeLectura } from '@/lib/services/suppliers';
 import { aplicarCompra, vistaPreviaDeCompra } from '@/lib/services/vista-previa-compra';
 import { normalizeText } from '@/lib/domain/matching';
 import { Decimal } from '@/lib/money';
-import { EZRA_ARTICULOS_IMPRESOS, EZRA_ENCABEZADO, EZRA_PIE } from '../fixtures/ezra';
+import { EZRA_ARTICULOS_IMPRESOS, EZRA_PIE } from '../fixtures/ezra';
+import {
+  CATALOGO_DE_EZRA,
+  CODIGO_DE_LA_BOLSA,
+  sembrarLaCompraDeEzra,
+} from '../fixtures/compra-de-ezra';
 
 /**
  * **Ver la compra entera antes de que se escriba, y no poder aplicarla a medias.**
@@ -276,132 +281,83 @@ describe('aplicar la compra', () => {
 // ---------------------------------------------------------------------------
 
 /**
- * La factura de Ezra, con los **seis** renglones que tiene el papel.
+ * **La factura de Ezra, con los seis renglones que tiene el papel.**
  *
- * Los importes, las cantidades y el pie salen de `tests/fixtures/ezra.ts`, que
- * es la transcripción columna por columna del comprobante. No se vuelven a
- * escribir acá: una prueba que copia los números a mano deja de ser una
- * regresión del papel y pasa a ser una regresión de lo que yo tecleé.
+ * Cinco son mercadería, en kilos. El sexto son tres bolsas que Ezra cobra para
+ * transportar la compra: se pagan con el resto de la factura y **no entran al
+ * stock**. No hay tres bolsas más en la heladera, no hay un artículo que
+ * vender, y cargarlas como mercadería ensucia las existencias de algo que no
+ * existe.
  *
- * El sexto renglón es el que hace falta que esté. BOLSA GRANDE se factura por
- * unidad y el comprobante no lo dice en ninguna parte —la columna «Cantidad»
- * imprime 3,000 igual que imprime los 4,240 kilos de cremoso—, así que la
- * unidad sólo puede salir del catálogo. Y si el renglón no se puede asociar,
- * no desaparece: se ve, frena la aplicación, y su importe sigue estando en lo
- * que se le debe a Ezra.
+ * Eso fue exactamente lo que pasó la primera vez: el renglón terminó moviendo
+ * «3 KG de Bolsa grande» contra un artículo inventado. Lo que se prueba acá es
+ * que ya no, y que la corrección no se apoya en leer la palabra «BOLSA».
+ *
+ * Los importes salen de `tests/fixtures/ezra.ts`, la transcripción del papel,
+ * y el sembrado es el mismo que usan la demostración y las end to end.
  */
 describe('Ezra, de punta a punta con los seis renglones del papel', () => {
-  /** El artículo del catálogo al que corresponde cada código de Ezra. */
-  const CATALOGO: Record<string, { plu: string; nombre: string; unidad: 'KG' | 'UNIT' }> = {
-    '47': { plu: '3101', nombre: 'Queso cremoso La Paulina', unidad: 'KG' },
-    '49': { plu: '3102', nombre: 'Pernil pata celeste mini 1284', unidad: 'KG' },
-    '48': { plu: '3103', nombre: 'Queso de maquina dambo La Paulina', unidad: 'KG' },
-    '10': { plu: '3104', nombre: 'Jamon cocido mini tradicional Los Calvos', unidad: 'KG' },
-    '2514': { plu: '3105', nombre: 'Jamon cocido mini Il Molise', unidad: 'KG' },
-    '4249': { plu: '3106', nombre: 'Bolsa grande', unidad: 'UNIT' },
-  };
-  const BOLSA = '4249';
+  /** Los cinco PLU de mercadería. La bolsa no tiene, y no debe tener. */
+  const PLU_DE_MERCADERIA = ['3101', '3102', '3103', '3104', '3105'];
 
   /**
-   * @param bolsaEnElCatalogo si la bolsa ya tiene artículo y código aprendido.
-   *   Con `false` el renglón existe igual, pero sin nada a qué asociarlo.
+   * Las existencias: lo que entró por compras, por artículo.
+   *
+   * Se miden así y no contando movimientos porque la pregunta es cuánta
+   * mercadería hay, no cuántas filas se escribieron. Un movimiento de más con
+   * cantidad cero no cambia el stock; uno de 3 kg de algo que no existe, sí.
    */
-  async function facturaDeEzra({ bolsaEnElCatalogo = true } = {}) {
-    const ezra = await crearProveedorDesdeLectura(escenario.admin, {
-      nombre: EZRA_ENCABEZADO.supplierName,
-      razonSocial: EZRA_ENCABEZADO.legalName,
-      cuit: EZRA_ENCABEZADO.cuit,
+  async function existencias(): Promise<Record<string, string>> {
+    const productos = await prisma.product.findMany({
+      select: { id: true, internalCode: true },
     });
-
-    const productos: Record<string, string> = {};
-    for (const impreso of EZRA_ARTICULOS_IMPRESOS) {
-      const ficha = CATALOGO[impreso.codigo];
-      const esLaBolsa = impreso.codigo === BOLSA;
-      if (esLaBolsa && !bolsaEnElCatalogo) continue;
-
-      const producto = await prisma.product.create({
-        data: {
-          internalCode: ficha.plu,
-          normalizedName: ficha.nombre,
-          purchaseUnit: ficha.unidad,
-          active: true,
-          aliases: {
-            create: {
-              supplierId: ezra.id,
-              supplierCode: impreso.codigo,
-              alias: impreso.descripcion,
-              normalized: normalizeText(impreso.descripcion),
-              origin: 'MANUAL',
-            },
-          },
-        },
-      });
-      productos[impreso.codigo] = producto.id;
-    }
-
-    const documento = await createDocument(escenario.admin, escenario.sucursales.devoto);
-    await prisma.document.update({
-      where: { id: documento.id },
-      data: {
-        supplierId: ezra.id,
-        letter: EZRA_ENCABEZADO.letter,
-        pointOfSale: EZRA_ENCABEZADO.pointOfSale,
-        number: EZRA_ENCABEZADO.number,
-        fullNumber: EZRA_ENCABEZADO.fullNumber,
-        issueDate: new Date(`${EZRA_ENCABEZADO.issueDate}T12:00:00Z`),
-        netTotal: EZRA_PIE.netTotal,
-        ivaTotal: EZRA_PIE.iva21,
-        perceptionsTotal: '0',
-        total: EZRA_PIE.total,
-      },
+    const porProducto = await prisma.purchaseMovement.groupBy({
+      by: ['productId'],
+      _sum: { quantity: true },
     });
-
-    for (const [indice, impreso] of EZRA_ARTICULOS_IMPRESOS.entries()) {
-      const neto = impreso.subtotal;
-      await prisma.documentItem.create({
-        data: {
-          documentId: documento.id,
-          lineNumber: indice + 1,
-          supplierCode: impreso.codigo,
-          description: impreso.descripcion,
-          quantity: impreso.cantidad,
-          /*
-           * Todo entra en kilos porque es lo que produce la lectura: el papel
-           * no distingue la bolsa del queso. La unidad de verdad la pone el
-           * catálogo cuando el renglón se asocia, y eso es lo que se prueba.
-           */
-          unit: 'KG',
-          unitNetPrice: impreso.precioConDescuento,
-          grossSubtotal: neto,
-          netAmount: neto,
-          ivaRate: '0.21',
-          ivaAmount: (Number(neto) * 0.21).toFixed(4),
-          perceptionAmount: '0',
-          totalCost: (Number(neto) * 1.21).toFixed(4),
-          unitCost: ((Number(neto) * 1.21) / Number(impreso.cantidad)).toFixed(4),
-          productId: null,
-          matchMethod: 'NONE',
-        },
-      });
+    const filas: Record<string, string> = {};
+    for (const producto of productos) {
+      const suyo = porProducto.find((m) => m.productId === producto.id);
+      filas[producto.internalCode] = new Decimal(
+        (suyo?._sum.quantity ?? 0).toString(),
+      ).toFixed(3);
     }
-
-    return { documentId: documento.id, ezraId: ezra.id, productos };
+    return filas;
   }
 
+  async function sembrar() {
+    return sembrarLaCompraDeEzra(prisma, {
+      sucursalId: escenario.sucursales.devoto,
+      autorId: escenario.admin.id,
+    });
+  }
+
+  /** El mismo escenario, pero sin la configuración que clasifica la bolsa. */
+  async function sembrarSinClasificarLaBolsa() {
+    const sembrada = await sembrar();
+    await prisma.supplierExpenseCode.deleteMany({
+      where: { supplierId: sembrada.proveedorId, supplierCode: CODIGO_DE_LA_BOLSA },
+    });
+    return sembrada;
+  }
+
+  // -------------------------------------------------------------------------
+  // La vista previa
+  // -------------------------------------------------------------------------
+
   it('la atribuye a Ezra y muestra el egreso por el total impreso', async () => {
-    const { documentId } = await facturaDeEzra();
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+    const { completa } = await sembrar();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
     expect(previa.emisor.nombre).toBe('Distribuidora Ezra');
     expect(previa.emisor.cuit.valor).toBe('30-71951960-8');
     expect(previa.egreso.total.valor).toBe('267880.50');
     expect(previa.egreso.total.procedencia).toBe('LEIDO');
-    expect(previa.sePuedeAplicar).toBe(true);
   });
 
   it('muestra los seis renglones del papel, no cinco', async () => {
-    const { documentId } = await facturaDeEzra();
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+    const { completa } = await sembrar();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
     expect(previa.renglones).toHaveLength(6);
     expect(previa.renglones.map((r) => r.codigoDelProveedor)).toEqual(
@@ -414,8 +370,8 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
      * 221.388,847 en los renglones y 221.388,84 impreso: el pie trunca, no
      * redondea. Si alguien cambia un importe del fixture, esto lo dice.
      */
-    const { documentId } = await facturaDeEzra();
-    const renglones = await prisma.documentItem.findMany({ where: { documentId } });
+    const { completa } = await sembrar();
+    const renglones = await prisma.documentItem.findMany({ where: { documentId: completa } });
     const suma = renglones.reduce(
       (total, r) => total.plus(r.netAmount.toString()),
       new Decimal(0),
@@ -425,84 +381,219 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
     expect(suma.toDecimalPlaces(2, Decimal.ROUND_DOWN).toFixed(2)).toBe(EZRA_PIE.netTotal);
   });
 
-  it('el sexto renglón mueve tres unidades, no tres kilos', async () => {
-    const { documentId } = await facturaDeEzra();
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+  it('separa cinco ingresos de mercadería de la bolsa, que no mueve stock', async () => {
+    const { completa } = await sembrar();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
-    expect(previa.stock.movimientos).toHaveLength(6);
+    // Lo que entra a la heladera: cinco, en kilos.
+    expect(previa.stock.movimientos).toHaveLength(5);
     expect(previa.stock.renglonesSinMovimiento).toBe(0);
+    for (const movimiento of previa.stock.movimientos) {
+      expect(movimiento.unidad).toBe('kg');
+    }
 
-    const bolsa = previa.stock.movimientos.find((m) => m.renglon === 6)!;
-    expect(bolsa.producto).toBe('Bolsa grande');
+    // Y la bolsa, aparte, sin impacto en stock.
+    expect(previa.gastos).toHaveLength(1);
+    const bolsa = previa.gastos[0];
+    expect(bolsa.renglon).toBe(6);
+    expect(bolsa.descripcion).toBe('BOLSA GRANDE');
     expect(bolsa.cantidad).toBe('3.000');
     expect(bolsa.unidad).toBe('unidades');
-    // Y dice por qué no es la unidad del renglón, en vez de cambiarla callado.
-    expect(bolsa.porQueEsaUnidad).toContain('catálogo');
-
-    // Los otros cinco siguen en kilos, y sin nota: ahí no hay diferencia.
-    for (const movimiento of previa.stock.movimientos.filter((m) => m.renglon !== 6)) {
-      expect(movimiento.unidad).toBe('kg');
-      expect(movimiento.porQueEsaUnidad).toBeNull();
-    }
+    // 223,140 del papel + 21 % de IVA = 269,9994, que se muestra 270,00.
+    expect(bolsa.importe).toBe('270.00');
+    expect(bolsa.comoSeLlama).toBe('Bolsas del transporte');
+    expect(bolsa.porQue).toContain('código');
   });
 
-  it('sin artículo al cual asociarla, la bolsa se ve, frena y sigue en el egreso', async () => {
-    const { documentId } = await facturaDeEzra({ bolsaEnElCatalogo: false });
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+  it('el renglón de la bolsa no pide artículo y no frena la compra', async () => {
+    const { completa } = await sembrar();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
-    // Está: el renglón no desaparece por no saber a qué artículo va.
+    const bolsa = previa.renglones[5];
+    expect(bolsa.gasto?.clase).toBe('EMBALAJE');
+    expect(bolsa.producto.id).toBeNull();
+    expect(previa.frenos).toEqual([]);
+    expect(previa.sePuedeAplicar).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // La prueba negativa: el texto no clasifica
+  // -------------------------------------------------------------------------
+
+  it('sin la configuración, «BOLSA GRANDE» vuelve a ser mercadería sin asociar y frena', async () => {
+    /*
+     * La garantía que sostiene todo lo demás. El renglón dice exactamente lo
+     * mismo —«BOLSA GRANDE», tres, el mismo importe— y sin el código
+     * configurado no se convierte ni en gasto ni en producto: queda pidiendo
+     * una decisión humana, que es lo correcto.
+     *
+     * Si alguien alguna vez clasifica por la descripción, esta prueba falla.
+     */
+    const { completa } = await sembrarSinClasificarLaBolsa();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
+
     expect(previa.renglones).toHaveLength(6);
     const bolsa = previa.renglones[5];
     expect(bolsa.descripcion).toBe('BOLSA GRANDE');
+    expect(bolsa.gasto).toBeNull();
     expect(bolsa.producto.estado).toBe('SIN_ASOCIAR');
 
-    // Frena, y el freno lo nombra.
+    expect(previa.gastos).toEqual([]);
     expect(previa.sePuedeAplicar).toBe(false);
     expect(previa.frenos.some((f) => f.includes('BOLSA GRANDE'))).toBe(true);
 
     // Y su importe sigue siendo plata que se le debe a Ezra.
     expect(previa.egreso.total.valor).toBe('267880.50');
-    expect(previa.stock.movimientos).toHaveLength(5);
-    expect(previa.stock.renglonesSinMovimiento).toBe(1);
   });
 
-  it('al aplicarla quedan el egreso y los seis movimientos, sin productos nuevos', async () => {
-    const { documentId, ezraId } = await facturaDeEzra();
-    const productosAntes = await prisma.product.count();
-
-    await aplicarCompra(escenario.admin, documentId);
-
-    const documento = await prisma.document.findUnique({ where: { id: documentId } });
-    expect(documento?.status).toBe('VALIDADO');
-    expect(documento?.supplierId).toBe(ezraId);
-
-    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId } });
-    expect(pago?.plannedAmount.toString()).toBe('267880.5');
-
-    const movimientos = await prisma.purchaseMovement.findMany({
-      where: { documentId },
-      include: { product: true },
+  it('el texto tampoco la convierte en producto, ni con un artículo que se llame igual', async () => {
+    /*
+     * La otra mitad de la prueba negativa. Se carga al catálogo un artículo
+     * llamado exactamente «BOLSA GRANDE» —existe: hay bolsas que se compran
+     * para revender— y el renglón sigue sin poder aplicarse.
+     *
+     * Coincidir por el nombre alcanza para proponer y no para cargarle la
+     * compra: dos artículos pueden llamarse igual y ser cosas distintas, y de
+     * eso se trata todo este archivo.
+     */
+    const { completa } = await sembrarSinClasificarLaBolsa();
+    await prisma.product.create({
+      data: {
+        internalCode: '9999',
+        normalizedName: 'BOLSA GRANDE',
+        purchaseUnit: 'UNIT',
+        active: true,
+      },
     });
-    expect(movimientos).toHaveLength(6);
-    expect(movimientos.every((m) => m.productId !== null)).toBe(true);
-    expect(new Set(movimientos.map((m) => m.product?.internalCode))).toEqual(
-      new Set(['3101', '3102', '3103', '3104', '3105', '3106']),
+
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
+    const bolsa = previa.renglones[5];
+
+    // Ni gasto ni asociación inequívoca: sigue pidiendo una decisión.
+    expect(bolsa.gasto).toBeNull();
+    expect(bolsa.producto.estado).not.toBe('INEQUIVOCA');
+    expect(previa.sePuedeAplicar).toBe(false);
+
+    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow(
+      /no está asociado a un producto/,
     );
 
+    // Y no se movió un solo kilo de ese artículo.
+    const movimientos = await prisma.purchaseMovement.count({ where: { documentId: completa } });
+    expect(movimientos).toBe(0);
+  });
+
+  // -------------------------------------------------------------------------
+  // Aplicar: las existencias antes y después
+  // -------------------------------------------------------------------------
+
+  it('al aplicarla suben los cinco artículos en kilos y nada más', async () => {
+    const { completa } = await sembrar();
+
+    const antes = await existencias();
+    const productosAntes = await prisma.product.count();
+
+    await aplicarCompra(escenario.admin, completa);
+
+    const despues = await existencias();
+
+    // Los cinco de mercadería suben exactamente lo que dice el papel.
+    const esperado: Record<string, string> = {};
+    for (const impreso of EZRA_ARTICULOS_IMPRESOS) {
+      const plu = CATALOGO_DE_EZRA[impreso.codigo]?.plu;
+      if (plu) esperado[plu] = new Decimal(impreso.cantidad).toFixed(3);
+    }
+    for (const plu of PLU_DE_MERCADERIA) {
+      expect(antes[plu], `${plu} antes`).toBe('0.000');
+      expect(despues[plu], `${plu} después`).toBe(esperado[plu]);
+    }
+
+    // Ningún artículo nuevo, y ninguno que se llame como la bolsa.
     expect(await prisma.product.count()).toBe(productosAntes);
+    expect(Object.keys(despues)).toEqual(Object.keys(antes));
+
+    // Y ningún otro artículo se movió: el costo de la bolsa no se repartió.
+    for (const plu of Object.keys(antes)) {
+      if (PLU_DE_MERCADERIA.includes(plu)) continue;
+      expect(despues[plu], `${plu} no debía moverse`).toBe(antes[plu]);
+    }
+  });
+
+  it('la bolsa no deja movimiento de stock, y sigue en la factura y en el egreso', async () => {
+    const { completa } = await sembrar();
+    await aplicarCompra(escenario.admin, completa);
+
+    // Cinco movimientos, ninguno de la bolsa.
+    const movimientos = await prisma.purchaseMovement.findMany({
+      where: { documentId: completa },
+      include: { product: true },
+    });
+    expect(movimientos).toHaveLength(5);
+    expect(movimientos.every((m) => m.productId !== null)).toBe(true);
+    expect(movimientos.every((m) => m.unit === 'KG')).toBe(true);
+    expect(movimientos.some((m) => m.description.includes('BOLSA'))).toBe(false);
+    expect(new Set(movimientos.map((m) => m.product?.internalCode))).toEqual(
+      new Set(PLU_DE_MERCADERIA),
+    );
+
+    // Pero el renglón sigue estando, con su clasificación y su unidad.
+    const renglones = await prisma.documentItem.findMany({
+      where: { documentId: completa },
+      orderBy: { lineNumber: 'asc' },
+    });
+    expect(renglones).toHaveLength(6);
+    const bolsa = renglones[5];
+    expect(bolsa.description).toBe('BOLSA GRANDE');
+    expect(bolsa.expenseKind).toBe('EMBALAJE');
+    expect(bolsa.unit).toBe('UNIT');
+    expect(new Decimal(bolsa.quantity.toString()).toFixed(3)).toBe('3.000');
+    expect(bolsa.productId).toBeNull();
+
+    // Y el egreso cierra en el total del papel, con la bolsa adentro.
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(pago?.plannedAmount.toString()).toBe('267880.5');
+  });
+
+  it('no le deja costo a ningún artículo por la bolsa', async () => {
+    /*
+     * El costo de las bolsas no se reparte entre los productos: eso sería una
+     * decisión contable que nadie tomó. Cinco renglones asociados, cinco
+     * entradas de costo.
+     */
+    const { completa } = await sembrar();
+    await aplicarCompra(escenario.admin, completa);
+
+    expect(await prisma.costHistory.count({ where: { documentId: completa } })).toBe(5);
+  });
+
+  it('aplicar dos veces no duplica existencias ni movimientos', async () => {
+    const { completa } = await sembrar();
+    await aplicarCompra(escenario.admin, completa);
+
+    const despuesDeLaPrimera = await existencias();
+    const movimientosDeLaPrimera = await prisma.purchaseMovement.count({
+      where: { documentId: completa },
+    });
+
+    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow();
+
+    expect(await existencias()).toEqual(despuesDeLaPrimera);
+    expect(await prisma.purchaseMovement.count({ where: { documentId: completa } })).toBe(
+      movimientosDeLaPrimera,
+    );
+    expect(await prisma.paymentSchedule.count({ where: { documentId: completa } })).toBe(1);
   });
 
   it('el egreso y el stock se auditan por separado, colgando de la misma factura', async () => {
-    const { documentId } = await facturaDeEzra();
-    await aplicarCompra(escenario.admin, documentId);
+    const { completa } = await sembrar();
+    await aplicarCompra(escenario.admin, completa);
 
-    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId } });
-    const movimientos = await prisma.purchaseMovement.findMany({ where: { documentId } });
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    const movimientos = await prisma.purchaseMovement.findMany({ where: { documentId: completa } });
 
-    expect(pago?.documentId).toBe(documentId);
-    expect(movimientos.every((m) => m.documentId === documentId)).toBe(true);
-    expect(movimientos).toHaveLength(6);
-    expect(await prisma.paymentSchedule.count({ where: { documentId } })).toBe(1);
+    expect(pago?.documentId).toBe(completa);
+    expect(movimientos.every((m) => m.documentId === completa)).toBe(true);
+    expect(await prisma.paymentSchedule.count({ where: { documentId: completa } })).toBe(1);
   });
 
   // -------------------------------------------------------------------------
@@ -510,15 +601,15 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
   // -------------------------------------------------------------------------
 
   it('Ezra sigue siendo proveedor no habitual: sin condiciones ni tasas propias', async () => {
-    const { ezraId } = await facturaDeEzra();
+    const { proveedorId } = await sembrar();
 
-    expect(await prisma.supplierPaymentTerm.count({ where: { supplierId: ezraId } })).toBe(0);
-    expect(await prisma.supplierTaxRule.count({ where: { supplierId: ezraId } })).toBe(0);
+    expect(await prisma.supplierPaymentTerm.count({ where: { supplierId: proveedorId } })).toBe(0);
+    expect(await prisma.supplierTaxRule.count({ where: { supplierId: proveedorId } })).toBe(0);
   });
 
   it('sin condición configurada, la vista dice que se define al aplicar', async () => {
-    const { documentId } = await facturaDeEzra();
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+    const { completa } = await sembrar();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
     expect(previa.egreso.condicion.valor).toBeNull();
     expect(previa.egreso.condicion.procedencia).toBe('PENDIENTE');
@@ -527,18 +618,17 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
 
   it('un plazo que el proveedor no tiene configurado no se muestra', async () => {
     /*
-     * El caso que importa: el comprobante quedó con un plazo escrito y Ezra no
-     * tiene ninguno. Ese número salió de otra parte —del proveedor habitual,
-     * de un valor general— y mostrarlo sería prestarle a un proveedor nuevo las
-     * condiciones de otro. Decide cuándo sale la plata: se dice que falta.
+     * El comprobante quedó con un plazo escrito y Ezra no tiene ninguno. Ese
+     * número salió de otra parte —del proveedor habitual, de un valor general—
+     * y mostrarlo sería prestarle a un proveedor nuevo las condiciones de otro.
      */
-    const { documentId } = await facturaDeEzra();
+    const { completa } = await sembrar();
     await prisma.document.update({
-      where: { id: documentId },
+      where: { id: completa },
       data: { appliedTermType: 'DAYS', appliedTermDays: 30 },
     });
 
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
     expect(previa.egreso.condicion.valor).toBeNull();
     expect(previa.egreso.condicion.procedencia).toBe('PENDIENTE');
@@ -546,10 +636,10 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
   });
 
   it('la condición cargada en la ficha del proveedor sí se muestra, con su origen', async () => {
-    const { documentId, ezraId } = await facturaDeEzra();
+    const { completa, proveedorId } = await sembrar();
     await prisma.supplierPaymentTerm.create({
       data: {
-        supplierId: ezraId,
+        supplierId: proveedorId,
         termType: 'DAYS',
         days: 15,
         paymentMethod: 'TRANSFERENCIA',
@@ -557,7 +647,7 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
       },
     });
 
-    const previa = await vistaPreviaDeCompra(escenario.admin, documentId);
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
 
     expect(previa.egreso.condicion.valor).toBe('A 15 días');
     expect(previa.egreso.condicion.procedencia).toBe('INFERIDO');

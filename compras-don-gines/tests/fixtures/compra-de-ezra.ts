@@ -26,13 +26,14 @@ import { EZRA_ARTICULOS_IMPRESOS, EZRA_ENCABEZADO, EZRA_PIE } from './ezra';
  * transcripción columna por columna del comprobante.
  */
 
+/** El código del renglón que no es mercadería. */
+export const CODIGO_DE_LA_BOLSA = '4249';
+
 /**
  * El artículo del catálogo al que corresponde cada código de Ezra.
  *
- * Esto sí se inventa: una base de pruebas vacía no tiene catálogo. La bolsa es
- * la que importa —se compra por unidad y el comprobante no lo dice en ninguna
- * parte, porque la columna «Cantidad» imprime 3,000 igual que imprime los 4,240
- * kilos de cremoso—, así que la unidad sólo puede salir de acá.
+ * Esto sí se inventa: una base de pruebas vacía no tiene catálogo. Son los
+ * cinco de mercadería y nada más.
  */
 export const CATALOGO_DE_EZRA: Record<
   string,
@@ -43,11 +44,26 @@ export const CATALOGO_DE_EZRA: Record<
   '48': { plu: '3103', nombre: 'Queso de maquina dambo La Paulina', unidad: 'KG' },
   '10': { plu: '3104', nombre: 'Jamon cocido mini tradicional Los Calvos', unidad: 'KG' },
   '2514': { plu: '3105', nombre: 'Jamon cocido mini Il Molise', unidad: 'KG' },
-  '4249': { plu: '3106', nombre: 'Bolsa grande', unidad: 'UNIT' },
+  // El 4249 NO está: las bolsas no son un artículo del catálogo. Ver abajo.
 };
 
-/** El código del renglón que no se factura por kilo. */
-export const CODIGO_DE_LA_BOLSA = '4249';
+/**
+ * El código con el que Ezra cobra las bolsas del transporte.
+ *
+ * Son tres bolsas que el proveedor cobra para llevar la compra, no mercadería:
+ * se pagan con el resto de la factura y no entran al stock. Antes acá había un
+ * artículo inventado —«Bolsa grande», PLU 3106— y eso era el defecto: la compra
+ * terminaba moviendo tres kilos de un producto que no existe.
+ *
+ * La clasificación va atada al **código**, no al texto: si mañana el OCR lee
+ * «BOLSA GRANOE», el código sigue siendo 4249.
+ */
+export const GASTO_DE_EZRA = {
+  supplierCode: CODIGO_DE_LA_BOLSA,
+  kind: 'EMBALAJE' as const,
+  unit: 'UNIT' as const,
+  label: 'Bolsas del transporte',
+};
 
 /** Los números de comprobante de cada una de las dos. */
 export const NUMERO_COMPLETA = EZRA_ENCABEZADO.number;
@@ -66,6 +82,7 @@ export async function sembrarLaCompraDeEzra(
 ): Promise<CompraDeEzraSembrada> {
   const proveedor = await proveedorEzra(prisma);
   const productos = await productosDeEzra(prisma, proveedor.id);
+  await gastoDeEzra(prisma, proveedor.id);
 
   const completa = await facturaDeEzra(prisma, {
     ...contexto,
@@ -123,6 +140,8 @@ async function productosDeEzra(prisma: PrismaClient, proveedorId: string) {
   const productos = [];
   for (const impreso of EZRA_ARTICULOS_IMPRESOS) {
     const ficha = CATALOGO_DE_EZRA[impreso.codigo];
+    // Las bolsas no son artículo: se configuran como gasto, aparte.
+    if (!ficha) continue;
     const existente = await prisma.product.findFirst({ where: { internalCode: ficha.plu } });
     if (existente) {
       productos.push(existente);
@@ -149,6 +168,23 @@ async function productosDeEzra(prisma: PrismaClient, proveedorId: string) {
     );
   }
   return productos;
+}
+
+/**
+ * La configuración que dice que el 4249 de Ezra es un gasto, no mercadería.
+ *
+ * Es lo único que evita que tres bolsas entren como tres kilos de algo. Va
+ * atada al código y trae la unidad, porque el papel no la dice.
+ */
+async function gastoDeEzra(prisma: PrismaClient, proveedorId: string) {
+  const existente = await prisma.supplierExpenseCode.findFirst({
+    where: { supplierId: proveedorId, supplierCode: GASTO_DE_EZRA.supplierCode },
+  });
+  if (existente) return existente;
+
+  return prisma.supplierExpenseCode.create({
+    data: { supplierId: proveedorId, ...GASTO_DE_EZRA },
+  });
 }
 
 async function facturaDeEzra(

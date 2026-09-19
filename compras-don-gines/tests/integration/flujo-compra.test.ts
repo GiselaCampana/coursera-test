@@ -3332,7 +3332,9 @@ describe('la invariante que impide validar a medias', () => {
     const uno = await prisma.purchaseMovement.findFirstOrThrow({ where: { documentId } });
     await prisma.purchaseMovement.delete({ where: { id: uno.id } });
     await expect(verificarDerivados(prisma, documentId, 23, TOTAL)).rejects.toThrow(
-      /23 renglones y 22 movimientos/,
+      // El mensaje dice ahora «renglones de mercadería»: los renglones de
+      // gasto se cuentan aparte, porque no les corresponde un movimiento.
+      /23 renglones de mercadería y 22 movimientos/,
     );
   });
 
