@@ -105,12 +105,28 @@ jobs:
       - name: Vitest
         run: npm test
 
+      # Los dos pasos que siguen corren aunque Vitest haya fallado, y el `if`
+      # es deliberado.
+      #
+      # Hay una prueba de reloj —cada comprobante se reconstruye en menos de un
+      # segundo— que mide tiempo de pared y depende de la máquina: en un runner
+      # compartido raspa el presupuesto y a veces lo pasa. Encadenada como
+      # estaba, esa fluctuación dejaba la cobertura de la vista previa sin
+      # correr NI UNA VEZ, que es justamente para lo que existe esta
+      # verificación.
+      #
+      # Esto NO la pone en verde ni la esconde: si Vitest falla, el trabajo
+      # falla igual y el error sigue a la vista. Lo único que cambia es que la
+      # vista previa también se prueba, en vez de quedar saltada por el reloj
+      # de otra prueba.
       - name: Chromium
+        if: success() || failure()
         run: npx playwright install --with-deps chromium
 
       # La vista previa, en el escritorio y en el teléfono. El resto de las end
       # to end las corre la verificación de la rama de despliegue.
       - name: Playwright de la vista previa
+        if: success() || failure()
         run: |
           node scripts/preparar-e2e.mjs
           npx playwright test tests/e2e/vista-previa-compra.spec.ts
