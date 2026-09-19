@@ -47,29 +47,11 @@ function cargarEntornoDePruebas(): void {
   }
 }
 
-/**
- * La guarda, que es lo que hace que esto sea seguro de correr.
- *
- * Mira el **nombre de la base**, no la variable entera: una URL puede tener la
- * palabra «test» en el usuario o en el host y seguir apuntando a producción.
- */
-function nombreDeLaBase(url: string): string | null {
-  try {
-    return new URL(url).pathname.replace(/^\//, '') || null;
-  } catch {
-    return null;
-  }
-}
-
-function esUnaBaseDePruebas(url: string): boolean {
-  const nombre = nombreDeLaBase(url);
-  return nombre !== null && /(^|[-_])(e2e|test|demo)([-_]|$)/i.test(nombre);
-}
-
 async function main() {
   cargarEntornoDePruebas();
 
   const url = process.env.DATABASE_URL ?? '';
+  const { esUnaBaseDePruebas, nombreDeLaBase } = await import('../tests/fixtures/base-de-pruebas');
   if (!esUnaBaseDePruebas(url)) {
     /*
      * Se nombra la base que se vio, y sólo la base: decir «no es de pruebas»

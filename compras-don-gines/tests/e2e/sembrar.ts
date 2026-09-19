@@ -14,6 +14,7 @@ import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
 import { addDays, arToday } from '../../src/lib/datetime';
 import { sembrarLaCompraDeEzra } from '../fixtures/compra-de-ezra';
+import { exigirBaseDePruebas } from '../fixtures/base-de-pruebas';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 
@@ -23,6 +24,16 @@ export const CREDENCIALES = {
 };
 
 export async function sembrar() {
+  /*
+   * Antes de tocar nada: esto empieza con un TRUNCATE.
+   *
+   * La guarda no es ceremonia. Este sembrado ya no lo corre sólo una persona
+   * desde su máquina: la vista previa hospedada lo ejecuta en cada arranque,
+   * con la variable de entorno que tenga cargada el servicio. Si esa variable
+   * alguna vez apuntara a otro lado, esto vaciaría la base equivocada.
+   */
+  exigirBaseDePruebas();
+
   // El cliente se construye acá adentro, no al importar el módulo: quien llama
   // necesita poder cargar antes las variables de entorno de las pruebas.
   const prisma = new PrismaClient();
