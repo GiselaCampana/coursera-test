@@ -8,6 +8,13 @@ import { acceptReadDocument, matchItemsToProducts } from '@/lib/services/documen
 import { getSupplierConditions } from '@/lib/services/suppliers';
 import { describeTerm, type TermType } from '@/lib/domain/payments';
 import type { MatchMethod } from '@/lib/domain/matching';
+import {
+  clasificarRenglon,
+  indicePorCodigo,
+  CLASE_DE_GASTO_LABEL,
+  type ClaseDeGasto,
+  type CodigoDeGasto,
+} from '@/lib/domain/gastos';
 
 /**
  * **Qué va a pasar si se confirma esta compra, dicho antes de que pase.**
@@ -90,6 +97,19 @@ export interface RenglonDeLaVistaPrevia {
   cantidad: string;
   unidad: string;
   importe: string;
+  /**
+   * Cuando el renglón no es mercadería sino un gasto del comprobante.
+   *
+   * Null quiere decir mercadería. Con valor, el renglón se paga igual pero no
+   * mueve existencias ni necesita artículo, y la pantalla lo muestra aparte
+   * para que no se confunda con lo que entra a la heladera.
+   */
+  gasto: {
+    clase: ClaseDeGasto;
+    comoSeLlama: string;
+    /** De dónde salió la clasificación. Nunca de la descripción. */
+    porQue: string;
+  } | null;
   producto: {
     id: string | null;
     nombre: string | null;
@@ -141,6 +161,23 @@ export interface VistaPreviaDeCompra {
     }[];
     renglonesSinMovimiento: number;
   };
+  /**
+   * Lo que se paga y no entra al stock: bolsas, fletes.
+   *
+   * Va en su propia lista y no escondido entre los movimientos, porque son dos
+   * cosas distintas: una aumenta existencias y la otra no. Su importe está
+   * dentro del egreso, y no se reparte entre los artículos —eso sería una
+   * decisión contable aparte, que nadie tomó—.
+   */
+  gastos: {
+    renglon: number;
+    descripcion: string;
+    cantidad: string;
+    unidad: string;
+    importe: string;
+    comoSeLlama: string;
+    porQue: string;
+  }[];
   /** Por qué no se puede aplicar todavía. Vacío quiere decir que se puede. */
   frenos: string[];
   sePuedeAplicar: boolean;
@@ -344,10 +381,33 @@ export async function vistaPreviaDeCompra(
     : [];
   const porId = new Map(productos.map((p) => [p.id, p]));
 
+  /*
+   * Los códigos de este proveedor que no son mercadería.
+   *
+   * Se consultan acá y no se deducen de nada: un renglón es gasto porque su
+   * código está configurado como gasto, o porque alguien lo eligió. La
+   * descripción no participa.
+   */
+  const codigosDeGasto = indicePorCodigo(
+    documento.supplierId
+      ? ((await prisma.supplierExpenseCode.findMany({
+          where: { supplierId: documento.supplierId },
+          select: { supplierCode: true, kind: true, unit: true, label: true },
+        })) as unknown as CodigoDeGasto[])
+      : [],
+  );
+
   const renglones: RenglonDeLaVistaPrevia[] = documento.items.map((item, indice) => {
+    const clasificacion = clasificarRenglon(
+      { expenseKind: item.expenseKind as ClaseDeGasto | null, supplierCode: item.supplierCode },
+      codigosDeGasto,
+    );
+    const esGasto = clasificacion.kind !== null;
+
     const reconocido = reconocidos[indice];
     const elegidoAMano = item.productId !== null;
-    const productoId = item.productId ?? reconocido?.productId ?? null;
+    // Un gasto no lleva artículo, ni siquiera el que el reconocimiento proponga.
+    const productoId = esGasto ? null : (item.productId ?? reconocido?.productId ?? null);
     const metodo: MatchMethod = elegidoAMano
       ? ((item.matchMethod as MatchMethod) || 'MANUAL')
       : (reconocido?.method ?? 'NONE');
@@ -359,8 +419,23 @@ export async function vistaPreviaDeCompra(
       codigoDelProveedor: item.supplierCode,
       descripcion: item.description,
       cantidad: new Decimal(item.quantity.toString()).toFixed(3),
-      unidad: UNIDADES[item.unit] ?? item.unit,
+      /*
+       * La unidad de un gasto sale de su configuración; la del renglón viene
+       * de la lectura, que en esta factura trae todo en kilos porque el papel
+       * no distingue tres bolsas de tres kilos de queso.
+       */
+      unidad: UNIDADES[clasificacion.unit ?? item.unit] ?? item.unit,
       importe: comoTexto(new Decimal(item.totalCost.toString())) ?? '0.00',
+      gasto: esGasto
+        ? {
+            clase: clasificacion.kind!,
+            comoSeLlama: clasificacion.label ?? CLASE_DE_GASTO_LABEL[clasificacion.kind!],
+            porQue:
+              clasificacion.origen === 'ELEGIDO_A_MANO'
+                ? 'Lo clasificó una persona en este comprobante.'
+                : 'El código de este proveedor está configurado como gasto, no como mercadería.',
+          }
+        : null,
       producto: {
         id: productoId,
         nombre: producto?.normalizedName ?? null,
@@ -434,7 +509,12 @@ export async function vistaPreviaDeCompra(
   };
 
   // --- El movimiento de mercadería ---------------------------------------
-  const conProducto = renglones.filter((r) => r.producto.estado === 'INEQUIVOCA');
+  /*
+   * Sólo la mercadería mueve existencias. Los gastos se listan aparte, más
+   * abajo: se pagan igual, pero no hay tres bolsas más en la heladera.
+   */
+  const mercaderia = renglones.filter((r) => r.gasto === null);
+  const conProducto = mercaderia.filter((r) => r.producto.estado === 'INEQUIVOCA');
   const stock = {
     movimientos: conProducto.map((r) => {
       const unidad = r.producto.unidadDelCatalogo ?? r.unidad;
@@ -452,11 +532,27 @@ export async function vistaPreviaDeCompra(
               'donde ya está decidido cómo se compra este artículo.',
       };
     }),
-    renglonesSinMovimiento: renglones.length - conProducto.length,
+    renglonesSinMovimiento: mercaderia.length - conProducto.length,
   };
 
+  const gastos = renglones
+    .filter((r) => r.gasto !== null)
+    .map((r) => ({
+      renglon: r.numero,
+      descripcion: r.descripcion,
+      cantidad: r.cantidad,
+      unidad: r.unidad,
+      importe: r.importe,
+      comoSeLlama: r.gasto!.comoSeLlama,
+      porQue: r.gasto!.porQue,
+    }));
+
   // --- Lo que frena la aplicación -----------------------------------------
-  const frenos = frenosDeLaCompra({ emisorElegido: emisor.proveedorId !== null, renglones, total });
+  const frenos = frenosDeLaCompra({
+    emisorElegido: emisor.proveedorId !== null,
+    renglones: renglones.map((r) => ({ ...r, esGasto: r.gasto !== null })),
+    total,
+  });
 
   return {
     documentId: documento.id,
@@ -467,6 +563,7 @@ export async function vistaPreviaDeCompra(
     pieFiscal,
     egreso,
     stock,
+    gastos,
     frenos,
     sePuedeAplicar: frenos.length === 0 && documento.status !== 'VALIDADO',
   };
@@ -481,7 +578,13 @@ export async function vistaPreviaDeCompra(
  */
 export function frenosDeLaCompra(entrada: {
   emisorElegido: boolean;
-  renglones: { numero: number; descripcion: string; producto: { estado: EstadoDeAsociacion } }[];
+  renglones: {
+    numero: number;
+    descripcion: string;
+    /** Un gasto del comprobante no necesita artículo para poder aplicarse. */
+    esGasto: boolean;
+    producto: { estado: EstadoDeAsociacion };
+  }[];
   total: ValorConProcedencia;
 }): string[] {
   const frenos: string[] = [];
@@ -490,7 +593,17 @@ export function frenosDeLaCompra(entrada: {
     frenos.push('Falta elegir el proveedor del comprobante.');
   }
 
-  const sinAsociar = entrada.renglones.filter((r) => r.producto.estado !== 'INEQUIVOCA');
+  /*
+   * Un gasto no exige artículo, y por eso no frena.
+   *
+   * Es el punto de todo esto: las tres bolsas de Ezra dejaban la compra
+   * bloqueada pidiendo que alguien eligiera a qué producto del catálogo
+   * pertenecían, y no pertenecen a ninguno. Clasificado como gasto, el renglón
+   * está resuelto: se paga y no entra al stock.
+   */
+  const sinAsociar = entrada.renglones.filter(
+    (r) => !r.esGasto && r.producto.estado !== 'INEQUIVOCA',
+  );
   for (const renglon of sinAsociar) {
     frenos.push(
       `El renglón ${renglon.numero} («${renglon.descripcion}») no está asociado a un producto ` +

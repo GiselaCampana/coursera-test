@@ -62,13 +62,14 @@ model User {
   updatedAt          DateTime  @updatedAt
 
   sessions           Session[]
-  documentsCreated   Document[]         @relation("DocumentCreatedBy")
-  documentsValidated Document[]         @relation("DocumentValidatedBy")
-  documentsVoided    Document[]         @relation("DocumentVoidedBy")
+  documentsCreated   Document[]            @relation("DocumentCreatedBy")
+  expenseCodes       SupplierExpenseCode[] @relation("ExpenseCodeCreatedBy")
+  documentsValidated Document[]            @relation("DocumentValidatedBy")
+  documentsVoided    Document[]            @relation("DocumentVoidedBy")
   paymentEvents      PaymentEvent[]
   auditLogs          AuditLog[]
   salePricesApproved SalePriceHistory[]
-  archivosArchivados DocumentFile[]     @relation("ArchivosArchivados")
+  archivosArchivados DocumentFile[]        @relation("ArchivosArchivados")
 
   @@index([roleId])
   @@index([branchId])
@@ -147,6 +148,8 @@ model Supplier {
   aliases           SupplierAlias[]
   paymentTerms      SupplierPaymentTerm[]
   taxRules          SupplierTaxRule[]
+  /// Los códigos de este proveedor que no son mercadería sino gasto.
+  expenseCodes      SupplierExpenseCode[]
   documents         Document[]
   products          Product[]
   productAliases    ProductAlias[]
@@ -674,9 +677,62 @@ model DocumentItem {
   /// Confianza por campo devuelta por el OCR.
   confidence  Json?
 
+  /// Qué clase de gasto es este renglón, cuando no es mercadería.
+  ///
+  /// Null quiere decir mercadería: entra al stock y necesita un artículo. Con
+  /// un valor, el renglón es un **gasto del comprobante** —las bolsas que el
+  /// proveedor cobra para transportar la compra, un flete— y entonces se paga
+  /// como todo lo demás pero **no mueve existencias, no crea artículos y no
+  /// exige asociación**.
+  ///
+  /// No se deduce de la descripción. Sale de una configuración explícita
+  /// atada al código del proveedor, o de que una persona lo haya elegido: un
+  /// renglón que diga "BOLSA GRANDE" y no esté configurado sigue siendo
+  /// mercadería sin asociar, y frena la compra hasta que alguien decida.
+  expenseKind ExpenseKind?
+
   @@unique([documentId, lineNumber])
   @@index([productId])
   @@map("document_items")
+}
+
+/// Las clases de gasto que un comprobante puede traer además de mercadería.
+enum ExpenseKind {
+  /// Bolsas, cajones, film: lo que envuelve la compra y el proveedor cobra.
+  EMBALAJE
+  FLETE
+  OTRO
+}
+
+/// Un código de este proveedor que **no** es mercadería.
+///
+/// Es la configuración explícita que convierte un renglón en gasto, y está
+/// atada al código —una identificación— y no a la descripción, que es texto y
+/// cambia con cada lectura. El día que Ezra cobre la bolsa con otro nombre, el
+/// código sigue siendo 4249 y el renglón sigue clasificado; el día que otro
+/// proveedor venda un artículo que se llame parecido, no se confunde.
+///
+/// Lleva su propia unidad porque el papel no la dice: la columna «Cantidad»
+/// imprime 3,000 para tres bolsas igual que imprime 4,240 para kilos de queso.
+model SupplierExpenseCode {
+  id           String       @id @default(cuid())
+  supplierId   String
+  supplier     Supplier     @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  /// El código tal como lo imprime el proveedor.
+  supplierCode String
+  kind         ExpenseKind  @default(EMBALAJE)
+  /// Cómo lo cobra: bolsas por unidad, flete por unidad, hielo por kilo.
+  unit         PurchaseUnit @default(UNIT)
+  /// Cómo nombrarlo en pantalla, para no depender de lo que leyó el OCR.
+  label        String
+  note         String?
+
+  createdAt   DateTime @default(now())
+  createdById String?
+  createdBy   User?    @relation("ExpenseCodeCreatedBy", fields: [createdById], references: [id])
+
+  @@unique([supplierId, supplierCode])
+  @@map("supplier_expense_codes")
 }
 
 // ---------------------------------------------------------------------------

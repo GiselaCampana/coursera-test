@@ -159,15 +159,26 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
                   </td>
                   <td className="num">{formatARS(renglon.importe)}</td>
                   <td>
+                    {/*
+                      Un gasto no está «sin asociar»: está resuelto de otra
+                      manera. Mostrarlo en rojo como si le faltara un artículo
+                      mandaría a buscar algo que no existe.
+                    */}
                     <span
                       className={`etiqueta-estado ${
-                        renglon.producto.estado === 'INEQUIVOCA' ? 'estado-ok' : 'estado-error'
+                        renglon.gasto
+                          ? 'estado-info'
+                          : renglon.producto.estado === 'INEQUIVOCA'
+                            ? 'estado-ok'
+                            : 'estado-error'
                       }`}
                     >
-                      {renglon.producto.nombre ?? 'sin asociar'}
+                      {renglon.gasto
+                        ? `${renglon.gasto.comoSeLlama} · sin impacto en stock`
+                        : (renglon.producto.nombre ?? 'sin asociar')}
                     </span>
                     <div className="chico suave" style={{ marginTop: 4 }}>
-                      {renglon.producto.porQue}
+                      {renglon.gasto ? renglon.gasto.porQue : renglon.producto.porQue}
                     </div>
                   </td>
                 </tr>
@@ -249,6 +260,33 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
               {previa.stock.renglonesSinMovimiento} renglón/es no moverían nada porque no están
               asociados de forma inequívoca.
             </p>
+          )}
+
+          {/*
+            Los gastos, en el mismo recuadro del stock y claramente separados.
+            Van acá porque la pregunta que contestan es la misma —¿qué entra a
+            la heladera?— y la respuesta es «esto no».
+          */}
+          {previa.gastos.length > 0 && (
+            <>
+              <h3 style={{ marginTop: 14 }}>Sin impacto en stock</h3>
+              <p className="ayuda">
+                Se paga con la factura y no mueve existencias. Su costo no se reparte entre los
+                artículos: eso sería una decisión contable aparte.
+              </p>
+              <ul className="lista-simple">
+                {previa.gastos.map((gasto) => (
+                  <li key={gasto.renglon}>
+                    <strong>{gasto.descripcion}</strong>
+                    <div className="chico suave">
+                      {formatQty(gasto.cantidad, 3)} {gasto.unidad} · {formatARS(gasto.importe)} ·{' '}
+                      {gasto.comoSeLlama}
+                    </div>
+                    <div className="chico suave">{gasto.porQue}</div>
+                  </li>
+                ))}
+              </ul>
+            </>
           )}
         </section>
       </div>

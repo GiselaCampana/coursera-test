@@ -14,6 +14,12 @@ import {
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
 import { computeDueDate, computePaymentStatus, esFechaProvisoria } from '@/lib/domain/payments';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
+import {
+  clasificarRenglon,
+  indicePorCodigo,
+  type ClaseDeGasto,
+  type CodigoDeGasto,
+} from '@/lib/domain/gastos';
 import { buildDocumentKey, getStorage } from '@/lib/storage';
 import { normalizeUpload } from '@/lib/images';
 import { env } from '@/lib/env';
@@ -392,6 +398,13 @@ export interface ConfirmItemInput extends RawItem {
   matchMethod?: string | null;
   /** Si el usuario asoció la descripción a mano, se aprende como alias. */
   learnAlias?: boolean;
+  /**
+   * El renglón no es mercadería sino un gasto del comprobante.
+   *
+   * Lo elige una persona en la revisión. Cuando no viene, se resuelve con los
+   * códigos de gasto configurados para el proveedor; nunca por la descripción.
+   */
+  expenseKind?: ClaseDeGasto | null;
 }
 
 export interface ConfirmDocumentInput {
@@ -619,7 +632,32 @@ export async function confirmDocument(
    * renglón queda sin asociar para que lo resuelva una persona.
    */
   const reconocidos = await matchItemsToProducts(costed, supplier.id);
+
+  /*
+   * Qué renglones no son mercadería.
+   *
+   * Se resuelve antes de escribir nada y con los códigos configurados de ESTE
+   * proveedor. Un gasto no lleva artículo aunque el reconocimiento le encuentre
+   * uno parecido: es la clasificación la que manda, no el parecido.
+   */
+  const codigosDeGasto = indicePorCodigo(
+    (
+      await prisma.supplierExpenseCode.findMany({
+        where: { supplierId: supplier.id },
+        select: { supplierCode: true, kind: true, unit: true, label: true },
+      })
+    ).map((c) => c as unknown as CodigoDeGasto),
+  );
+  const gastoDeCadaRenglon = renglonesNormalizados.map((source) =>
+    clasificarRenglon(
+      { expenseKind: source.expenseKind ?? null, supplierCode: source.supplierCode },
+      codigosDeGasto,
+    ),
+  );
+
   const productoDeCadaRenglon = renglonesNormalizados.map((source, i) => {
+    // Un gasto no tiene artículo, y no se le busca uno.
+    if (gastoDeCadaRenglon[i].kind) return null;
     if (source.productId) return source.productId;
     const reconocido = reconocidos[i];
     return reconocido && reconocido.productId ? reconocido.productId : null;
@@ -679,8 +717,17 @@ export async function confirmDocument(
           data: {
             documentId: document.id,
             ...itemToColumns(item),
+            /*
+             * La unidad de un gasto sale de su configuración, no del papel.
+             *
+             * La columna «Cantidad» de Ezra imprime 3,000 para tres bolsas
+             * igual que imprime 4,240 para kilos de queso, así que la lectura
+             * las trae todas en kilos. Tres bolsas no son tres kilos.
+             */
+            ...(gastoDeCadaRenglon[i].unit ? { unit: gastoDeCadaRenglon[i].unit! } : {}),
             productId: productoDeCadaRenglon[i],
             matchMethod: metodoDeCadaRenglon[i],
+            expenseKind: gastoDeCadaRenglon[i].kind,
           },
         }),
       );
@@ -715,6 +762,16 @@ export async function confirmDocument(
       // no pueden discrepar, porque el reporte mira el movimiento y la pantalla
       // del comprobante mira el renglón.
       const productId = productoDeCadaRenglon[i];
+
+      /*
+       * Un gasto no mueve mercadería, así que no deja movimiento de compra.
+       *
+       * Su importe no se pierde: sigue dentro del total del comprobante y de
+       * lo que se le debe al proveedor. Tampoco se reparte entre los artículos
+       * —eso sería una decisión contable que nadie tomó— así que el costo de
+       * los cinco productos queda exactamente como si la bolsa no estuviera.
+       */
+      if (gastoDeCadaRenglon[i].kind) continue;
 
       await tx.purchaseMovement.create({
         data: {
@@ -972,21 +1029,38 @@ export async function verificarDerivados(
 
   const renglones = await tx.documentItem.findMany({
     where: { documentId },
-    select: { id: true, productId: true },
+    select: { id: true, productId: true, expenseKind: true, totalCost: true },
   });
   if (renglones.length !== renglonesEsperados) {
     falla(`se esperaban ${renglonesEsperados} renglones y quedaron ${renglones.length}`);
   }
 
-  // 1. Un movimiento de compra por renglón: es lo que lee Compras.
+  /*
+   * Los renglones que son gasto —las bolsas, un flete— se cuentan aparte.
+   *
+   * Se pagan igual y están en el comprobante, pero no mueven mercadería, así
+   * que no les corresponde un movimiento de compra. Contarlos con los demás
+   * haría fallar una factura correcta.
+   */
+  const mercaderia = renglones.filter((r) => r.expenseKind === null);
+  const gastos = renglones.filter((r) => r.expenseKind !== null);
+
+  // 1. Un movimiento de compra por renglón de mercadería: es lo que lee Compras.
   const movimientos = await tx.purchaseMovement.findMany({
     where: { documentId },
     select: { documentItemId: true, productId: true, totalCost: true },
   });
-  if (movimientos.length !== renglones.length) {
+  if (movimientos.length !== mercaderia.length) {
     falla(
-      `hay ${renglones.length} renglones y ${movimientos.length} movimientos de compra`,
+      `hay ${mercaderia.length} renglones de mercadería y ${movimientos.length} ` +
+        'movimientos de compra',
     );
+  }
+
+  // 1 bis. Y ninguno de esos movimientos puede ser de un renglón de gasto.
+  const esGasto = new Set(gastos.map((r) => r.id));
+  if (movimientos.some((m) => esGasto.has(m.documentItemId ?? ''))) {
+    falla('un renglón clasificado como gasto dejó un movimiento de mercadería');
   }
 
   // 2. Y el producto de cada movimiento es el de su renglón: el reporte mira el
@@ -1002,7 +1076,7 @@ export async function verificarDerivados(
 
   // 3. Historial de costos para todo lo que quedó asociado: es lo que lee
   //    Precios. Sin esto el artículo existe y no tiene costo.
-  const asociados = esperado.costosEsperados ?? renglones.filter((r) => r.productId).length;
+  const asociados = esperado.costosEsperados ?? mercaderia.filter((r) => r.productId).length;
   const costos = await tx.costHistory.count({ where: { documentId } });
   if (costos !== asociados) {
     falla(`se esperaban ${asociados} entradas de costo y quedaron ${costos}`);
@@ -1029,13 +1103,20 @@ export async function verificarDerivados(
    * El reparto de impuestos entre artículos deja un residuo de centavos que se
    * asigna de forma determinística, así que la tolerancia es de un peso.
    */
-  const suma = movimientos.reduce(
-    (acc, m) => acc.plus(toDecimal(m.totalCost.toString())),
-    new Decimal(0),
-  );
+  const suma = movimientos
+    .reduce((acc, m) => acc.plus(toDecimal(m.totalCost.toString())), new Decimal(0))
+    /*
+     * Los gastos entran en esta suma aunque no tengan movimiento.
+     *
+     * Es la comprobación que sostiene la promesa: lo que se le debe al
+     * proveedor es la mercadería **más** las bolsas. Sumar sólo los movimientos
+     * dejaría pasar un gasto que se perdió por el camino, que es plata que
+     * alguien facturó y nadie va a pagar.
+     */
+    .plus(gastos.reduce((acc, r) => acc.plus(toDecimal(r.totalCost.toString())), new Decimal(0)));
   if (suma.minus(totalDelComprobante).abs().gt(1)) {
     falla(
-      `los movimientos suman ${suma.toFixed(2)} y el comprobante es de ` +
+      `los movimientos y los gastos suman ${suma.toFixed(2)} y el comprobante es de ` +
         `${totalDelComprobante.toFixed(2)}`,
     );
   }
