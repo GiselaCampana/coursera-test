@@ -90,6 +90,18 @@ export function apoyo(observacion: Observacion): number {
 
 const PISO_DE_APOYO = 0.05;
 
+/**
+ * ¿Está este texto escrito como un número, y nada más que como un número?
+ *
+ * Dígitos y separadores, con al menos un dígito. Es lo que permite decir que a
+ * una lectura «le falta la cola»: en un número, lo que sigue son más dígitos y
+ * no puede ser otra cosa.
+ */
+function esUnNumeroEscrito(texto: string): boolean {
+  const limpio = texto.trim();
+  return /^[\d.,]+$/.test(limpio) && /\d/.test(limpio);
+}
+
 export function mejorLectura(observacion: Observacion): Lectura {
   /*
    * Gana la lectura con más apoyo, y el apoyo es confianza más acuerdo.
@@ -103,9 +115,49 @@ export function mejorLectura(observacion: Observacion): Lectura {
   for (const lectura of observacion.lecturas) {
     puntajes.set(lectura.texto, (puntajes.get(lectura.texto) ?? 0) + lectura.confianza);
   }
+
+  /*
+   * Y una lectura **truncada no compite**: le falta un pedazo, no dice otra cosa.
+   *
+   * «3.362,» es «3.362,66» con los centavos comidos, y sumar su confianza como
+   * si fuera una lectura distinta cuenta la mutilación a favor de ella misma.
+   * Sobre una factura del lote eso ganaba la celda con dos pasadas que habían
+   * leído «3.362,» —0,94 y 0,95— contra las dos que leyeron el número entero, y
+   * el importe verdadero quedaba de alternativa. Después una tolerancia
+   * aritmética de un centavo lo daba por bueno igual, que es exactamente la
+   * manera de convertir una lectura mala en un valor confirmado.
+   *
+   * Se pide **prefijo estricto**: no que se parezca, sino que el texto entero
+   * esté al principio de otro de la misma celda. Y su apoyo no se le regala a
+   * nadie: si dos lecturas la extienden, la truncada no dice cuál de las dos es.
+   *
+   * Y sólo entre **números**. En un número la cola que falta es una cola de
+   * dígitos y no hay nada más que pueda ser; en una descripción, lo que viene
+   * después puede ser basura pegada, y preferir la larga por larga metía en el
+   * renglón un «ALMA MORA RESERVA MALBEC (6) de.» con la cola de la línea de
+   * abajo. Ahí la lectura corta no está truncada: está limpia.
+   */
+  const textos = [...puntajes.keys()];
+  const truncadas = new Set(
+    textos.filter(
+      (texto) =>
+        esUnNumeroEscrito(texto) &&
+        textos.some(
+          (otro) => otro !== texto && esUnNumeroEscrito(otro) && otro.startsWith(texto),
+        ),
+    ),
+  );
+
+  /*
+   * Nunca quedan todas afuera: el texto más largo de la celda no es prefijo de
+   * ninguno, así que siempre sobrevive al menos uno. Una celda que el OCR leyó
+   * a medias en todas sus pasadas se queda con la lectura **más completa** que
+   * alguna haya alcanzado, y lo que falte lo resuelve quien mire el número.
+   */
   let mejor = observacion.lecturas[0];
   let mejorPuntaje = -1;
   for (const lectura of observacion.lecturas) {
+    if (truncadas.has(lectura.texto)) continue;
     const puntaje = puntajes.get(lectura.texto)!;
     if (puntaje > mejorPuntaje) {
       mejorPuntaje = puntaje;
