@@ -884,6 +884,35 @@ export function asignarSemantica(
         detalle: 'Es texto con una columna de códigos inmediatamente a la izquierda.',
       });
     }
+    /*
+     * Y la simétrica, que faltaba: **lo que está pegado a la izquierda de la
+     * descripción y tiene forma de código, es el código**.
+     *
+     * La vecindad ya se usaba en un solo sentido —el texto se apoyaba en el
+     * código de al lado— y el código no se apoyaba en nada. Sobre una factura
+     * del lote eso costaba los siete códigos del comprobante: la columna ganaba
+     * con «codigo» y se quedaba en 0,615 contra un umbral de 0,70, porque tenía
+     * exactamente dos evidencias —su forma y su lugar— y ninguna tercera. Los
+     * números estaban leídos, en su columna, con confianza alta, y el campo
+     * salía vacío.
+     *
+     * Es la misma evidencia geométrica que la otra mitad y vale lo mismo: dos
+     * columnas contiguas donde una es texto corrido y la otra son números
+     * cortos sin decimales son, en cualquier factura, la descripción y su
+     * código. No mira el contenido de nadie: mira quién está al lado de quién.
+     */
+    if (
+      propio.fracciones.codigo >= PREDOMINIO &&
+      derecha &&
+      derecha.fracciones.texto >= PREDOMINIO
+    ) {
+      porColumna[i].push({
+        familia: 'vecindad',
+        campo: 'codigo',
+        peso: 0.25,
+        detalle: 'Son números cortos con la columna de la descripción inmediatamente a la derecha.',
+      });
+    }
   });
 
   // --- 7. Las igualdades que la tabla hace cerrar --------------------------

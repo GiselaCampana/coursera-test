@@ -481,3 +481,97 @@ describe('cómo se clasifica lo que hay en una celda', () => {
     expect(formas.texto).toBe(true);
   });
 });
+
+// ---------------------------------------------------------------------------
+// La vecindad, en sus dos sentidos
+// ---------------------------------------------------------------------------
+
+describe('el código se apoya en la descripción de al lado, y no sólo al revés', () => {
+  /**
+   * Una tabla sin ningún encabezado legible: lo único que queda es la forma de
+   * lo que hay debajo y dónde está cada columna respecto de las otras. Es el
+   * caso real de una foto con el encabezado quemado por el flash.
+   */
+  function sinEncabezados(): ContenidoDeColumna[] {
+    return [
+      columna(null, ['113', '141', '121', '112'], 0.06, 0.09),
+      columna(
+        null,
+        ['YOGUR NATURAL', 'BATIDO FRUTOS', 'BATIDO ENTERO', 'YOGUR FRAMBUESA'],
+        0.18,
+        0.38,
+      ),
+      columna(null, ['6,000', '2,000', '5,000', '4,000'], 0.62, 0.68),
+      columna(null, ['1.681,33', '1.681,33', '1.681,33', '1.799,35'], 0.72, 0.78),
+      columna(null, ['10.087,98', '3.362,66', '8.406,65', '7.197,40'], 0.88, 0.94),
+    ];
+  }
+
+  it('reconoce la columna de códigos por su forma y su vecina', () => {
+    /*
+     * Sin esta evidencia la columna gana con «codigo» y se queda corta contra el
+     * umbral: tiene su forma y su lugar, y ninguna tercera. Sobre una factura del
+     * lote eso costaba los siete códigos del comprobante, con los números leídos,
+     * en su columna y con confianza alta.
+     */
+    const asignadas = asignarSemantica(sinEncabezados());
+    expect(asignadas[0].campo).toBe('codigo');
+  });
+
+  it('y la deja para confirmar, porque la dedujo del contenido', () => {
+    const asignadas = asignarSemantica(sinEncabezados());
+    expect(asignadas[0].origen).toBe('INFERRED_FROM_CONTENT');
+    expect(asignadas[0].requiereConfirmacion).toBe(true);
+  });
+
+  it('la sostienen tres familias, ninguna sola alcanza', () => {
+    const asignadas = asignarSemantica(sinEncabezados());
+    const familias = new Set(
+      asignadas[0].evidencias.filter((e) => e.campo === 'codigo').map((e) => e.familia),
+    );
+    expect(familias).toContain('contenido');
+    expect(familias).toContain('posicion');
+    expect(familias).toContain('vecindad');
+  });
+
+  it('no llama código a una columna con decimales aunque esté al lado del texto', () => {
+    /*
+     * Es la mitad que protege: una cantidad impresa «6,000» a la izquierda de la
+     * descripción no es un código. La forma de código es un entero corto y sin
+     * separadores, y eso se pide antes que la vecindad.
+     */
+    const conCantidadPrimero = [
+      columna(null, ['6,000', '2,000', '5,000', '4,000'], 0.06, 0.12),
+      columna(
+        null,
+        ['YOGUR NATURAL', 'BATIDO FRUTOS', 'BATIDO ENTERO', 'YOGUR FRAMBUESA'],
+        0.18,
+        0.38,
+      ),
+      columna(null, ['1.681,33', '1.681,33', '1.681,33', '1.799,35'], 0.72, 0.78),
+      columna(null, ['10.087,98', '3.362,66', '8.406,65', '7.197,40'], 0.88, 0.94),
+    ];
+    const asignadas = asignarSemantica(conCantidadPrimero);
+    expect(asignadas[0].campo).not.toBe('codigo');
+    // Y no recibe siquiera la evidencia: estar al lado del texto no la hace código.
+    const familias = new Set(
+      asignadas[0].evidencias.filter((e) => e.campo === 'codigo').map((e) => e.familia),
+    );
+    expect(familias).not.toContain('vecindad');
+  });
+
+  it('ni a una columna de números que no tiene una descripción a la derecha', () => {
+    // Dos columnas numéricas seguidas: la vecindad no dice nada y no se inventa.
+    const sinDescripcionAlLado = [
+      columna(null, ['113', '141', '121', '112'], 0.06, 0.09),
+      columna(null, ['6', '2', '5', '4'], 0.12, 0.16),
+      columna(null, ['10.087,98', '3.362,66', '8.406,65', '7.197,40'], 0.88, 0.94),
+    ];
+    const familias = new Set(
+      asignarSemantica(sinDescripcionAlLado)[0]
+        .evidencias.filter((e) => e.campo === 'codigo')
+        .map((e) => e.familia),
+    );
+    expect(familias).not.toContain('vecindad');
+  });
+});
