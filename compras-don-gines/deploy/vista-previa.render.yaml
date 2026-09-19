@@ -1,0 +1,69 @@
+# Receta para levantar la vista previa hospedada, aislada de producción.
+#
+# NO se aplica solo. Render lee blueprints de un `render.yaml` en la raíz del
+# repositorio; éste vive acá, con otro nombre, justamente para que no lo tome
+# por su cuenta y para que no pueda tocar el servicio de producción. Para
+# usarlo hay que copiarlo a la raíz a propósito, o cargar los mismos valores a
+# mano en el panel.
+#
+# Lo que levanta es un servicio nuevo y una base nueva. No comparte nada con
+# producción: ni la base, ni el almacenamiento, ni las credenciales. Los datos
+# son los inventados del sembrado de pruebas, con la factura de Ezra cargada
+# para poder recorrer la pantalla.
+#
+# ANTES DE APLICARLO, dos cosas que hay que mirar en el panel:
+#
+#  1. que los planes declarados abajo estén disponibles sin cargo en la cuenta.
+#     Si Render pide contratar o ampliar un plan, el despliegue falla en vez de
+#     cobrar, pero conviene verlo antes;
+#  2. que la URL que queda es pública: cualquiera que la tenga entra con el
+#     usuario de demostración. Por eso no lleva un solo dato real.
+
+databases:
+  # El nombre tiene que contener "demo", "test" o "e2e": es lo que mira la
+  # guarda del sembrador antes de escribir una sola fila.
+  - name: compras-demo-db
+    databaseName: compras_demo
+    plan: free
+
+services:
+  - type: web
+    name: compras-vista-previa-demo
+    runtime: node
+    plan: free
+    branch: motor-general-facturas
+    rootDir: compras-don-gines
+    buildCommand: npm ci && npm run build
+    # Migrar, sembrar los datos inventados y arrancar. El sembrado corre en
+    # cada arranque a propósito: es una demostración, y conviene que vuelva
+    # sola al estado conocido después de que alguien aplique la compra.
+    startCommand: >-
+      npx prisma migrate deploy &&
+      npx tsx tests/e2e/sembrar.ts &&
+      npx next start -p $PORT
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: compras-demo-db
+          property: connectionString
+      - key: AUTH_PROVIDER
+        value: local
+      - key: STORAGE_DRIVER
+        value: local
+      - key: STORAGE_LOCAL_DIR
+        value: ./.storage-demo
+      # La genera Render y no sale del panel: no se escribe en el repositorio.
+      - key: STORAGE_SIGNING_SECRET
+        generateValue: true
+      - key: NODE_VERSION
+        value: '20'
+      # La URL propia del servicio, que Render conoce y la aplicación usa para
+      # armar enlaces. Sin esto cae en localhost, que desde el teléfono no
+      # lleva a ninguna parte.
+      - key: APP_URL
+        fromService:
+          type: web
+          name: compras-vista-previa-demo
+          envVarKey: RENDER_EXTERNAL_URL
+    # Sin ninguna de las variables de producción: ni las de Control de Stock,
+    # ni la del endpoint de precios. Esta instancia no habla con nadie.
