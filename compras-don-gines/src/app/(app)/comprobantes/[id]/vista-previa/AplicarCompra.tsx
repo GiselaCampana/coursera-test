@@ -44,21 +44,25 @@ export function AplicarCompra({
   }
 
   return (
-    <div className="space-y-2">
-      <button
-        type="button"
-        onClick={aplicar}
-        disabled={!sePuedeAplicar || aplicando}
-        className="rounded bg-slate-900 px-4 py-2 text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-      >
-        {aplicando ? 'Aplicando…' : 'Aplicar la compra'}
-      </button>
+    <div>
+      <div className="acciones">
+        <button
+          type="button"
+          onClick={aplicar}
+          disabled={!sePuedeAplicar || aplicando}
+          className="boton"
+        >
+          {aplicando ? 'Aplicando…' : 'Aplicar la compra'}
+        </button>
+      </div>
       {!sePuedeAplicar && (
-        <p className="text-sm text-slate-600">
-          Resolvé lo de arriba y volvé a abrir esta pantalla.
+        <p className="ayuda">Resolvé lo de arriba y volvé a abrir esta pantalla.</p>
+      )}
+      {error && (
+        <p className="mensaje mensaje-error" role="alert">
+          {error}
         </p>
       )}
-      {error && <p className="text-sm text-rose-800">{error}</p>}
     </div>
   );
 }

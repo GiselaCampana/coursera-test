@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db';
 import { Decimal } from '@/lib/money';
+import { formatDateAr } from '@/lib/datetime';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { NotFoundError, ValidationError } from '@/lib/errors';
@@ -245,7 +246,7 @@ export async function vistaPreviaDeCompra(
     },
     {
       etiqueta: 'Fecha de emisión',
-      valor: documento.issueDate ? documento.issueDate.toISOString().slice(0, 10) : null,
+      valor: documento.issueDate ? formatDateAr(documento.issueDate) : null,
       procedencia: documento.issueDate ? 'LEIDO' : 'PENDIENTE',
       detalle: documento.issueDate ? 'Leída del comprobante.' : 'Falta la fecha.',
     },
@@ -343,7 +344,7 @@ export async function vistaPreviaDeCompra(
   const egreso = {
     total,
     vencimiento: documento.paymentSchedule?.dueDate
-      ? documento.paymentSchedule.dueDate.toISOString().slice(0, 10)
+      ? formatDateAr(documento.paymentSchedule.dueDate)
       : null,
     condicion: documento.appliedTermDays != null ? `${documento.appliedTermDays} días` : null,
     yaAgendado: documento.paymentSchedule !== null,
