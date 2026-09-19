@@ -72,14 +72,24 @@ test.describe('la vista previa de la compra', () => {
      * Se pagan con la factura y no entran al stock, así que tienen que verse
      * —en unidades, no en kilos— y verse APARTE de la mercadería.
      */
-    await expect(page.getByText('BOLSA GRANDE').first()).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Sin impacto en stock' })).toBeVisible();
-    await expect(page.getByText('3,000 unidades')).toBeVisible();
-    await expect(page.getByText('Bolsas del transporte').first()).toBeVisible();
+    // En la tabla: el renglón está, en unidades, y dicho que no mueve stock.
+    const renglonDeLaBolsa = page.locator('tbody tr', { hasText: 'BOLSA GRANDE' });
+    await expect(renglonDeLaBolsa).toHaveCount(1);
+    await expect(renglonDeLaBolsa).toContainText('3,000 unidades');
+    await expect(renglonDeLaBolsa).toContainText('sin impacto en stock');
 
-    // Y la mercadería son cinco, no seis.
-    const mercaderia = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
-    await expect(mercaderia.locator('ul.lista-simple').first().locator('li')).toHaveCount(5);
+    // Y en el recuadro del stock, en su propia lista y no entre la mercadería.
+    const recuadroDeStock = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
+    await expect(
+      recuadroDeStock.getByRole('heading', { name: 'Sin impacto en stock' }),
+    ).toBeVisible();
+    const gastos = recuadroDeStock.locator('ul.lista-simple').last();
+    await expect(gastos.locator('li')).toHaveCount(1);
+    await expect(gastos).toContainText('3,000 unidades');
+    await expect(gastos).toContainText('Bolsas del transporte');
+
+    // La mercadería son cinco, no seis: la bolsa no entra a la heladera.
+    await expect(recuadroDeStock.locator('ul.lista-simple').first().locator('li')).toHaveCount(5);
 
     // El egreso, por el total que dice el papel.
     await expect(page.getByText('$ 267.880,50').first()).toBeVisible();
@@ -140,9 +150,18 @@ test.describe('la vista previa de la compra', () => {
       expect(caja!.width).toBeLessThanOrEqual(testInfo.project.use.viewport!.width);
     }
 
-    // El gasto sin impacto en stock también se lee en la pantalla angosta.
-    await expect(page.getByRole('heading', { name: 'Sin impacto en stock' })).toBeVisible();
-    await expect(page.getByText('3,000 unidades')).toBeVisible();
+    // El gasto sin impacto en stock también se lee entero en la pantalla angosta.
+    const gastos = page
+      .locator('section.card', { hasText: 'Movimiento de stock' })
+      .last()
+      .locator('ul.lista-simple')
+      .last();
+    await expect(gastos.getByText('3,000 unidades')).toBeVisible();
+    const cortado = await gastos
+      .locator('li')
+      .first()
+      .evaluate((li) => li.scrollWidth > li.clientWidth + 1);
+    expect(cortado).toBe(false);
 
     // Y el botón se puede tocar con el pulgar.
     await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeVisible();
