@@ -326,6 +326,7 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
           sePuedeAplicar={previa.sePuedeAplicar}
           hayQueElegirComoSePaga={previa.egreso.hayQueElegirComoSePaga}
           formasDePago={FORMAS_DE_PAGO}
+          emisionISO={previa.egreso.emisionISO}
         />
       </section>
     </>

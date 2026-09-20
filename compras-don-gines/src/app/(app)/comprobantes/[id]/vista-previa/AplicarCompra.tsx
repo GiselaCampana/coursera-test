@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { resolverDecisionDePago } from '@/lib/domain/decision-de-pago';
+import { dateOnlyFromISO, formatDateAr } from '@/lib/datetime';
 
 /**
  * El botón que escribe, y lo único de esta pantalla que escribe.
@@ -26,11 +28,13 @@ export function AplicarCompra({
   sePuedeAplicar,
   hayQueElegirComoSePaga,
   formasDePago,
+  emisionISO,
 }: {
   documentId: string;
   sePuedeAplicar: boolean;
   hayQueElegirComoSePaga: boolean;
   formasDePago: { codigo: string; nombre: string }[];
+  emisionISO: string | null;
 }) {
   const router = useRouter();
   const [aplicando, setAplicando] = useState(false);
@@ -48,7 +52,35 @@ export function AplicarCompra({
       (condicion === 'DIAS' && dias.trim() !== '') ||
       (condicion === 'FECHA' && fecha.trim() !== ''));
 
-  const listo = sePuedeAplicar || (hayQueElegirComoSePaga && decisionCompleta);
+  /*
+   * Qué día cae lo que se acaba de elegir, antes de apretar el botón.
+   *
+   * Se resuelve con la MISMA función que usa el servidor para validar, no con
+   * una cuenta parecida escrita acá: si las dos cuentas fueran distintas, la
+   * pantalla podría prometer una fecha y el servidor guardar otra, que es una
+   * variante más silenciosa del mismo defecto. Por eso también se muestra el
+   * motivo cuando la decisión no sirve —una fecha anterior a la emisión, un
+   * plazo absurdo— en vez de dejar que el error aparezca recién al aplicar.
+   */
+  const resuelto =
+    decisionCompleta && emisionISO
+      ? resolverDecisionDePago(
+          {
+            forma,
+            condicion:
+              condicion === 'DIAS'
+                ? { tipo: 'DIAS', dias: Number(dias) }
+                : condicion === 'FECHA'
+                  ? { tipo: 'FECHA', fecha }
+                  : { tipo: 'CONTADO' },
+          },
+          dateOnlyFromISO(emisionISO),
+        )
+      : null;
+
+  const listo =
+    sePuedeAplicar ||
+    (hayQueElegirComoSePaga && decisionCompleta && (resuelto === null || resuelto.ok));
 
   async function aplicar() {
     setAplicando(true);
@@ -160,6 +192,23 @@ export function AplicarCompra({
                 Queda registrada como una decisión manual. No puede ser anterior a la emisión.
               </p>
             </div>
+          )}
+
+          {/*
+            La fecha que se va a guardar, dicha antes de guardarla.
+            Elegir «a 30 días» sin ver el día es elegir a medias: el plazo se
+            acuerda, pero lo que después se mira en Pagos es la fecha.
+          */}
+          {resuelto?.ok && (
+            <p className="mensaje mensaje-info" data-prueba="vencimiento-calculado">
+              Vencería el <strong>{formatDateAr(resuelto.pago.dueDate)}</strong>.{' '}
+              <span className="suave">{resuelto.pago.comoSeCalculo}</span>
+            </p>
+          )}
+          {resuelto && !resuelto.ok && (
+            <p className="mensaje mensaje-error" role="alert">
+              {resuelto.motivo}
+            </p>
           )}
         </div>
       )}

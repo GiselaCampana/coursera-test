@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/db';
 import { Decimal } from '@/lib/money';
-import { formatDateAr, parseArDate } from '@/lib/datetime';
+import { formatDateAr, parseArDate, toDateOnly, toISODate } from '@/lib/datetime';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { NotFoundError, ValidationError } from '@/lib/errors';
@@ -158,6 +158,15 @@ export interface VistaPreviaDeCompra {
      * servidor vuelve a exigir al aplicar.
      */
     hayQueElegirComoSePaga: boolean;
+    /**
+     * La emisión en ISO, para que la pantalla pueda calcular la cuenta.
+     *
+     * Es el único dato que le falta al formulario para mostrar, antes de
+     * aplicar, qué día cae lo que la persona acaba de elegir. Sin eso elegir
+     * «a 30 días» es elegir a ciegas: se ve el plazo pero no la fecha, y la
+     * fecha es lo que se firma.
+     */
+    emisionISO: string | null;
   };
   /** Lo que va a mover de mercadería: un movimiento por renglón asociado. */
   stock: {
@@ -613,6 +622,7 @@ export async function vistaPreviaDeCompra(
      */
     hayQueElegirComoSePaga:
       documento.paymentSchedule === null && vencimiento.procedencia === 'PENDIENTE',
+    emisionISO: documento.issueDate ? toISODate(toDateOnly(documento.issueDate)) : null,
   };
 
   // --- El movimiento de mercadería ---------------------------------------

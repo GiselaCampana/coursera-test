@@ -128,6 +128,21 @@ test.describe('la vista previa de la compra', () => {
     await expect(boton).toBeDisabled();
     await page.getByLabel('Días').fill('30');
     await expect(boton).toBeEnabled();
+
+    /*
+     * Y dice qué día cae, antes de aplicar. La factura se emitió el 09/09/2026,
+     * así que a 30 días vence el 09/10/2026. Sin este eco se elige el plazo a
+     * ciegas: lo que después se mira en Pagos es la fecha, no el plazo.
+     */
+    const calculado = page.locator('[data-prueba="vencimiento-calculado"]');
+    await expect(calculado).toContainText('09/10/2026');
+
+    // Una fecha anterior a la emisión se rechaza en la pantalla, no recién al
+    // aplicar, y con la misma cuenta que usa el servidor.
+    await condicion.selectOption('FECHA');
+    await page.getByLabel('Fecha de vencimiento').fill('2026-09-08');
+    await expect(page.getByText(/no puede ser anterior a la emisión/)).toBeVisible();
+    await expect(boton).toBeDisabled();
   });
 
   test('la llamada directa al POST también se rechaza', async ({ page }) => {
