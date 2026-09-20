@@ -58,6 +58,22 @@ export type Resolucion =
 const MAXIMO_DE_DIAS = 365;
 
 /**
+ * El freno que se levanta eligiendo, y el único que la pantalla puede levantar
+ * sola.
+ *
+ * Vive acá —y no junto a los demás frenos, que se arman en el servidor— para
+ * que la pantalla pueda reconocerlo sin comparar el texto a mano. Es lo que le
+ * permite hacer desaparecer el aviso en cuanto la decisión queda completa, en
+ * vez de dejarlo diciendo «todavía no se puede» con el botón ya habilitado.
+ *
+ * Los otros frenos no se levantan desde el navegador: un renglón sin asociar o
+ * un total que no está impreso necesitan que alguien vuelva al comprobante.
+ */
+export const FRENO_DE_COMO_SE_PAGA =
+  'Este proveedor no tiene condición de pago configurada: hay que elegir la forma de pago ' +
+  'y el vencimiento. No hay ninguno por omisión.';
+
+/**
  * Convierte la decisión de una persona en fecha, plazo y forma de pago.
  *
  * Es una función pura y devuelve el motivo en vez de lanzar: la usan el

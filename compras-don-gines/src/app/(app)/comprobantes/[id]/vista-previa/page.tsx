@@ -311,19 +311,16 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
         <div className="card-titulo">
           <h2>Aplicar</h2>
         </div>
-        {previa.frenos.length > 0 && (
-          <div className="mensaje mensaje-aviso">
-            <strong>Todavía no se puede aplicar:</strong>
-            <ul className="lista-simple" style={{ marginTop: 6 }}>
-              {previa.frenos.map((freno) => (
-                <li key={freno}>{freno}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+        {/*
+          Los frenos se dibujan adentro del componente, no acá.
+          Dibujados en el servidor quedaban congelados: el aviso seguía
+          diciendo «todavía no se puede aplicar» después de que la persona
+          eligiera forma y condición, con el botón ya habilitado al lado.
+        */}
         <AplicarCompra
           documentId={id}
-          sePuedeAplicar={previa.sePuedeAplicar}
+          frenos={previa.frenos}
+          yaValidado={previa.estadoDelComprobante === 'VALIDADO'}
           hayQueElegirComoSePaga={previa.egreso.hayQueElegirComoSePaga}
           formasDePago={FORMAS_DE_PAGO}
           emisionISO={previa.egreso.emisionISO}

@@ -10,6 +10,7 @@ import { computeDueDate, describeTerm, type TermType } from '@/lib/domain/paymen
 import {
   resolverDecisionDePago,
   vencimientoPosibleParaLaEmision,
+  FRENO_DE_COMO_SE_PAGA,
   type DecisionDePago,
 } from '@/lib/domain/decision-de-pago';
 import type { MatchMethod } from '@/lib/domain/matching';
@@ -755,10 +756,7 @@ export function frenosDeLaCompra(entrada: {
    * mira después.
    */
   if (entrada.hayQueElegirComoSePaga) {
-    frenos.push(
-      'Este proveedor no tiene condición de pago configurada: hay que elegir la forma de pago ' +
-        'y el vencimiento. No hay ninguno por omisión.',
-    );
+    frenos.push(FRENO_DE_COMO_SE_PAGA);
   }
 
   return frenos;
@@ -801,7 +799,7 @@ export async function aplicarCompra(
   }
 
   const frenos = previa.frenos.filter(
-    (freno) => !(resuelto?.ok && freno.startsWith('Este proveedor no tiene condición de pago')),
+    (freno) => !(resuelto?.ok && freno === FRENO_DE_COMO_SE_PAGA),
   );
 
   if (frenos.length > 0) {

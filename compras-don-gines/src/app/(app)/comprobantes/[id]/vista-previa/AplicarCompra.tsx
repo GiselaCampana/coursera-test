@@ -2,16 +2,15 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { resolverDecisionDePago } from '@/lib/domain/decision-de-pago';
+import { resolverDecisionDePago, FRENO_DE_COMO_SE_PAGA } from '@/lib/domain/decision-de-pago';
 import { dateOnlyFromISO, formatDateAr } from '@/lib/datetime';
 
 /**
  * El botón que escribe, y lo único de esta pantalla que escribe.
  *
- * Queda deshabilitado mientras la vista previa tenga frenos, pero eso es una
- * cortesía y no la defensa: el backend vuelve a mirar la misma lista antes de
- * aplicar, así que una pantalla vieja o una llamada directa tampoco pueden
- * saltearla.
+ * Queda deshabilitado mientras la compra tenga frenos, pero eso es una cortesía
+ * y no la defensa: el backend vuelve a mirar la misma lista antes de aplicar,
+ * así que una pantalla vieja o una llamada directa tampoco pueden saltearla.
  *
  * **Cuando el proveedor no tiene condición de pago acordada**, antes del botón
  * hay que elegir dos cosas: la forma de pago y el vencimiento. Nada viene
@@ -19,19 +18,31 @@ import { dateOnlyFromISO, formatDateAr } from '@/lib/datetime';
  * compra se aplicaba sola con el vencimiento puesto en la fecha de emisión y
  * la forma en «Transferencia», las dos sin que nadie las eligiera, y una fecha
  * de pago inventada no se distingue después de una acordada.
+ *
+ * **Los avisos viven acá y no en la página** porque tienen que moverse con lo
+ * que la persona elige. Armados en el servidor quedaban congelados en el
+ * estado inicial: el recuadro amarillo seguía diciendo «todavía no se puede
+ * aplicar» con el botón ya habilitado, y el texto de abajo seguía pidiendo que
+ * se eligiera la forma y la condición cuando las dos ya estaban elegidas y lo
+ * único mal era la fecha. Un aviso que no corresponde al estado enseña a no
+ * leer los avisos.
  */
 
 type Condicion = '' | 'CONTADO' | 'DIAS' | 'FECHA';
 
 export function AplicarCompra({
   documentId,
-  sePuedeAplicar,
+  frenos,
+  yaValidado,
   hayQueElegirComoSePaga,
   formasDePago,
   emisionISO,
 }: {
   documentId: string;
-  sePuedeAplicar: boolean;
+  /** Todo lo que frena la compra, tal como lo calculó el servidor. */
+  frenos: string[];
+  /** El comprobante ya está validado: no hay nada que aplicar. */
+  yaValidado: boolean;
   hayQueElegirComoSePaga: boolean;
   formasDePago: { codigo: string; nombre: string }[];
   emisionISO: string | null;
@@ -45,6 +56,16 @@ export function AplicarCompra({
   const [condicion, setCondicion] = useState<Condicion>('');
   const [dias, setDias] = useState('');
   const [fecha, setFecha] = useState('');
+
+  /*
+   * Los frenos que esta pantalla no puede levantar.
+   *
+   * Un renglón sin asociar o un total que no está impreso necesitan que alguien
+   * vuelva al comprobante; no hay nada que elegir acá que los resuelva. Se
+   * separan del de cómo se paga para no hacer desaparecer un aviso que sigue
+   * siendo cierto —ni dejar el botón habilitado cuando todavía falta algo más.
+   */
+  const otrosFrenos = frenos.filter((freno) => freno !== FRENO_DE_COMO_SE_PAGA);
 
   const decisionCompleta =
     forma !== '' &&
@@ -78,9 +99,52 @@ export function AplicarCompra({
         )
       : null;
 
-  const listo =
-    sePuedeAplicar ||
-    (hayQueElegirComoSePaga && decisionCompleta && (resuelto === null || resuelto.ok));
+  /** El pago está resuelto: o no había que elegirlo, o lo elegido sirve. */
+  const pagoListo = !hayQueElegirComoSePaga || resuelto?.ok === true;
+  const listo = !yaValidado && otrosFrenos.length === 0 && pagoListo;
+
+  /**
+   * Qué falta, dicho como está el formulario ahora mismo.
+   *
+   * Se calcula en cada render a partir del estado, así que cambia con cada
+   * elección. `null` quiere decir que no falta nada y no va ningún aviso: el
+   * botón habilitado ya lo dice, y agregar un mensaje positivo sería una
+   * felicitación que nadie pidió.
+   */
+  function loQueFalta(): string | null {
+    if (yaValidado) return 'Este comprobante ya está validado.';
+    if (otrosFrenos.length > 0) return 'Resolvé lo de arriba y volvé a abrir esta pantalla.';
+    if (!hayQueElegirComoSePaga) return null;
+
+    if (forma === '' && condicion === '') {
+      return 'Elegí la forma de pago y la condición para poder aplicar.';
+    }
+    if (forma === '') return 'Elegí la forma de pago para poder aplicar.';
+    if (condicion === '') return 'Elegí la condición para poder aplicar.';
+    if (condicion === 'DIAS' && dias.trim() === '') {
+      return 'Escribí a cuántos días vence para poder aplicar.';
+    }
+    if (condicion === 'FECHA' && fecha.trim() === '') {
+      return 'Elegí la fecha de vencimiento para poder aplicar.';
+    }
+
+    /*
+     * Acá ya está todo elegido y lo elegido no sirve. El error rojo de arriba
+     * dice exactamente por qué —esa redacción es la del dominio y no se
+     * duplica—; esto sólo nombra qué hay que corregir.
+     */
+    if (resuelto && !resuelto.ok) {
+      return condicion === 'FECHA'
+        ? 'Corregí el vencimiento antes de aplicar.'
+        : 'Corregí el plazo antes de aplicar.';
+    }
+    return null;
+  }
+
+  const falta = loQueFalta();
+
+  /** Los frenos que todavía valen, con el del pago sólo si sigue sin resolverse. */
+  const frenosVigentes = pagoListo ? otrosFrenos : frenos;
 
   async function aplicar() {
     setAplicando(true);
@@ -121,6 +185,17 @@ export function AplicarCompra({
 
   return (
     <div>
+      {frenosVigentes.length > 0 && (
+        <div className="mensaje mensaje-aviso" data-prueba="frenos">
+          <strong>Todavía no se puede aplicar:</strong>
+          <ul className="lista-simple" style={{ marginTop: 6 }}>
+            {frenosVigentes.map((freno) => (
+              <li key={freno}>{freno}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {hayQueElegirComoSePaga && (
         <div className="card card-compacta" style={{ marginBottom: 12 }}>
           <div className="card-titulo">
@@ -206,7 +281,7 @@ export function AplicarCompra({
             </p>
           )}
           {resuelto && !resuelto.ok && (
-            <p className="mensaje mensaje-error" role="alert">
+            <p className="mensaje mensaje-error" role="alert" data-prueba="decision-invalida">
               {resuelto.motivo}
             </p>
           )}
@@ -219,11 +294,9 @@ export function AplicarCompra({
         </button>
       </div>
 
-      {!listo && (
-        <p className="ayuda">
-          {hayQueElegirComoSePaga
-            ? 'Elegí la forma de pago y la condición para poder aplicar.'
-            : 'Resolvé lo de arriba y volvé a abrir esta pantalla.'}
+      {falta && (
+        <p className="ayuda" data-prueba="lo-que-falta">
+          {falta}
         </p>
       )}
       {error && (

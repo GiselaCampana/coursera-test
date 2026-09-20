@@ -177,6 +177,127 @@ test.describe('la vista previa de la compra', () => {
     await expect(boton).toBeEnabled();
   });
 
+  /* ----------------------------------------------------------------------- */
+
+  test('los avisos dicen lo que falta ahora, no lo que faltaba al abrir', async ({ page }) => {
+    /*
+     * Los dos avisos se armaban en el servidor y quedaban congelados en el
+     * estado inicial: el recuadro amarillo seguía diciendo «todavía no se puede
+     * aplicar» con el botón ya habilitado, y el texto de abajo seguía pidiendo
+     * la forma y la condición cuando las dos estaban elegidas y lo único mal
+     * era la fecha. Un aviso que no corresponde al estado enseña a no leer los
+     * avisos, y después no se lee el que sí importa.
+     */
+    await ingresar(page, 'admin');
+    await abrirLaVistaPrevia(page, COMPLETA);
+
+    const forma = page.getByLabel('Forma de pago');
+    const condicion = page.getByLabel('Condición');
+    const boton = page.getByRole('button', { name: 'Aplicar la compra' });
+    const frenos = page.locator('[data-prueba="frenos"]');
+    const falta = page.locator('[data-prueba="lo-que-falta"]');
+
+    // Al abrir: faltan las dos, y el aviso las nombra a las dos.
+    await expect(frenos).toBeVisible();
+    await expect(falta).toHaveText('Elegí la forma de pago y la condición para poder aplicar.');
+
+    // Sólo la condición elegida: el aviso pide sólo la forma.
+    await condicion.selectOption('CONTADO');
+    await expect(falta).toHaveText('Elegí la forma de pago para poder aplicar.');
+    await expect(boton).toBeDisabled();
+
+    // Sólo la forma elegida: el aviso pide sólo la condición.
+    await condicion.selectOption('');
+    await forma.selectOption('EFECTIVO');
+    await expect(falta).toHaveText('Elegí la condición para poder aplicar.');
+    await expect(boton).toBeDisabled();
+
+    // Faltan los días, y lo dice con ese nombre.
+    await condicion.selectOption('DIAS');
+    await expect(falta).toHaveText('Escribí a cuántos días vence para poder aplicar.');
+
+    // Faltan la fecha puntual, ídem.
+    await condicion.selectOption('FECHA');
+    await expect(falta).toHaveText('Elegí la fecha de vencimiento para poder aplicar.');
+
+    /*
+     * Fecha inválida: el error rojo del dominio queda tal cual, el de abajo
+     * nombra el impedimento real, y en ningún lado se afirma que falten
+     * selecciones que ya están hechas.
+     */
+    await page.getByLabel('Fecha de vencimiento').fill(sumarDias(EMISION, -1));
+    await expect(page.locator('[data-prueba="decision-invalida"]')).toContainText(
+      /no puede ser anterior a la emisión/,
+    );
+    await expect(falta).toHaveText('Corregí el vencimiento antes de aplicar.');
+    await expect(page.getByText('Elegí la forma de pago y la condición')).toHaveCount(0);
+    await expect(boton).toBeDisabled();
+    // El freno sigue en pie mientras el pago no esté resuelto.
+    await expect(frenos).toBeVisible();
+
+    /*
+     * Y con todo válido no queda ningún aviso de bloqueo. Ni el amarillo, ni
+     * el de abajo: el botón habilitado ya lo dice.
+     */
+    await page.getByLabel('Fecha de vencimiento').fill(EMISION);
+    await expect(boton).toBeEnabled();
+    await expect(frenos).toHaveCount(0);
+    await expect(page.getByText('Todavía no se puede aplicar')).toHaveCount(0);
+    await expect(falta).toHaveCount(0);
+
+    /*
+     * Volver atrás a una opción incompleta tiene que revivir los avisos en el
+     * acto: si sólo aparecieran al abrir la pantalla, el botón quedaría
+     * habilitado sobre una decisión que ya no existe.
+     */
+    await condicion.selectOption('');
+    await expect(boton).toBeDisabled();
+    await expect(frenos).toBeVisible();
+    await expect(falta).toHaveText('Elegí la condición para poder aplicar.');
+  });
+
+  test('un plazo imposible se nombra como plazo, no como vencimiento', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await abrirLaVistaPrevia(page, COMPLETA);
+
+    await page.getByLabel('Forma de pago').selectOption('CHEQUE');
+    await page.getByLabel('Condición').selectOption('DIAS');
+    await page.getByLabel('Días').fill('400');
+
+    await expect(page.locator('[data-prueba="decision-invalida"]')).toContainText(/entre 1 y 365/);
+    await expect(page.locator('[data-prueba="lo-que-falta"]')).toHaveText(
+      'Corregí el plazo antes de aplicar.',
+    );
+    await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeDisabled();
+  });
+
+  test('en la factura frenada, elegir cómo se paga no alcanza', async ({ page }) => {
+    /*
+     * El freno del pago se levanta eligiendo; los otros dos no. Si la pantalla
+     * los tratara a todos igual, una decisión de pago válida habilitaría el
+     * botón sobre un comprobante con un renglón sin asociar y el total sin
+     * imprimir, y el rechazo llegaría recién del servidor.
+     */
+    await ingresar(page, 'admin');
+    await abrirLaVistaPrevia(page, FRENADA);
+
+    await page.getByLabel('Forma de pago').selectOption('EFECTIVO');
+    await page.getByLabel('Condición').selectOption('CONTADO');
+
+    // El cálculo del vencimiento sí se muestra: esa parte está resuelta.
+    await expect(page.locator('[data-prueba="vencimiento-calculado"]')).toBeVisible();
+
+    // Pero el botón sigue bloqueado y los otros dos frenos siguen a la vista.
+    await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeDisabled();
+    const frenos = page.locator('[data-prueba="frenos"] li');
+    await expect(frenos).toHaveCount(2);
+    await expect(page.getByText(/BOLSA GRANDE.*no está asociado/)).toBeVisible();
+    await expect(page.getByText(/El total no está impreso/)).toBeVisible();
+    await expect(page.locator('[data-prueba="lo-que-falta"]')).toHaveText(
+      'Resolvé lo de arriba y volvé a abrir esta pantalla.',
+    );
+  });
+
   test('la llamada directa al POST también se rechaza', async ({ page }) => {
     /*
      * Que la pantalla frene no alcanza: el endpoint se puede llamar solo. Sin
