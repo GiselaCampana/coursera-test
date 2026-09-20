@@ -12,7 +12,18 @@ import {
   type RawItem,
 } from '@/lib/domain/costing';
 import { validateDocument, type PrintedSummary, type ValidationReport } from '@/lib/domain/validation';
-import { computeDueDate, computePaymentStatus, esFechaProvisoria } from '@/lib/domain/payments';
+import {
+  computeDueDate,
+  computePaymentStatus,
+  esFechaProvisoria,
+  PAYMENT_METHODS,
+  type TermType,
+} from '@/lib/domain/payments';
+import {
+  resolverDecisionDePago,
+  vencimientoPosibleParaLaEmision,
+  type DecisionDePago,
+} from '@/lib/domain/decision-de-pago';
 import { matchProduct, normalizeText, type ProductCandidate } from '@/lib/domain/matching';
 import {
   clasificarRenglon,
@@ -420,6 +431,15 @@ export interface ConfirmDocumentInput {
   payment: {
     dueDate: string;
     paymentMethod: string;
+    /**
+     * El plazo con el que se llegó a esa fecha, cuando lo eligió una persona.
+     *
+     * Sin esto el comprobante guardaba el plazo del **proveedor**, que para uno
+     * sin condiciones es nulo: la factura quedaba con «plazo aplicado» vacío
+     * aunque alguien hubiera elegido treinta días, y después nadie podía
+     * reconstruir de dónde salía la fecha.
+     */
+    term?: { termType: TermType; days: number } | null;
     notes?: string | null;
   };
   /** Anulación del bloqueo por parte de un administrador. Exige motivo. */
@@ -479,6 +499,37 @@ export async function confirmDocument(
 
   const dueDate = parseArDate(input.payment.dueDate);
   if (!dueDate) throw new ValidationError('La fecha prevista de pago no es válida.');
+  /*
+   * Nunca antes de la emisión, y se comprueba acá: antes de la transacción.
+   *
+   * Una factura puede cargarse tarde y quedar vencida —eso es legítimo y por
+   * eso el límite NO se mide contra hoy—, pero no puede vencer antes de
+   * existir. Fallar en este punto significa no escribir nada: ni comprobante
+   * validado, ni agenda, ni movimientos.
+   */
+  if (!vencimientoPosibleParaLaEmision(dueDate, issueDate)) {
+    throw new ValidationError(
+      `La fecha prevista de pago (${toISODate(dueDate)}) es anterior a la emisión del ` +
+        `comprobante (${toISODate(issueDate)}).`,
+    );
+  }
+
+  /*
+   * La forma de pago se elige. No se hereda ni se rellena.
+   *
+   * Acá había un `|| 'TRANSFERENCIA'` que convertía la falta de dato en un
+   * dato: la factura quedaba agendada con una forma de pago que nadie eligió y
+   * nada en la pantalla decía que era un relleno.
+   */
+  const formaElegida = (input.payment.paymentMethod ?? '').trim();
+  if (formaElegida === '') {
+    throw new ValidationError(
+      'Falta la forma de pago. Elegila antes de confirmar: no hay una por omisión.',
+    );
+  }
+  if (!(PAYMENT_METHODS as readonly string[]).includes(formaElegida)) {
+    throw new ValidationError(`«${formaElegida}» no es una forma de pago del sistema.`);
+  }
 
   const pointOfSale = input.pointOfSale.trim();
   const number = input.number.trim();
@@ -608,7 +659,7 @@ export async function confirmDocument(
   }
 
   const total = money(input.printed.total ?? report.computed.totalCost);
-  const paymentMethod = input.payment.paymentMethod || conditions.term?.paymentMethod || 'TRANSFERENCIA';
+  const paymentMethod = formaElegida;
 
   /*
    * --- Asociación al catálogo, resuelta acá y no en el navegador -----------
@@ -697,8 +748,8 @@ export async function confirmDocument(
         checkReport: report as unknown as Prisma.InputJsonValue,
         // Copia de las condiciones vigentes al momento de la carga: si mañana
         // cambia el plazo del proveedor, esta factura conserva el suyo.
-        appliedTermType: conditions.term?.termType ?? null,
-        appliedTermDays: conditions.term?.days ?? null,
+        appliedTermType: input.payment.term?.termType ?? conditions.term?.termType ?? null,
+        appliedTermDays: input.payment.term?.days ?? conditions.term?.days ?? null,
         appliedPaymentMethod: paymentMethod,
         appliedIvaRate: conditions.tax?.ivaRate ?? null,
         appliedIibbRate: conditions.tax?.iibbRate ?? null,
@@ -1376,6 +1427,8 @@ export async function suggestDueDate(supplierId: string, issueDateISO: string) {
 export async function acceptReadDocument(
   user: AuthUser,
   documentId: string,
+  /** Lo que eligió una persona cuando el proveedor no tiene condición. */
+  decision?: DecisionDePago | null,
 ): Promise<ConfirmResult> {
   /*
    * El permiso primero, antes de mirar el comprobante.
@@ -1446,15 +1499,76 @@ export async function acceptReadDocument(
     );
   }
 
+  /*
+   * Cuándo y cómo se paga: de la ficha del proveedor, o de quien aplica.
+   *
+   * Acá había una cadena de valores por omisión que terminaba en «vence el día
+   * de emisión» y «Transferencia». Una factura de un proveedor sin condiciones
+   * quedaba agendada y vencida el mismo día que se emitió, con una forma de
+   * pago que nadie eligió. Eso es plata con fecha inventada.
+   *
+   * Ahora son dos caminos, los dos explícitos: si el proveedor tiene una
+   * condición acordada, la fecha sale de ella y se puede reproducir; si no la
+   * tiene, hace falta que alguien elija, y sin esa elección no se aplica nada.
+   */
   const conditions = await getSupplierConditions(document.supplierId, document.issueDate);
-  const dueDate =
+  const deLaFicha = conditions.term
+    ? computeDueDate(document.issueDate, conditions.term, {
+        proximaFactura: conditions.proximaFactura,
+      })
+    : null;
+
+  /*
+   * «Factura contra factura» sin saber cuándo llega la próxima: caso modelado.
+   *
+   * No es un relleno. El proveedor TIENE condición acordada —se le paga cuando
+   * pasa el camión— y lo único que falta es la fecha de esa visita. El sistema
+   * ya lo modela: se agenda provisoriamente y la agenda lo marca como tal,
+   * para poder distinguirlo de una fecha firme y corregirlo cuando se sepa.
+   *
+   * La diferencia con lo que había es de fondo: acá hay una condición acordada
+   * y una marca que lo dice; allá no había nada y se rellenaba en silencio.
+   */
+  const esperandoLaProximaFactura = conditions.term?.termType === 'NEXT_INVOICE' && !deLaFicha;
+
+  let dueDate =
     document.appliedDueDate ??
-    (conditions.term
-      ? computeDueDate(document.issueDate, conditions.term, {
-          proximaFactura: conditions.proximaFactura,
-        })
-      : null) ??
-    toDateOnly(document.issueDate);
+    deLaFicha ??
+    (esperandoLaProximaFactura ? toDateOnly(document.issueDate) : null);
+  let paymentMethod = document.appliedPaymentMethod ?? conditions.term?.paymentMethod ?? null;
+  let plazoAplicado: { termType: TermType; days: number } | null = conditions.term
+    ? { termType: conditions.term.termType, days: conditions.term.days }
+    : null;
+  let notaDelPago: string | null = null;
+
+  if (decision) {
+    /*
+     * Lo que eligió una persona gana, y se vuelve a validar en el servidor.
+     *
+     * Que la pantalla haya frenado no alcanza: este servicio también se puede
+     * llamar directo. La misma función que usa la pantalla resuelve la fecha
+     * acá, así que no hay forma de que una decisión que la pantalla rechazaría
+     * entre por la puerta de atrás.
+     */
+    const resuelto = resolverDecisionDePago(decision, document.issueDate);
+    if (!resuelto.ok) throw new ValidationError(resuelto.motivo);
+    dueDate = resuelto.pago.dueDate;
+    paymentMethod = resuelto.pago.paymentMethod;
+    plazoAplicado = {
+      termType: resuelto.pago.term.termType,
+      days: resuelto.pago.term.days ?? 0,
+    };
+    notaDelPago = resuelto.pago.fechaElegidaAMano
+      ? `${resuelto.pago.comoSeCalculo} La eligió ${user.name} al aplicar la compra.`
+      : resuelto.pago.comoSeCalculo;
+  }
+
+  if (!dueDate || !paymentMethod) {
+    throw new ValidationError(
+      'Este proveedor no tiene condición de pago configurada, así que hay que elegir la forma ' +
+        'de pago y el vencimiento antes de aplicar la compra. No hay ninguno por omisión.',
+    );
+  }
 
   return confirmDocument(user, {
     documentId,
@@ -1514,9 +1628,9 @@ export async function acceptReadDocument(
     })),
     payment: {
       dueDate: toISODate(dueDate),
-      paymentMethod:
-        document.appliedPaymentMethod ?? conditions.term?.paymentMethod ?? 'TRANSFERENCIA',
-      notes: null,
+      paymentMethod,
+      term: plazoAplicado,
+      notes: notaDelPago,
     },
   });
 }
