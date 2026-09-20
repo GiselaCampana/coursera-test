@@ -294,3 +294,68 @@ export interface LoteDeIngreso {
   confirmedBy: { userId: string | null; name: string | null };
   movements: MovimientoDelLote[];
 }
+
+/* -------------------------------------------------------------------------- */
+/*  La cantidad, como la escribe el contrato                                   */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cuántos decimales lleva una cantidad en el contrato. Siempre tres, exactos.
+ */
+export const DECIMALES_DEL_CONTRATO = 3;
+
+export type CantidadDelContrato =
+  | { ok: true; quantity: string }
+  | { ok: false; motivo: string };
+
+/**
+ * **La representación canónica de una cantidad: tres decimales, siempre.**
+ *
+ * Existe por una diferencia que parece cosmética y no lo es. La base guarda
+ * `Decimal(14,4)` y al serializarla sin más sale «4.24» donde el papel dice
+ * «4,240»: el mismo peso escrito de dos maneras. Mientras las dos puntas
+ * comparen decimales da igual, pero en cuanto algo compare **cadenas** —y la
+ * idempotencia compara contenido— «4.24» y «4.240» pasan a ser dos cosas
+ * distintas y aparece un conflicto que no existe.
+ *
+ * Por eso se normaliza en un solo lugar, el borde del contrato, y no se toca
+ * la representación interna: los importes, los costos y los cálculos siguen
+ * siendo los mismos decimales de siempre.
+ *
+ * **No redondea en silencio.** Un valor con más de tres decimales no es un
+ * valor que haya que acomodar: es un dato que nadie miró. Redondearlo mandaría
+ * a Control de Stock una cantidad que no es la de la factura, con una
+ * diferencia de gramos que después no se puede rastrear. Se rechaza, y el
+ * motivo dice cuál era el valor.
+ */
+export function cantidadDelContrato(valor: string | { toString(): string }): CantidadDelContrato {
+  const texto = valor.toString().trim();
+  if (texto === '' || !/^-?\d+(\.\d+)?$/.test(texto)) {
+    return { ok: false, motivo: `La cantidad «${texto}» no es un número decimal.` };
+  }
+
+  /*
+   * Se cuentan los decimales sobre el texto y no sobre un número: pasar por
+   * un flotante binario es exactamente lo que esta función evita.
+   */
+  const punto = texto.indexOf('.');
+  const decimales = punto < 0 ? 0 : texto.length - punto - 1;
+  const significativos =
+    punto < 0 ? 0 : texto.slice(punto + 1).replace(/0+$/, '').length;
+
+  if (significativos > DECIMALES_DEL_CONTRATO) {
+    return {
+      ok: false,
+      motivo:
+        `La cantidad ${texto} tiene ${significativos} decimales y el contrato admite ` +
+        `${DECIMALES_DEL_CONTRATO}. No se redondea: hay que corregir el renglón.`,
+    };
+  }
+
+  const entera = punto < 0 ? texto : texto.slice(0, punto);
+  const fraccion = punto < 0 ? '' : texto.slice(punto + 1);
+  return {
+    ok: true,
+    quantity: `${entera}.${fraccion.padEnd(DECIMALES_DEL_CONTRATO, '0').slice(0, DECIMALES_DEL_CONTRATO)}`,
+  };
+}

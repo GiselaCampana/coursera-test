@@ -8,6 +8,7 @@ import {
   MOTIVO_DEL_CONTRATO,
   VERSION_DEL_CONTRATO,
   claveDelEvento,
+  cantidadDelContrato,
   type IngresoPlaneado,
   type LoteDeIngreso,
 } from '@/lib/domain/ingreso-de-stock';
@@ -213,6 +214,25 @@ export async function armarLote(
     };
   }
 
+  /*
+   * Las cantidades, normalizadas a la escala del contrato.
+   *
+   * Es el único lugar donde se hace, y a propósito: adentro siguen siendo los
+   * mismos decimales de siempre. Un valor con más de tres decimales **no se
+   * redondea**: se rechaza el lote entero y el motivo dice cuál era, porque
+   * mandar 4,2401 como 4,240 es mandar a Control de Stock una cantidad que no
+   * es la de la factura, con una diferencia de gramos que después no se puede
+   * rastrear.
+   */
+  const cantidades = new Map<string, string>();
+  for (const fila of filas) {
+    const cantidad = cantidadDelContrato(fila.quantity);
+    if (!cantidad.ok) {
+      return { ok: false, motivo: `Renglón con PLU ${fila.plu}: ${cantidad.motivo}` };
+    }
+    cantidades.set(fila.id, cantidad.quantity);
+  }
+
   return {
     ok: true,
     lote: {
@@ -241,14 +261,14 @@ export async function armarLote(
         idempotencyKey: fila.eventKey,
         plu: fila.plu,
         /*
-         * Cadena decimal, no número.
+         * Cadena decimal con tres posiciones, siempre.
          *
-         * 4,240 kg pasado por un flotante vuelve como 4.24 y los tres decimales
-         * del papel dejan de ser los tres decimales del papel. La base guarda
-         * Decimal y acá se serializa como texto, sin pasar por Number en
-         * ningún punto del camino.
+         * Ni número ni cadena a secas: la base guarda Decimal(14,4) y al
+         * serializarla sin más sale «4.24» donde el papel dice «4,240». Es el
+         * mismo peso, pero la idempotencia compara contenido, y dos cadenas
+         * distintas para el mismo peso producen un conflicto que no existe.
          */
-        quantity: fila.quantity.toString(),
+        quantity: cantidades.get(fila.id)!,
         unit: fila.unit,
         direction: DIRECCION_DEL_CONTRATO,
         reason: MOTIVO_DEL_CONTRATO,

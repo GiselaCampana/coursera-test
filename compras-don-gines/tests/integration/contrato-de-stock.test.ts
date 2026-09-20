@@ -119,9 +119,59 @@ describe('el cuerpo que viaja', () => {
        * tres decimales del papel dejan de serlo.
        */
       expect(typeof movimiento!.quantity).toBe('string');
-      expect(new Decimal(movimiento!.quantity).equals(new Decimal(esperado.kg))).toBe(true);
+      /*
+       * La comparación es LITERAL, no por valor decimal. «4.24» y «4.240» son
+       * el mismo peso, pero la idempotencia compara contenido: dos cadenas
+       * distintas para el mismo peso producirían un conflicto que no existe.
+       */
+      expect(movimiento!.quantity, `PLU ${esperado.plu}`).toBe(esperado.kg);
       expect(movimiento!.unit).toBe('KG');
     }
+  });
+
+  it('todas las cantidades salen con tres decimales exactos', async () => {
+    await aplicarYDespachar();
+    for (const movimiento of stock.ultimoLote()!.movements) {
+      expect(movimiento.quantity, movimiento.plu).toMatch(/^\d+\.\d{3}$/);
+    }
+    // Y los cinco, en orden, son los del papel.
+    expect(
+      stock.ultimoLote()!.movements.map((m) => m.quantity).sort(),
+    ).toEqual(['3.985', '4.040', '4.240', '7.345', '7.665']);
+  });
+
+  it('un reintento manda exactamente el mismo cuerpo serializado', async () => {
+    /*
+     * Byte por byte. Si la serialización dependiera de algo que cambia —el
+     * reloj, el orden de un Map, la escala de un decimal— el segundo intento
+     * sería un contenido distinto bajo la misma clave, que es justamente lo
+     * que Control de Stock tiene que rechazar como conflicto.
+     */
+    await aplicarCompra(escenario.admin, completa, PAGO);
+    stock.seComporta({ tipo: 'RECUPERABLE', motivo: '503' });
+    await despacharPendientes({ documentId: completa });
+    const primero = JSON.stringify(stock.ultimoLote());
+
+    stock.seComporta({ tipo: 'ACEPTAR' });
+    await despacharPendientes({ documentId: completa });
+    const segundo = JSON.stringify(stock.ultimoLote());
+
+    expect(segundo).toBe(primero);
+  });
+
+  it('una cantidad con más de tres decimales frena el lote, sin redondear', async () => {
+    await aplicarCompra(escenario.admin, completa, PAGO);
+    const fila = await prisma.stockOutbox.findFirstOrThrow({ where: { documentId: completa } });
+    await prisma.stockOutbox.update({ where: { id: fila.id }, data: { quantity: '4.2401' } });
+
+    await despacharPendientes({ documentId: completa });
+
+    // No salió nada: el lote es atómico y el motivo nombra el valor.
+    expect(stock.llamadas).toBe(0);
+    const sync = await sincronizacionDe(completa);
+    expect(sync.estado).toBe('FALLIDA');
+    expect(sync.motivos.join(' ')).toContain('4.2401');
+    expect(sync.motivos.join(' ')).toMatch(/no se redondea/i);
   });
 
   it('todos van como IN por PURCHASE, y ninguno de otra manera', async () => {
@@ -139,6 +189,12 @@ describe('el cuerpo que viaja', () => {
     const lote = stock.lotes[0];
     expect(lote.movements).toHaveLength(5);
     expect(lote.movements.some((m) => m.unit === 'UNIT')).toBe(false);
+    /*
+     * Ni «3.000», que es como la bolsa se ve en pantalla ahora que la escala
+     * es fija. Con tres decimales en todos lados, la única manera de saber
+     * que la bolsa no viaja es que no esté.
+     */
+    expect(lote.movements.some((m) => m.quantity === '3.000')).toBe(false);
     expect(lote.movements.some((m) => new Decimal(m.quantity).equals(new Decimal(3)))).toBe(false);
     // Y su importe sigue adentro del egreso.
     const agenda = await prisma.paymentSchedule.findFirstOrThrow({

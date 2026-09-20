@@ -6,6 +6,7 @@ import {
   DIRECCION_DEL_CONTRATO,
   MOTIVO_DEL_CONTRATO,
   VERSION_DEL_CONTRATO,
+  cantidadDelContrato,
   type RenglonParaStock,
 } from '@/lib/domain/ingreso-de-stock';
 
@@ -138,5 +139,81 @@ describe('las constantes que no se pueden equivocar', () => {
     expect(claveDelEvento({ documentId: 'd', documentItemId: 'a' })).not.toBe(
       claveDelEvento({ documentId: 'd', documentItemId: 'b' }),
     );
+  });
+});
+
+describe('la cantidad, como la escribe el contrato: tres decimales siempre', () => {
+  it('4.24 sale como «4.240», y 4.04 como «4.040»', () => {
+    /*
+     * La diferencia parece cosmética y no lo es. La base guarda Decimal(14,4)
+     * y al serializarla sin más sale «4.24» donde el papel dice «4,240». Es el
+     * mismo peso; el problema aparece cuando algo compara **cadenas**, y la
+     * idempotencia compara contenido: «4.24» y «4.240» pasarían a ser dos
+     * cosas distintas y habría un conflicto que no existe.
+     */
+    expect(cantidadDelContrato('4.24')).toEqual({ ok: true, quantity: '4.240' });
+    expect(cantidadDelContrato('4.04')).toEqual({ ok: true, quantity: '4.040' });
+    expect(cantidadDelContrato('4.2400')).toEqual({ ok: true, quantity: '4.240' });
+  });
+
+  it('tres unidades salen como «3.000», no como «3»', () => {
+    // La escala es la misma para KG y para UNIT: una sola forma canónica.
+    expect(cantidadDelContrato('3')).toEqual({ ok: true, quantity: '3.000' });
+    expect(cantidadDelContrato('3.0')).toEqual({ ok: true, quantity: '3.000' });
+    expect(cantidadDelContrato('3.0000')).toEqual({ ok: true, quantity: '3.000' });
+  });
+
+  it('los cinco pesos de Ezra, tal como los imprime el papel', () => {
+    const esperados: [string, string][] = [
+      ['4.2400', '4.240'],
+      ['3.9850', '3.985'],
+      ['7.3450', '7.345'],
+      ['4.0400', '4.040'],
+      ['7.6650', '7.665'],
+    ];
+    for (const [guardado, contrato] of esperados) {
+      expect(cantidadDelContrato(guardado), guardado).toEqual({ ok: true, quantity: contrato });
+    }
+  });
+
+  it('un valor con más de tres decimales no se redondea: se rechaza', () => {
+    /*
+     * Redondear mandaría a Control de Stock una cantidad que no es la de la
+     * factura, con una diferencia de gramos que después no se puede rastrear.
+     * Un valor así no es algo que haya que acomodar: es un dato que nadie miró.
+     */
+    const resultado = cantidadDelContrato('4.2401');
+    expect(resultado.ok).toBe(false);
+    if (resultado.ok) return;
+    expect(resultado.motivo).toContain('4.2401');
+    expect(resultado.motivo).toMatch(/no se redondea/i);
+  });
+
+  it('los ceros a la derecha no cuentan como precisión de más', () => {
+    // 4.2400 tiene cuatro decimales escritos y tres significativos: entra.
+    expect(cantidadDelContrato('4.2400').ok).toBe(true);
+    // 4.2401 tiene cuatro significativos: no entra.
+    expect(cantidadDelContrato('4.2401').ok).toBe(false);
+  });
+
+  it('lo que no es un número decimal tampoco pasa', () => {
+    for (const malo of ['', '   ', 'cuatro', '4,240', '4.2.4', 'NaN', '1e3']) {
+      expect(cantidadDelContrato(malo).ok, malo).toBe(false);
+    }
+  });
+
+  it('normalizar dos veces da lo mismo: un reintento no cambia el cuerpo', () => {
+    const primera = cantidadDelContrato('4.2400');
+    expect(primera.ok).toBe(true);
+    if (!primera.ok) return;
+    expect(cantidadDelContrato(primera.quantity)).toEqual(primera);
+  });
+
+  it('acepta lo que entrega un Decimal, sin pasar por Number', () => {
+    // Lo que llega de la base es un objeto con toString(), no una cadena.
+    expect(cantidadDelContrato({ toString: () => '7.6650' })).toEqual({
+      ok: true,
+      quantity: '7.665',
+    });
   });
 });
