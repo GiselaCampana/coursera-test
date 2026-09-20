@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { prisma } from '@/lib/db';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
-import { createDocument } from '@/lib/services/documents';
+import { acceptReadDocument, createDocument } from '@/lib/services/documents';
 import { crearProveedorDesdeLectura } from '@/lib/services/suppliers';
 import { aplicarCompra, vistaPreviaDeCompra } from '@/lib/services/vista-previa-compra';
 import { normalizeText } from '@/lib/domain/matching';
 import { Decimal } from '@/lib/money';
+import { addDays, toISODate } from '@/lib/datetime';
+import { AUDIT_ACTIONS } from '@/lib/services/audit';
 import { EZRA_ARTICULOS_IMPRESOS, EZRA_PIE } from '../fixtures/ezra';
 import {
   CATALOGO_DE_EZRA,
@@ -297,6 +299,18 @@ describe('aplicar la compra', () => {
  * y el sembrado es el mismo que usan la demostración y las end to end.
  */
 describe('Ezra, de punta a punta con los seis renglones del papel', () => {
+  /**
+   * Lo que una persona elige al aplicar, porque Ezra no tiene condición.
+   *
+   * Va explícito en cada llamada a propósito: si algún día `aplicarCompra`
+   * volviera a completar esto solo, estas pruebas seguirían pasando sin
+   * decirlo, y hay otras más abajo que se ocupan de que no pueda.
+   */
+  const PAGO_ELEGIDO = {
+    forma: 'TRANSFERENCIA',
+    condicion: { tipo: 'DIAS' as const, dias: 30 },
+  };
+
   /** Los cinco PLU de mercadería. La bolsa no tiene, y no debe tener. */
   const PLU_DE_MERCADERIA = ['3101', '3102', '3103', '3104', '3105'];
 
@@ -412,8 +426,16 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
     const bolsa = previa.renglones[5];
     expect(bolsa.gasto?.clase).toBe('EMBALAJE');
     expect(bolsa.producto.id).toBeNull();
-    expect(previa.frenos).toEqual([]);
-    expect(previa.sePuedeAplicar).toBe(true);
+
+    /*
+     * La bolsa no aporta ningún freno. El único que queda es el de cómo se
+     * paga, porque Ezra no tiene condición acordada: se nombra para que se vea
+     * que es ése y no otro.
+     */
+    expect(previa.frenos.some((f) => f.includes('BOLSA'))).toBe(false);
+    expect(previa.frenos).toEqual([
+      expect.stringContaining('no tiene condición de pago configurada'),
+    ]);
   });
 
   // -------------------------------------------------------------------------
@@ -474,7 +496,7 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
     expect(bolsa.producto.estado).not.toBe('INEQUIVOCA');
     expect(previa.sePuedeAplicar).toBe(false);
 
-    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow(
+    await expect(aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO)).rejects.toThrow(
       /no está asociado a un producto/,
     );
 
@@ -493,7 +515,7 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
     const antes = await existencias();
     const productosAntes = await prisma.product.count();
 
-    await aplicarCompra(escenario.admin, completa);
+    await aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO);
 
     const despues = await existencias();
 
@@ -521,7 +543,7 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
 
   it('la bolsa no deja movimiento de stock, y sigue en la factura y en el egreso', async () => {
     const { completa } = await sembrar();
-    await aplicarCompra(escenario.admin, completa);
+    await aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO);
 
     // Cinco movimientos, ninguno de la bolsa.
     const movimientos = await prisma.purchaseMovement.findMany({
@@ -561,21 +583,21 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
      * entradas de costo.
      */
     const { completa } = await sembrar();
-    await aplicarCompra(escenario.admin, completa);
+    await aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO);
 
     expect(await prisma.costHistory.count({ where: { documentId: completa } })).toBe(5);
   });
 
   it('aplicar dos veces no duplica existencias ni movimientos', async () => {
     const { completa } = await sembrar();
-    await aplicarCompra(escenario.admin, completa);
+    await aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO);
 
     const despuesDeLaPrimera = await existencias();
     const movimientosDeLaPrimera = await prisma.purchaseMovement.count({
       where: { documentId: completa },
     });
 
-    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow();
+    await expect(aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO)).rejects.toThrow();
 
     expect(await existencias()).toEqual(despuesDeLaPrimera);
     expect(await prisma.purchaseMovement.count({ where: { documentId: completa } })).toBe(
@@ -586,7 +608,7 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
 
   it('el egreso y el stock se auditan por separado, colgando de la misma factura', async () => {
     const { completa } = await sembrar();
-    await aplicarCompra(escenario.admin, completa);
+    await aplicarCompra(escenario.admin, completa, PAGO_ELEGIDO);
 
     const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
     const movimientos = await prisma.purchaseMovement.findMany({ where: { documentId: completa } });
@@ -652,5 +674,294 @@ describe('Ezra, de punta a punta con los seis renglones del papel', () => {
     expect(previa.egreso.condicion.valor).toBe('A 15 días');
     expect(previa.egreso.condicion.procedencia).toBe('INFERIDO');
     expect(previa.egreso.condicion.detalle).toContain('ficha de este proveedor');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cómo se paga: la decisión que antes se tomaba sola
+// ---------------------------------------------------------------------------
+
+/**
+ * **Una factura de un proveedor sin condiciones no se agenda sola.**
+ *
+ * Al aplicar la compra de Ezra en la demostración, la pantalla decía
+ * «a definir al aplicar» y al aplicar no se definía nada: el vencimiento caía
+ * en la fecha de emisión y la forma de pago en «Transferencia», las dos por
+ * omisión. Quedaba una factura agendada, vencida el mismo día que se emitió,
+ * con una forma de pago que nadie eligió.
+ *
+ * Lo que se prueba acá es que eso ya no puede pasar, y que las dos únicas
+ * salidas son una condición acordada con el proveedor o una decisión explícita
+ * de quien aplica.
+ */
+describe('cuándo y cómo se paga', () => {
+  /** Todo lo que se escribe cuando una compra se aplica. Para contar antes y después. */
+  async function loEscrito() {
+    return {
+      validados: await prisma.document.count({ where: { status: 'VALIDADO' } }),
+      pagos: await prisma.paymentSchedule.count(),
+      movimientos: await prisma.purchaseMovement.count(),
+      costos: await prisma.costHistory.count(),
+      auditoria: await prisma.auditLog.count(),
+    };
+  }
+
+  async function ezra() {
+    return sembrarLaCompraDeEzra(prisma, {
+      sucursalId: escenario.sucursales.devoto,
+      autorId: escenario.admin.id,
+    });
+  }
+
+  it('la vista previa dice que falta elegir, y frena', async () => {
+    const { completa } = await ezra();
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
+
+    expect(previa.egreso.hayQueElegirComoSePaga).toBe(true);
+    expect(previa.egreso.vencimiento.valor).toBeNull();
+    expect(previa.egreso.vencimiento.procedencia).toBe('PENDIENTE');
+    expect(previa.sePuedeAplicar).toBe(false);
+    expect(previa.frenos.join(' ')).toContain('no tiene condición de pago configurada');
+  });
+
+  it('sin decidir no se aplica, y no se escribe una sola fila', async () => {
+    const { completa } = await ezra();
+    const antes = await loEscrito();
+
+    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow(
+      /condición de pago|forma de pago/i,
+    );
+
+    expect(await loEscrito()).toEqual(antes);
+  });
+
+  it('una decisión incompleta tampoco, y tampoco escribe', async () => {
+    /*
+     * Es el camino de la llamada directa: alguien que manda el POST con un
+     * cuerpo a medias. El servidor lo rechaza igual que la pantalla.
+     */
+    const { completa } = await ezra();
+    const antes = await loEscrito();
+
+    for (const decision of [
+      { forma: '', condicion: { tipo: 'CONTADO' as const } },
+      { forma: 'TRANSFERENCIA', condicion: undefined as never },
+      { forma: 'NO_EXISTE', condicion: { tipo: 'CONTADO' as const } },
+      { forma: 'EFECTIVO', condicion: { tipo: 'DIAS' as const, dias: 0 } },
+    ]) {
+      await expect(aplicarCompra(escenario.admin, completa, decision)).rejects.toThrow();
+    }
+
+    expect(await loEscrito()).toEqual(antes);
+  });
+
+  it('el servicio de confirmación también se niega, no sólo la vista previa', async () => {
+    /*
+     * La segunda línea de defensa, y hace falta probarla aparte.
+     *
+     * `aplicarCompra` frena por los frenos de la vista previa, así que una
+     * prueba que sólo pase por ahí no dice nada sobre lo que hace el servicio
+     * que escribe. Y ese servicio es alcanzable por su cuenta: es el que usa
+     * el asistente de carga.
+     *
+     * Verificado rompiéndolo: devolviéndole los valores por omisión —el
+     * vencimiento en la fecha de emisión y «Transferencia»— esta prueba falla
+     * y ninguna otra se entera.
+     */
+    const { completa } = await ezra();
+    const antes = await loEscrito();
+
+    await expect(acceptReadDocument(escenario.admin, completa)).rejects.toThrow(
+      /condición de pago/i,
+    );
+
+    expect(await loEscrito()).toEqual(antes);
+  });
+
+  it('nunca elige «Transferencia» por su cuenta', async () => {
+    /*
+     * El relleno que había. Se aplica eligiendo otra forma y se comprueba que
+     * lo guardado es la elegida; y sin elegir, no se guarda nada.
+     */
+    const { completa } = await ezra();
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'EFECTIVO',
+      condicion: { tipo: 'CONTADO' },
+    });
+
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    const documento = await prisma.document.findUnique({ where: { id: completa } });
+    expect(pago?.plannedPaymentMethod).toBe('EFECTIVO');
+    expect(documento?.appliedPaymentMethod).toBe('EFECTIVO');
+  });
+
+  it('contado vence el día de emisión', async () => {
+    const { completa } = await ezra();
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: completa } });
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'EFECTIVO',
+      condicion: { tipo: 'CONTADO' },
+    });
+
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(toISODate(pago!.dueDate)).toBe(toISODate(documento.issueDate!));
+  });
+
+  it('a 30 días vence a 30 días de la emisión', async () => {
+    const { completa } = await ezra();
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: completa } });
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'TRANSFERENCIA',
+      condicion: { tipo: 'DIAS', dias: 30 },
+    });
+
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(toISODate(pago!.dueDate)).toBe(toISODate(addDays(documento.issueDate!, 30)));
+    expect(await prisma.document.findUnique({ where: { id: completa } })).toMatchObject({
+      appliedTermType: 'DAYS',
+      appliedTermDays: 30,
+    });
+  });
+
+  it('una fecha elegida a mano queda auditada como tal', async () => {
+    const { completa } = await ezra();
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'CHEQUE',
+      condicion: { tipo: 'FECHA', fecha: '2026-12-01' },
+    });
+
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(toISODate(pago!.dueDate)).toBe('2026-12-01');
+    // Queda dicho que la puso una persona, y quién.
+    expect(pago?.notes).toContain('a mano');
+    expect(pago?.notes).toContain(escenario.admin.name);
+
+    const asiento = await prisma.auditLog.findFirst({
+      where: { entityId: completa, action: AUDIT_ACTIONS.DOCUMENT_CONFIRMED },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(JSON.stringify(asiento?.after)).toContain('2026-12-01');
+  });
+
+  it('una fecha anterior a la emisión se rechaza y no escribe nada', async () => {
+    const { completa } = await ezra();
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: completa } });
+    const antes = await loEscrito();
+
+    const vispera = toISODate(addDays(documento.issueDate!, -1));
+    await expect(
+      aplicarCompra(escenario.admin, completa, {
+        forma: 'EFECTIVO',
+        condicion: { tipo: 'FECHA', fecha: vispera },
+      }),
+    ).rejects.toThrow(/anterior a la emisión/i);
+
+    expect(await loEscrito()).toEqual(antes);
+  });
+
+  it('una factura vieja puede quedar vencida, y eso es correcto', async () => {
+    /*
+     * El límite es la emisión, no hoy: una factura que se carga tarde tiene
+     * que poder guardarse aunque su vencimiento ya haya pasado.
+     */
+    const { completa } = await ezra();
+    await prisma.document.update({
+      where: { id: completa },
+      data: { issueDate: new Date('2025-03-01T00:00:00Z') },
+    });
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'TRANSFERENCIA',
+      condicion: { tipo: 'DIAS', dias: 30 },
+    });
+
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(toISODate(pago!.dueDate)).toBe('2025-03-31');
+    expect(pago?.status).toBe('VENCIDO');
+  });
+
+  it('la condición de otro proveedor no se hereda ni al aplicar', async () => {
+    /*
+     * Los Calvos tiene condición acordada; Ezra no. Aplicar la de Ezra no
+     * puede tomar la del habitual, ni siquiera para no molestar.
+     */
+    const { completa, proveedorId } = await ezra();
+    const delHabitual = await prisma.supplierPaymentTerm.findFirst({
+      where: { supplierId: escenario.proveedorId },
+    });
+    expect(delHabitual).not.toBeNull();
+
+    await expect(aplicarCompra(escenario.admin, completa)).rejects.toThrow();
+    expect(await prisma.supplierPaymentTerm.count({ where: { supplierId: proveedorId } })).toBe(0);
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'ECHEQ',
+      condicion: { tipo: 'DIAS', dias: 7 },
+    });
+
+    const documento = await prisma.document.findUnique({ where: { id: completa } });
+    expect(documento?.appliedPaymentMethod).toBe('ECHEQ');
+    expect(documento?.appliedTermDays).toBe(7);
+  });
+
+  it('con una condición acordada la fecha se calcula sola y se puede reproducir', async () => {
+    const { completa, proveedorId } = await ezra();
+    await prisma.supplierPaymentTerm.create({
+      data: {
+        supplierId: proveedorId,
+        termType: 'DAYS',
+        days: 21,
+        paymentMethod: 'ECHEQ',
+        validFrom: new Date('2020-01-01T00:00:00Z'),
+      },
+    });
+
+    const previa = await vistaPreviaDeCompra(escenario.admin, completa);
+    expect(previa.egreso.hayQueElegirComoSePaga).toBe(false);
+    expect(previa.egreso.vencimiento.procedencia).toBe('INFERIDO');
+    expect(previa.egreso.vencimiento.detalle).toContain('21');
+    expect(previa.sePuedeAplicar).toBe(true);
+
+    await aplicarCompra(escenario.admin, completa);
+
+    const documento = await prisma.document.findUniqueOrThrow({ where: { id: completa } });
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(toISODate(pago!.dueDate)).toBe(toISODate(addDays(documento.issueDate!, 21)));
+    expect(pago?.plannedPaymentMethod).toBe('ECHEQ');
+  });
+
+  it('elegida la condición, Ezra se aplica una sola vez y con todo en su lugar', async () => {
+    const { completa } = await ezra();
+
+    await aplicarCompra(escenario.admin, completa, {
+      forma: 'TRANSFERENCIA',
+      condicion: { tipo: 'DIAS', dias: 30 },
+    });
+
+    // El egreso entero, con las bolsas adentro.
+    const pago = await prisma.paymentSchedule.findFirst({ where: { documentId: completa } });
+    expect(pago?.plannedAmount.toString()).toBe('267880.5');
+
+    // Cinco aumentos de stock, ninguno por las bolsas.
+    const movimientos = await prisma.purchaseMovement.findMany({
+      where: { documentId: completa },
+      include: { product: true },
+    });
+    expect(movimientos).toHaveLength(5);
+    expect(movimientos.some((m) => m.description.includes('BOLSA'))).toBe(false);
+
+    // Y aplicar de nuevo no duplica nada.
+    const despues = await loEscrito();
+    await expect(
+      aplicarCompra(escenario.admin, completa, {
+        forma: 'TRANSFERENCIA',
+        condicion: { tipo: 'DIAS', dias: 30 },
+      }),
+    ).rejects.toThrow();
+    expect(await loEscrito()).toEqual(despues);
   });
 });

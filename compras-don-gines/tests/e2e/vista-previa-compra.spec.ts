@@ -97,7 +97,69 @@ test.describe('la vista previa de la compra', () => {
     // Y la condición, que Ezra no tiene configurada.
     await expect(page.getByText('a definir al aplicar').first()).toBeVisible();
 
-    await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeEnabled();
+    /*
+     * Y por eso no se puede aplicar todavía: hay que elegir cómo se paga.
+     * Antes el botón estaba habilitado y al apretarlo la compra se agendaba
+     * sola, con el vencimiento en la fecha de emisión y «Transferencia».
+     */
+    await expect(page.getByRole('heading', { name: 'Cómo se paga' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeDisabled();
+  });
+
+  test('hay que elegir cómo se paga, y nada viene marcado', async ({ page }) => {
+    await ingresar(page, 'admin');
+    await abrirLaVistaPrevia(page, COMPLETA);
+
+    const forma = page.getByLabel('Forma de pago');
+    const condicion = page.getByLabel('Condición');
+    const boton = page.getByRole('button', { name: 'Aplicar la compra' });
+
+    // Nada preseleccionado: ni la forma ni la condición.
+    await expect(forma).toHaveValue('');
+    await expect(condicion).toHaveValue('');
+    await expect(boton).toBeDisabled();
+
+    // Con la forma sola tampoco alcanza.
+    await forma.selectOption('EFECTIVO');
+    await expect(boton).toBeDisabled();
+
+    // Y a los días hay que decirle cuántos.
+    await condicion.selectOption('DIAS');
+    await expect(boton).toBeDisabled();
+    await page.getByLabel('Días').fill('30');
+    await expect(boton).toBeEnabled();
+  });
+
+  test('la llamada directa al POST también se rechaza', async ({ page }) => {
+    /*
+     * Que la pantalla frene no alcanza: el endpoint se puede llamar solo. Sin
+     * decisión de pago tiene que contestar un error y no escribir nada.
+     */
+    await ingresar(page, 'admin');
+    await page.goto('/comprobantes');
+    await page.locator('a.fila-dato', { hasText: COMPLETA }).first().click();
+    await expect(page).toHaveURL(/\/comprobantes\/[^/]+$/);
+    const id = page.url().split('/').pop();
+
+    /*
+     * Se llama desde adentro de la página para que viaje la sesión: es el
+     * escenario que importa, alguien con sesión válida saltándose la pantalla.
+     */
+    const respuesta = await page.evaluate(async (documentId) => {
+      const r = await fetch(`/api/comprobantes/${documentId}/vista-previa`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      return { ok: r.ok, estado: r.status, cuerpo: await r.text() };
+    }, id);
+
+    expect(respuesta.ok).toBe(false);
+    expect(respuesta.cuerpo).toMatch(/condición de pago|forma de pago/i);
+
+    // Y el comprobante sigue sin validar: la pantalla lo diría.
+    await page.reload();
+    await expect(page.getByRole('link', { name: /Ver la vista previa de la compra/ })).toBeVisible();
   });
 
   test('la factura frenada dice por qué, y no deja aplicar', async ({ page }) => {
@@ -163,6 +225,11 @@ test.describe('la vista previa de la compra', () => {
       .evaluate((li) => li.scrollWidth > li.clientWidth + 1);
     expect(cortado).toBe(false);
 
+    // El formulario de cómo se paga entra en la pantalla angosta y es usable.
+    await expect(page.getByRole('heading', { name: 'Cómo se paga' })).toBeVisible();
+    await expect(page.getByLabel('Forma de pago')).toHaveValue('');
+    await tamanoTactil(page, 'select#forma-de-pago');
+
     // Y el botón se puede tocar con el pulgar.
     await expect(page.getByRole('button', { name: 'Aplicar la compra' })).toBeVisible();
     await tamanoTactil(page, 'button.boton');
@@ -183,7 +250,8 @@ test.describe('la vista previa de la compra', () => {
      * costado. Un freno que se lee a medias no explica nada.
      */
     const frenos = page.locator('.mensaje-aviso .lista-simple li');
-    await expect(frenos).toHaveCount(2);
+    // Tres: la bolsa sin asociar, el total sin imprimir y cómo se paga.
+    await expect(frenos).toHaveCount(3);
     for (const freno of await frenos.all()) {
       await expect(freno).toBeVisible();
       const cortado = await freno.evaluate((li) => li.scrollWidth > li.clientWidth + 1);
