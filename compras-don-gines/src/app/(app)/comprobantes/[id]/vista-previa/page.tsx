@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { requireUserOrRedirect } from '@/lib/auth/session';
 import { vistaPreviaDeCompra, type Procedencia } from '@/lib/services/vista-previa-compra';
 import { formatARS, formatQty } from '@/lib/money';
+import { PAYMENT_METHODS, PAYMENT_METHOD_LABEL } from '@/lib/domain/payments';
 import { NotFoundError } from '@/lib/errors';
 import { AplicarCompra } from './AplicarCompra';
 
@@ -31,6 +32,17 @@ interface Props {
  * valor canónico —el que se compara y se guarda— y la pantalla lo escribe como
  * se lee en el mostrador.
  */
+
+/**
+ * Las formas de pago que ya usa el sistema, sin catálogo paralelo.
+ *
+ * Se arma acá, en el servidor, para que la pantalla no pueda ofrecer una que
+ * el servidor después rechace.
+ */
+const FORMAS_DE_PAGO = PAYMENT_METHODS.map((codigo) => ({
+  codigo,
+  nombre: PAYMENT_METHOD_LABEL[codigo] ?? codigo,
+}));
 
 /** El semáforo del control contable, que ya significa esto en toda la aplicación. */
 const CHIP: Record<Procedencia, string> = {
@@ -223,13 +235,17 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
               {...previa.egreso.condicion}
               valor={previa.egreso.condicion.valor ?? 'a definir al aplicar'}
             />
+            {/*
+              El vencimiento, también con su procedencia.
+              Era un dato suelto que decía «a definir al aplicar» mientras al
+              aplicar se rellenaba con la fecha de emisión. Ahora o sale de una
+              condición acordada —y dice la cuenta— o está pendiente y frena.
+            */}
+            <Valor
+              {...previa.egreso.vencimiento}
+              valor={previa.egreso.vencimiento.valor ?? 'a definir al aplicar'}
+            />
           </div>
-          <dl>
-            <div className="dato">
-              <dt>Vencimiento</dt>
-              <dd>{previa.egreso.vencimiento ?? 'a definir al aplicar'}</dd>
-            </div>
-          </dl>
         </section>
 
         <section className="card">
@@ -305,7 +321,12 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
             </ul>
           </div>
         )}
-        <AplicarCompra documentId={id} sePuedeAplicar={previa.sePuedeAplicar} />
+        <AplicarCompra
+          documentId={id}
+          sePuedeAplicar={previa.sePuedeAplicar}
+          hayQueElegirComoSePaga={previa.egreso.hayQueElegirComoSePaga}
+          formasDePago={FORMAS_DE_PAGO}
+        />
       </section>
     </>
   );

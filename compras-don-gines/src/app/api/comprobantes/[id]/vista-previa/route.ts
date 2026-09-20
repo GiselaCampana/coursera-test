@@ -17,11 +17,24 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
   });
 }
 
-export async function POST(_request: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   return handle(async () => {
     const user = await requireUser();
     const { id } = await params;
-    const resultado = await aplicarCompra(user, id);
+
+    /*
+     * La decisión de pago viaja en el cuerpo, y el servicio la vuelve a
+     * validar entera.
+     *
+     * Acá no se completa nada: si el cuerpo viene vacío y el proveedor no
+     * tiene condición acordada, la llamada se rechaza. Es el mismo camino que
+     * usa la pantalla, así que llamar directo a este POST no saltea ningún
+     * control.
+     */
+    const cuerpo = await request.json().catch(() => ({}));
+    const decision = (cuerpo as { pago?: unknown })?.pago ?? null;
+
+    const resultado = await aplicarCompra(user, id, decision as never);
     return NextResponse.json({
       documentId: resultado.documentId,
       estado: resultado.report.state,

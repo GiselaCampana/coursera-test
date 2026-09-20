@@ -1,12 +1,17 @@
 import { prisma } from '@/lib/db';
 import { Decimal } from '@/lib/money';
-import { formatDateAr } from '@/lib/datetime';
+import { formatDateAr, parseArDate } from '@/lib/datetime';
 import { assertBranchAccess, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { NotFoundError, ValidationError } from '@/lib/errors';
 import { acceptReadDocument, matchItemsToProducts } from '@/lib/services/documents';
 import { getSupplierConditions } from '@/lib/services/suppliers';
-import { describeTerm, type TermType } from '@/lib/domain/payments';
+import { computeDueDate, describeTerm, type TermType } from '@/lib/domain/payments';
+import {
+  resolverDecisionDePago,
+  vencimientoPosibleParaLaEmision,
+  type DecisionDePago,
+} from '@/lib/domain/decision-de-pago';
 import type { MatchMethod } from '@/lib/domain/matching';
 import {
   clasificarRenglon,
@@ -135,9 +140,24 @@ export interface VistaPreviaDeCompra {
   /** Lo que se va a pagar: un solo movimiento económico. */
   egreso: {
     total: ValorConProcedencia;
-    vencimiento: string | null;
+    /**
+     * Cuándo se paga, con su procedencia.
+     *
+     * Era un texto suelto y ahí estaba el problema: decía «a definir al
+     * aplicar» y al aplicar no se definía nada, se rellenaba con la fecha de
+     * emisión. Ahora, o sale de una condición acordada y se puede reproducir
+     * —emisión + 30 días—, o está pendiente de verdad y frena.
+     */
+    vencimiento: ValorConProcedencia;
     condicion: ValorConProcedencia;
     yaAgendado: boolean;
+    /**
+     * Si hace falta que una persona elija forma de pago y vencimiento.
+     *
+     * Es lo que enciende el formulario en la pantalla, y lo mismo que el
+     * servidor vuelve a exigir al aplicar.
+     */
+    hayQueElegirComoSePaga: boolean;
   };
   /** Lo que va a mover de mercadería: un movimiento por renglón asociado. */
   stock: {
@@ -274,6 +294,78 @@ export function condicionDePago(entrada: {
     valor: null,
     procedencia: 'PENDIENTE',
     detalle: 'Este proveedor no tiene condición de pago configurada. Se define al aplicar.',
+  };
+}
+
+/**
+ * Cuándo se paga, y de dónde sale esa fecha.
+ *
+ * Tres casos y ninguna omisión. Si el pago ya está agendado, la fecha es la
+ * agendada. Si el proveedor tiene una condición acordada, la fecha se
+ * **calcula** con ella y se dice la cuenta, para que cualquiera la reproduzca.
+ * Si no hay ninguna de las dos, está pendiente: y pendiente quiere decir que
+ * falta, no que se resuelve sola con la fecha de emisión.
+ */
+export function vencimientoDelEgreso(entrada: {
+  yaAgendado: Date | null;
+  deLaFicha: { termType: TermType; days: number; paymentMethod: string } | null;
+  emision: Date | null;
+  proximaFactura: Date | null;
+}): ValorConProcedencia {
+  if (entrada.yaAgendado) {
+    return {
+      etiqueta: 'Vencimiento',
+      valor: formatDateAr(entrada.yaAgendado),
+      procedencia: 'LEIDO',
+      detalle: 'Ya está agendado.',
+    };
+  }
+
+  if (entrada.deLaFicha && entrada.emision) {
+    const calculado = computeDueDate(entrada.emision, entrada.deLaFicha, {
+      proximaFactura: entrada.proximaFactura ?? undefined,
+    });
+    /*
+     * Una condición puede no dar fecha: «fecha manual» no la da por
+     * definición, y «factura contra factura» tampoco hasta que se sepa cuándo
+     * llega la próxima. En esos casos falta, y se dice.
+     */
+    if (calculado && vencimientoPosibleParaLaEmision(calculado, entrada.emision)) {
+      return {
+        etiqueta: 'Vencimiento',
+        valor: formatDateAr(calculado),
+        procedencia: 'INFERIDO',
+        detalle:
+          `Calculado con la condición del proveedor: ${describeTerm(entrada.deLaFicha)}, ` +
+          `desde la emisión del ${formatDateAr(entrada.emision)}.`,
+      };
+    }
+  }
+
+  /*
+   * «Factura contra factura» sin saber cuándo llega la próxima.
+   *
+   * Hay condición acordada y falta un dato del vínculo con el proveedor, no
+   * una decisión sobre esta factura. Se agenda provisoriamente para la fecha
+   * de emisión y la agenda queda marcada como provisoria, que es como el
+   * sistema ya lo modela.
+   */
+  if (entrada.deLaFicha?.termType === 'NEXT_INVOICE' && entrada.emision) {
+    return {
+      etiqueta: 'Vencimiento',
+      valor: formatDateAr(entrada.emision),
+      procedencia: 'SUGERIDO',
+      detalle:
+        'Factura contra factura: hasta que se sepa cuándo llega la próxima, queda agendada ' +
+        'provisoriamente y se corrige después.',
+    };
+  }
+
+  return {
+    etiqueta: 'Vencimiento',
+    valor: null,
+    procedencia: 'PENDIENTE',
+    detalle: 'Hay que elegir la forma de pago y el vencimiento antes de aplicar la compra.',
   };
 }
 
@@ -489,23 +581,38 @@ export async function vistaPreviaDeCompra(
    * fecha del comprobante: un plazo que cambió el mes pasado no puede mover el
    * vencimiento de una factura vieja.
    */
-  const deLaFicha = documento.supplierId
-    ? (await getSupplierConditions(documento.supplierId, documento.issueDate ?? new Date())).term
+  const condicionesDelProveedor = documento.supplierId
+    ? await getSupplierConditions(documento.supplierId, documento.issueDate ?? new Date())
     : null;
+  const deLaFicha = condicionesDelProveedor?.term ?? null;
+
+  const condicion = condicionDePago({
+    deLaFicha,
+    enElComprobante: {
+      termType: documento.appliedTermType,
+      days: documento.appliedTermDays,
+    },
+  });
+  const vencimiento = vencimientoDelEgreso({
+    yaAgendado: documento.paymentSchedule?.dueDate ?? null,
+    deLaFicha,
+    emision: documento.issueDate,
+    proximaFactura: condicionesDelProveedor?.proximaFactura ?? null,
+  });
 
   const egreso = {
     total,
-    vencimiento: documento.paymentSchedule?.dueDate
-      ? formatDateAr(documento.paymentSchedule.dueDate)
-      : null,
-    condicion: condicionDePago({
-      deLaFicha,
-      enElComprobante: {
-        termType: documento.appliedTermType,
-        days: documento.appliedTermDays,
-      },
-    }),
+    vencimiento,
+    condicion,
     yaAgendado: documento.paymentSchedule !== null,
+    /*
+     * Hay que elegir cuando no hay una condición acordada que dé la fecha.
+     *
+     * Con condición configurada la fecha se calcula y se puede reproducir; sin
+     * ella no hay nada que calcular, y rellenarla fue exactamente el defecto.
+     */
+    hayQueElegirComoSePaga:
+      documento.paymentSchedule === null && vencimiento.procedencia === 'PENDIENTE',
   };
 
   // --- El movimiento de mercadería ---------------------------------------
@@ -552,6 +659,7 @@ export async function vistaPreviaDeCompra(
     emisorElegido: emisor.proveedorId !== null,
     renglones: renglones.map((r) => ({ ...r, esGasto: r.gasto !== null })),
     total,
+    hayQueElegirComoSePaga: egreso.hayQueElegirComoSePaga,
   });
 
   return {
@@ -586,6 +694,8 @@ export function frenosDeLaCompra(entrada: {
     producto: { estado: EstadoDeAsociacion };
   }[];
   total: ValorConProcedencia;
+  /** Cuando el proveedor no tiene condición acordada, alguien tiene que elegir. */
+  hayQueElegirComoSePaga: boolean;
 }): string[] {
   const frenos: string[] = [];
 
@@ -625,6 +735,22 @@ export function frenosDeLaCompra(entrada: {
     );
   }
 
+  /*
+   * Y cómo se paga.
+   *
+   * Este freno es el que faltaba. La pantalla decía «a definir al aplicar» y al
+   * aplicar no se definía nada: el vencimiento caía en la fecha de emisión y la
+   * forma de pago en «Transferencia», las dos sin que nadie las eligiera. Una
+   * fecha de pago inventada es indistinguible de una acordada para quien la
+   * mira después.
+   */
+  if (entrada.hayQueElegirComoSePaga) {
+    frenos.push(
+      'Este proveedor no tiene condición de pago configurada: hay que elegir la forma de pago ' +
+        'y el vencimiento. No hay ninguno por omisión.',
+    );
+  }
+
   return frenos;
 }
 
@@ -641,14 +767,51 @@ export function frenosDeLaCompra(entrada: {
  * duplica nada, y el segundo intento sobre un comprobante ya validado se
  * rechaza con un conflicto en vez de volver a escribir.
  */
-export async function aplicarCompra(user: AuthUser, documentId: string) {
+export async function aplicarCompra(
+  user: AuthUser,
+  documentId: string,
+  /** Forma de pago y vencimiento, cuando el proveedor no los tiene acordados. */
+  decision?: DecisionDePago | null,
+) {
   const previa = await vistaPreviaDeCompra(user, documentId);
 
-  if (previa.frenos.length > 0) {
-    throw new ValidationError(
-      `Esta compra no se puede aplicar todavía. ${previa.frenos.join(' ')}`,
-    );
+  /*
+   * Los frenos que la decisión resuelve se descuentan acá.
+   *
+   * El único que una elección puede levantar es el de cómo se paga: si vino
+   * una decisión válida, ese freno ya no aplica. Los demás —el proveedor, las
+   * asociaciones, el total sugerido— no se levantan con nada que venga en la
+   * llamada, y por eso se miran igual.
+   */
+  const resuelto = decision
+    ? resolverDecisionDePago(decision, obtenerEmision(previa))
+    : null;
+  if (decision && resuelto && !resuelto.ok) {
+    throw new ValidationError(resuelto.motivo);
   }
 
-  return acceptReadDocument(user, documentId);
+  const frenos = previa.frenos.filter(
+    (freno) => !(resuelto?.ok && freno.startsWith('Este proveedor no tiene condición de pago')),
+  );
+
+  if (frenos.length > 0) {
+    throw new ValidationError(`Esta compra no se puede aplicar todavía. ${frenos.join(' ')}`);
+  }
+
+  return acceptReadDocument(user, documentId, decision ?? null);
+}
+
+/**
+ * La fecha de emisión del comprobante, para poder validar la decisión.
+ *
+ * Sale de la misma vista previa que se acaba de armar, así que la fecha contra
+ * la que se compara el vencimiento es exactamente la que la persona vio.
+ */
+function obtenerEmision(previa: VistaPreviaDeCompra): Date {
+  const campo = previa.encabezado.find((c) => c.etiqueta === 'Fecha de emisión');
+  const leida = campo?.valor ? parseArDate(campo.valor) : null;
+  if (!leida) {
+    throw new ValidationError('El comprobante no tiene fecha de emisión.');
+  }
+  return leida;
 }
