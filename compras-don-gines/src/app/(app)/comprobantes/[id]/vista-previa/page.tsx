@@ -252,7 +252,21 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
           <div className="card-titulo">
             <h2>Movimiento de stock</h2>
           </div>
-          <p className="ayuda">Un movimiento por renglón asociado. Se audita aparte del egreso.</p>
+          {/*
+            La dirección, arriba y con todas las letras.
+            Una compra hace ENTRAR mercadería. Decirlo acá no es redundante: el
+            error que hay que hacer imposible es mandarla como egreso, que vacía
+            el depósito de Control de Stock con números que parecen correctos.
+          */}
+          <p className="ayuda">
+            <strong>{previa.stock.direccion}</strong> en{' '}
+            {previa.stock.sucursal ? (
+              <strong>{previa.stock.sucursal.nombre}</strong>
+            ) : (
+              <span className="etiqueta-estado estado-error">sin sucursal de destino</span>
+            )}
+            . Un movimiento por renglón asociado, que se audita aparte del egreso.
+          </p>
           {previa.stock.movimientos.length === 0 ? (
             <p className="mensaje mensaje-aviso">Ningún renglón movería mercadería todavía.</p>
           ) : (
@@ -261,8 +275,14 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
                 <li key={movimiento.renglon}>
                   <strong>{movimiento.producto}</strong>
                   <div className="chico suave">
-                    {formatQty(movimiento.cantidad, 3)} {movimiento.unidad} ·{' '}
-                    {formatARS(movimiento.costoTotal)}
+                    {/*
+                      El PLU, que es la identidad con la que Control de Stock
+                      conoce al artículo. Se muestra porque es por lo que se
+                      resuelve: nunca por el nombre, que puede repetirse casi
+                      igual entre dos artículos que cuestan la mitad uno del otro.
+                    */}
+                    PLU {movimiento.plu ?? '—'} · {formatQty(movimiento.cantidad, 3)}{' '}
+                    {movimiento.unidad} · {formatARS(movimiento.costoTotal)}
                   </div>
                   {movimiento.porQueEsaUnidad ? (
                     <div className="chico suave">{movimiento.porQueEsaUnidad}</div>

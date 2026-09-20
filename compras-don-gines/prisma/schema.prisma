@@ -65,6 +65,7 @@ model User {
   documentsCreated   Document[]            @relation("DocumentCreatedBy")
   expenseCodes       SupplierExpenseCode[] @relation("ExpenseCodeCreatedBy")
   documentsValidated Document[]            @relation("DocumentValidatedBy")
+  stockOutbox        StockOutbox[]
   documentsVoided    Document[]            @relation("DocumentVoidedBy")
   paymentEvents      PaymentEvent[]
   auditLogs          AuditLog[]
@@ -101,6 +102,15 @@ model Branch {
   id        String   @id @default(cuid())
   code      String   @unique
   name      String
+  /// Con qué identificador conoce Control de Stock a esta sucursal.
+  ///
+  /// Nulo a propósito mientras no esté confirmado. El catálogo que Compras
+  /// descarga trae una lista `branches`, pero Compras la descarta —no importa
+  /// existencias ajenas— y nunca se acordó cuál de sus campos es la clave
+  /// estable. Inventar uno acá sería mandar mercadería a una sucursal elegida
+  /// por parecido de nombre, que es exactamente lo que no se hace con los
+  /// productos. Sin este valor el movimiento se anota y espera; no se manda.
+  stockKey  String?  @unique
   address   String?
   phone     String?
   active    Boolean  @default(true)
@@ -112,6 +122,7 @@ model Branch {
   purchaseMovements PurchaseMovement[]
   costHistory       CostHistory[]
   salesMovements    SalesMovement[]
+  stockOutbox       StockOutbox[]
 
   @@map("branches")
 }
@@ -154,6 +165,7 @@ model Supplier {
   products          Product[]
   productAliases    ProductAlias[]
   purchaseMovements PurchaseMovement[]
+  stockOutbox       StockOutbox[]
   costHistory       CostHistory[]
 
   @@index([tradeName])
@@ -337,6 +349,7 @@ model Product {
   aliases           ProductAlias[]
   documentItems     DocumentItem[]
   purchaseMovements PurchaseMovement[]
+  stockOutbox       StockOutbox[]
   costHistory       CostHistory[]
   pricingRules      PricingRule[]
   salePrices        SalePriceHistory[]
@@ -540,6 +553,7 @@ model Document {
   taxLines          DocumentTaxLine[]
   paymentSchedule   PaymentSchedule?
   purchaseMovements PurchaseMovement[]
+  stockOutbox       StockOutbox[]
   costHistory       CostHistory[]
 
   @@unique([supplierId, docType, pointOfSale, number, dedupeKey], name: "uniq_document_number")
@@ -992,4 +1006,112 @@ model AuditLog {
   @@index([userId, createdAt])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Ingreso de mercadería en Control de Stock
+// ---------------------------------------------------------------------------
+
+/// En qué anda el envío de un movimiento a Control de Stock.
+///
+/// Son cuatro y no dos a propósito: «pendiente» y «fallido» se parecen desde
+/// afuera —en los dos casos el stock de allá todavía no se movió— pero se
+/// atienden distinto. Un pendiente se espera; un fallido se mira.
+enum StockSyncStatus {
+  /// Anotado, todavía no salió.
+  PENDIENTE
+  /// Salió y no volvió la respuesta. No se puede reenviar sin la clave.
+  EN_PROCESO
+  /// Control de Stock lo aceptó y dijo con qué identificador.
+  COMPLETADO
+  /// Rechazado o caído. Recuperable: se puede volver a intentar.
+  FALLIDO
+}
+
+/// Un ingreso de mercadería esperando a que Control de Stock lo tome.
+///
+/// **Por qué una bandeja y no una llamada directa.** Entre Compras y Control de
+/// Stock no hay una transacción: son dos aplicaciones, cada una con su base. Si
+/// la compra se aplicara y después se llamara a Control de Stock, una caída en
+/// el medio dejaría la mercadería pagada acá y ausente allá, sin nadie que se
+/// entere. Anotar la fila **dentro de la misma transacción** que escribe la
+/// compra convierte eso en otra cosa: el movimiento no se pierde, queda
+/// pendiente, y lo peor que puede pasar es que tarde.
+///
+/// **Por qué el ingreso y no el egreso.** Una compra hace entrar mercadería. Es
+/// obvio dicho así y es exactamente el error que hay que hacer imposible:
+/// mandar una compra como egreso vacía el depósito de la otra aplicación con
+/// números que parecen correctos. Por eso la dirección es una constante del
+/// dominio y viaja en cada fila.
+model StockOutbox {
+  id String @id @default(cuid())
+
+  /// La clave de idempotencia, y el corazón de todo esto.
+  ///
+  /// Se arma con identificadores que ya existen y no cambian —el comprobante y
+  /// el renglón—, nunca con la hora: una clave con reloj adentro es una clave
+  /// distinta en cada reintento, y entonces no deduplica nada. Con ésta,
+  /// mandar dos veces el mismo renglón es mandar dos veces la misma clave, y
+  /// Control de Stock puede contestar lo mismo sin volver a mover nada.
+  eventKey String @unique
+
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  /// Un renglón, un movimiento. La unicidad lo garantiza en la base y no en el
+  /// código: dos filas para el mismo renglón no se pueden escribir ni aunque
+  /// dos pedidos concurrentes lo intenten a la vez.
+  documentItemId String @unique
+
+  /// El artículo de Don Ginés que recibe la mercadería.
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id])
+
+  /// Quién aplicó la compra. Para la auditoría: un movimiento de stock siempre
+  /// tiene una persona detrás.
+  requestedById String?
+  requestedBy   User?   @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  /// El PLU, copiado al momento de aplicar.
+  ///
+  /// Copiado y no leído del producto cada vez: si mañana alguien corrige el
+  /// PLU de un artículo, este movimiento ya salió con el anterior y el registro
+  /// tiene que decir cuál se mandó, no cuál diría hoy.
+  plu String
+
+  quantity Decimal      @db.Decimal(14, 4)
+  unit     PurchaseUnit
+
+  /// Siempre un ingreso. Se guarda igual, explícito, para que una fila mal
+  /// escrita se vea en la tabla y no haya que deducirla del contexto.
+  direction String @default("INGRESO")
+
+  /// La fecha del hecho: la emisión del comprobante, no la de envío. Una
+  /// factura se carga días después y el movimiento es del día que ocurrió.
+  occurredAt DateTime
+
+  status   StockSyncStatus @default(PENDIENTE)
+  attempts Int             @default(0)
+
+  /// El último motivo del rechazo, para mirarlo sin entrar a los registros.
+  /// Nunca lleva credenciales: lo que se guarda es el motivo, no el pedido.
+  lastError String?
+
+  /// Con qué identificador quedó del otro lado, cuando lo aceptaron.
+  externalId String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastTriedAt DateTime?
+  completedAt DateTime?
+
+  @@index([status, createdAt])
+  @@index([documentId])
+  @@map("stock_outbox")
 }

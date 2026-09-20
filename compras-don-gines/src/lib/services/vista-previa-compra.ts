@@ -119,6 +119,8 @@ export interface RenglonDeLaVistaPrevia {
   producto: {
     id: string | null;
     nombre: string | null;
+    /** El PLU: la identidad que define Control de Stock. Nunca el nombre. */
+    plu: string | null;
     unidadDelCatalogo: string | null;
     estado: EstadoDeAsociacion;
     metodo: MatchMethod;
@@ -171,10 +173,25 @@ export interface VistaPreviaDeCompra {
   };
   /** Lo que va a mover de mercadería: un movimiento por renglón asociado. */
   stock: {
+    /**
+     * A qué local entra la mercadería. La del comprobante y ninguna otra.
+     *
+     * No hay sucursal por omisión: elegir una en silencio manda mercadería a un
+     * local donde nunca estuvo, y el faltante aparece en otro.
+     */
+    sucursal: { id: string; codigo: string; nombre: string } | null;
+    /**
+     * Hacia dónde. Dicho con todas las letras porque es el error que no se ve:
+     * una compra mandada como egreso vacía el depósito de la otra aplicación
+     * con números que parecen correctos.
+     */
+    direccion: string;
     movimientos: {
       renglon: number;
       productoId: string;
       producto: string;
+      /** El PLU con el que Control de Stock lo va a recibir. */
+      plu: string | null;
       cantidad: string;
       unidad: string;
       costoTotal: string;
@@ -478,7 +495,7 @@ export async function vistaPreviaDeCompra(
   const productos = idsDeProducto.length
     ? await prisma.product.findMany({
         where: { id: { in: idsDeProducto } },
-        select: { id: true, normalizedName: true, purchaseUnit: true },
+        select: { id: true, normalizedName: true, purchaseUnit: true, internalCode: true },
       })
     : [];
   const porId = new Map(productos.map((p) => [p.id, p]));
@@ -541,6 +558,7 @@ export async function vistaPreviaDeCompra(
       producto: {
         id: productoId,
         nombre: producto?.normalizedName ?? null,
+        plu: producto?.internalCode ?? null,
         unidadDelCatalogo: producto ? (UNIDADES[producto.purchaseUnit] ?? producto.purchaseUnit) : null,
         estado,
         metodo,
@@ -633,13 +651,23 @@ export async function vistaPreviaDeCompra(
    */
   const mercaderia = renglones.filter((r) => r.gasto === null);
   const conProducto = mercaderia.filter((r) => r.producto.estado === 'INEQUIVOCA');
+  const sucursalDeDestino = await prisma.branch.findUnique({
+    where: { id: documento.branchId },
+    select: { id: true, code: true, name: true },
+  });
+
   const stock = {
+    sucursal: sucursalDeDestino
+      ? { id: sucursalDeDestino.id, codigo: sucursalDeDestino.code, nombre: sucursalDeDestino.name }
+      : null,
+    direccion: 'Ingreso por compra',
     movimientos: conProducto.map((r) => {
       const unidad = r.producto.unidadDelCatalogo ?? r.unidad;
       return {
         renglon: r.numero,
         productoId: r.producto.id as string,
         producto: r.producto.nombre ?? '(sin nombre)',
+        plu: r.producto.plu,
         cantidad: r.cantidad,
         unidad,
         costoTotal: r.importe,

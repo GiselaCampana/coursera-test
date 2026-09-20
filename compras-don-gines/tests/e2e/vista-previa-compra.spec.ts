@@ -298,6 +298,41 @@ test.describe('la vista previa de la compra', () => {
     );
   });
 
+  test('el stock dice que es un ingreso, a qué sucursal y con qué PLU', async ({ page }) => {
+    /*
+     * Una compra hace ENTRAR mercadería. La pantalla lo dice con todas las
+     * letras porque el error que hay que hacer imposible es el contrario:
+     * mandarla como egreso vacía el depósito de Control de Stock con números
+     * que parecen correctos, y nadie lo nota hasta que falta la mercadería.
+     */
+    await ingresar(page, 'admin');
+    await abrirLaVistaPrevia(page, COMPLETA);
+
+    const recuadro = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
+    await expect(recuadro).toContainText('Ingreso por compra');
+    await expect(recuadro).not.toContainText(/Egreso por compra|Salida|Venta/);
+
+    // La sucursal de destino, nombrada: no hay ninguna por omisión.
+    await expect(recuadro).toContainText('Devoto');
+
+    /*
+     * Y el PLU de cada artículo, que es la identidad por la que se resuelve.
+     * Nunca el nombre: dos artículos del catálogo pueden llamarse casi igual y
+     * costar la mitad uno del otro.
+     */
+    const mercaderia = recuadro.locator('ul.lista-simple').first();
+    await expect(mercaderia.locator('li')).toHaveCount(5);
+    for (const li of await mercaderia.locator('li').all()) {
+      await expect(li).toContainText(/PLU \d+/);
+    }
+
+    // La bolsa sigue aparte, en unidades y sin impacto.
+    const gastos = recuadro.locator('ul.lista-simple').last();
+    await expect(gastos.locator('li')).toHaveCount(1);
+    await expect(gastos).toContainText('3,000 unidades');
+    await expect(gastos).not.toContainText('PLU');
+  });
+
   test('la llamada directa al POST también se rechaza', async ({ page }) => {
     /*
      * Que la pantalla frene no alcanza: el endpoint se puede llamar solo. Sin

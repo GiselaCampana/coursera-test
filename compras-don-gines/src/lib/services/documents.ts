@@ -37,6 +37,12 @@ import { env } from '@/lib/env';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
 import { asegurarEspacio } from '@/lib/services/almacenamiento';
+import { anotarIngresos } from '@/lib/services/stock-ingreso';
+import {
+  planDeIngresos,
+  resolverDestino,
+  type RenglonParaStock,
+} from '@/lib/domain/ingreso-de-stock';
 
 // ---------------------------------------------------------------------------
 // Alta y archivos
@@ -723,6 +729,68 @@ export async function confirmDocument(
     return reconocidos[i]?.productId ? (reconocidos[i].method ?? 'NONE') : 'NONE';
   });
 
+  /*
+   * --- La mercadería que va a entrar a Control de Stock -------------------
+   *
+   * Se resuelve **antes** de escribir, y lo que impida un solo renglón frena la
+   * compra entera. Aplicar cinco de seis deja una compra a medias en dos
+   * aplicaciones distintas: la diferencia no se ve en ninguna pantalla y
+   * aparece semanas después como un faltante sin explicación.
+   *
+   * Los artículos se resuelven por PLU, que es la identidad que define Control
+   * de Stock. Nunca por parecido del nombre, y nunca creando uno nuevo para
+   * salir del paso: eso repartiría las existencias del mismo queso entre dos
+   * fichas.
+   */
+  const productosDelIngreso = await prisma.product.findMany({
+    where: {
+      id: { in: [...new Set(productoDeCadaRenglon.filter((id): id is string => id !== null))] },
+    },
+    select: { id: true, internalCode: true, purchaseUnit: true },
+  });
+  const productoPorId = new Map(productosDelIngreso.map((p) => [p.id, p]));
+
+  const sucursalDelComprobante = await prisma.branch.findUnique({
+    where: { id: document.branchId },
+    select: { id: true, code: true, name: true, stockKey: true },
+  });
+  const destino = resolverDestino(sucursalDelComprobante);
+  if (!destino.ok) throw new ValidationError(destino.motivo);
+
+  const plan = planDeIngresos(
+    renglonesNormalizados.map((source, i): RenglonParaStock => {
+      const productId = productoDeCadaRenglon[i];
+      const producto = productId ? productoPorId.get(productId) : undefined;
+      return {
+        // El identificador del renglón se conoce recién al crearlo; acá se usa
+        // el índice y se reemplaza adentro de la transacción.
+        documentItemId: String(i),
+        lineNumber: i + 1,
+        description: source.description,
+        quantity: costed[i].quantity.toString(),
+        unit: costed[i].unit,
+        producto: producto
+          ? { id: producto.id, plu: producto.internalCode, purchaseUnit: producto.purchaseUnit }
+          : null,
+        esGasto: gastoDeCadaRenglon[i].kind !== null,
+      };
+    }),
+  );
+
+  /*
+   * Un renglón de mercadería sin artículo ya lo frena la vista previa. Acá se
+   * vuelve a mirar porque el servidor no puede confiar en la pantalla, y
+   * porque los otros dos impedimentos —PLU vacío, unidad incompatible— no se
+   * ven desde afuera.
+   */
+  if (plan.impedimentos.length > 0) {
+    throw new ValidationError(
+      `La mercadería no se puede ingresar a Control de Stock. ${plan.impedimentos
+        .map((i) => i.motivo)
+        .join(' ')}`,
+    );
+  }
+
   // --- Escritura transaccional -------------------------------------------
   const result = await prisma.$transaction(async (tx) => {
     // Se rehacen renglones y movimientos: confirmar dos veces no duplica nada.
@@ -760,7 +828,7 @@ export async function confirmDocument(
       },
     });
 
-    const createdItems = [];
+    const createdItems: { id: string }[] = [];
     for (let i = 0; i < costed.length; i++) {
       const item = costed[i];
       createdItems.push(
@@ -869,6 +937,30 @@ export async function confirmDocument(
         }
       }
     }
+
+    /*
+     * Y la mercadería que tiene que entrar a Control de Stock, anotada **acá
+     * adentro**: en la misma transacción que acaba de escribir la compra.
+     *
+     * Ése es el punto entero de la bandeja. Si se anotara después, una caída en
+     * el medio dejaría la mercadería pagada acá y ausente allá, sin nadie que
+     * se entere. Anotada adentro, o se escriben las dos cosas o no se escribe
+     * ninguna, y lo peor que puede pasar es que el envío tarde.
+     *
+     * Los identificadores de renglón recién existen ahora, así que el plan se
+     * recorre emparejado con `createdItems`.
+     */
+    await anotarIngresos(tx, {
+      documentId: document.id,
+      branchId: document.branchId,
+      supplierId: supplier.id,
+      requestedById: user.id,
+      occurredAt: issueDate,
+      ingresos: plan.ingresos.map((ingreso) => ({
+        ...ingreso,
+        documentItemId: createdItems[Number(ingreso.documentItemId)].id,
+      })),
+    });
 
     // Agenda de pago. Vencer y pagar son eventos distintos: acá sólo se agenda.
     const status = computePaymentStatus({ dueDate, plannedAmount: total, paidAmount: 0 });

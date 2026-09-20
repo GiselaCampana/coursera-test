@@ -22,6 +22,7 @@ import {
 } from '@/components/Estado';
 import { AccionesComprobante } from './AccionesComprobante';
 import { RepararDerivados } from './RepararDerivados';
+import { sincronizacionDe } from '@/lib/services/stock-ingreso';
 
 export const metadata: Metadata = { title: 'Comprobante' };
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,30 @@ function resumenDeReparacion(p: {
   return `Se reconstruyó: ${partes.join(', ')}.`;
 }
 
+/**
+ * Los cinco estados, cada uno con su color y su palabra.
+ *
+ * «Pendiente» y «fallida» se parecen desde afuera —en los dos casos el stock de
+ * la otra aplicación todavía no se movió— pero se atienden distinto: una se
+ * espera, la otra se mira. Y «en proceso» es el caso incómodo: salió y no
+ * volvió respuesta, así que puede haber llegado.
+ */
+const CHIP_DE_SINCRONIZACION: Record<string, string> = {
+  PENDIENTE: 'estado-aviso',
+  EN_PROCESO: 'estado-info',
+  COMPLETADA: 'estado-ok',
+  FALLIDA: 'estado-error',
+  SIN_MOVIMIENTOS: 'estado-neutro',
+};
+
+const TEXTO_DE_SINCRONIZACION: Record<string, string> = {
+  PENDIENTE: 'pendiente de enviar',
+  EN_PROCESO: 'enviada, sin confirmación',
+  COMPLETADA: 'confirmada por Control de Stock',
+  FALLIDA: 'falló, se puede reintentar',
+  SIN_MOVIMIENTOS: 'sin movimientos de mercadería',
+};
+
 export default async function PaginaComprobante({ params, searchParams }: Props) {
   const user = await requireUserOrRedirect();
   const { id } = await params;
@@ -67,6 +92,15 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
     if (error instanceof NotFoundError) notFound();
     throw error;
   }
+
+  /*
+   * Cómo va el ingreso de la mercadería a Control de Stock.
+   *
+   * Se lee acá y no se deduce del estado del comprobante: un comprobante
+   * VALIDADO con movimientos sin confirmar está a medio camino, y la diferencia
+   * es justamente lo que hay que poder ver.
+   */
+  const sincronizacion = await sincronizacionDe(documento.id);
 
   const storage = await getStorage();
 
@@ -296,6 +330,54 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
           ) : null}
         </dl>
       </div>
+
+      {/*
+        La mercadería, aparte del pago y con su estado real.
+
+        Son dos consecuencias distintas de la misma compra y se auditan por
+        separado: una deuda con el proveedor y mercadería que entra. Mostrar
+        sólo la primera dejaba a la segunda invisible, y una compra con
+        movimientos sin confirmar **no está terminada** aunque el pago sí lo
+        esté. El estado se dice como es, sin redondear para arriba.
+      */}
+      {sincronizacion.estado !== 'SIN_MOVIMIENTOS' ? (
+        <div className="card">
+          <div className="card-titulo">
+            <h2>Movimiento de stock</h2>
+          </div>
+          <p className="ayuda">
+            Ingreso por compra en <strong>{documento.branch?.name ?? 'la sucursal'}</strong>. Se
+            registra en Control de Stock, que es otra aplicación: hasta que lo confirme, la
+            mercadería está pagada acá y todavía no entró allá.
+          </p>
+          <dl style={{ margin: 0 }}>
+            <div className="dato destacado">
+              <dt>Sincronización</dt>
+              <dd>
+                <span className={`etiqueta-estado ${CHIP_DE_SINCRONIZACION[sincronizacion.estado]}`}>
+                  {TEXTO_DE_SINCRONIZACION[sincronizacion.estado]}
+                </span>
+              </dd>
+            </div>
+            <div className="dato">
+              <dt>Renglones</dt>
+              <dd>
+                {sincronizacion.completados} de {sincronizacion.total} confirmados
+              </dd>
+            </div>
+          </dl>
+          {sincronizacion.motivos.length > 0 ? (
+            <div className="mensaje mensaje-aviso" style={{ marginTop: 10 }}>
+              <strong>Lo que falta resolver:</strong>
+              <ul className="lista-simple" style={{ marginTop: 6 }}>
+                {sincronizacion.motivos.map((motivo) => (
+                  <li key={motivo}>{motivo}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {documento.paymentSchedule ? (
         <div className="card">
