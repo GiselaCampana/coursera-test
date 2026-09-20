@@ -79,9 +79,9 @@ async function main() {
 
   // --- Sucursales ---------------------------------------------------------
   const branchData = [
-    { code: 'DEVOTO', name: 'Devoto' },
-    { code: 'PUEYRREDON', name: 'Pueyrredón' },
-    { code: 'SAN_MARTIN', name: 'San Martín' },
+    { code: 'DEVOTO', name: 'Devoto', stockKey: 'devoto' },
+    { code: 'PUEYRREDON', name: 'Pueyrredón', stockKey: 'pueyrredon' },
+    { code: 'SAN_MARTIN', name: 'San Martín', stockKey: 'san_martin' },
   ];
   const branches = [];
   for (const b of branchData) {

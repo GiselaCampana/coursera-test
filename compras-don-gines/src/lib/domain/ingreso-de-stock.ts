@@ -241,3 +241,56 @@ export function resolverDestino(sucursal: SucursalDeDestino | null): DestinoResu
   }
   return { ok: true, sucursal };
 }
+
+/* -------------------------------------------------------------------------- */
+/*  El contrato con Control de Stock, versión 1                                */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * **El lote que viaja, tal como lo acordamos con Control de Stock.**
+ *
+ * Es un lote por compra y no un pedido por renglón, a propósito: los cinco
+ * movimientos de una factura se aplican en una transacción del otro lado o no
+ * se aplica ninguno. Media compra ingresada es peor que ninguna, porque la
+ * diferencia no se ve en ninguna pantalla.
+ *
+ * Los tipos son literales —`1`, `'IN'`, `'PURCHASE'`— para que el compilador
+ * rechace cualquier otro valor antes de que salga un pedido. La dirección no
+ * es configurable en ninguna capa.
+ */
+export const VERSION_DEL_CONTRATO = 1 as const;
+export const DIRECCION_DEL_CONTRATO = 'IN' as const;
+export const MOTIVO_DEL_CONTRATO = 'PURCHASE' as const;
+
+export interface MovimientoDelLote {
+  /** El renglón de Compras. Persistente: es la trazabilidad de vuelta. */
+  sourceLineId: string;
+  /** La misma clave en cada reintento. Nunca se genera una nueva. */
+  idempotencyKey: string;
+  plu: string;
+  /** Cadena decimal: un número de coma flotante perdería los kilos exactos. */
+  quantity: string;
+  unit: PurchaseUnit;
+  direction: typeof DIRECCION_DEL_CONTRATO;
+  reason: typeof MOTIVO_DEL_CONTRATO;
+}
+
+export interface LoteDeIngreso {
+  contractVersion: typeof VERSION_DEL_CONTRATO;
+  source: typeof APLICACION;
+  purchaseId: string;
+  /** `branches.code` de Control de Stock: devoto, pueyrredon, san_martin. */
+  branchCode: string;
+  document: {
+    documentId: string;
+    type: string;
+    pointOfSale: string;
+    number: string;
+    /** La emisión, en ISO. El hecho es del día que ocurrió, no del envío. */
+    issuedAt: string;
+    supplierTaxId: string | null;
+    supplierName: string | null;
+  };
+  confirmedBy: { userId: string | null; name: string | null };
+  movements: MovimientoDelLote[];
+}

@@ -1,12 +1,15 @@
 import 'server-only';
 import type { Prisma, PrismaClient, StockOutbox } from '@prisma/client';
 import { prisma } from '@/lib/db';
-import { AppError } from '@/lib/errors';
 import {
   APLICACION,
   DIRECCION_DE_COMPRA,
+  DIRECCION_DEL_CONTRATO,
+  MOTIVO_DEL_CONTRATO,
+  VERSION_DEL_CONTRATO,
   claveDelEvento,
   type IngresoPlaneado,
+  type LoteDeIngreso,
 } from '@/lib/domain/ingreso-de-stock';
 
 /**
@@ -24,84 +27,68 @@ import {
  * ahí se manda cuantas veces haga falta. Lo peor que puede pasar es que tarde,
  * y que mientras tanto la pantalla lo diga.
  *
- * **Nada de esto viaja al navegador.** El archivo es `server-only` y la clave
- * vive en el entorno del servidor: no hay ninguna variable NEXT_PUBLIC_ y el
- * navegador nunca ve el destino ni la credencial.
+ * **Se manda un lote por compra**, no un pedido por renglón. Los cinco
+ * movimientos de una factura se aplican del otro lado en una transacción o no
+ * se aplica ninguno: media compra ingresada es peor que ninguna, porque la
+ * diferencia no se ve en ninguna pantalla y aparece semanas después.
+ *
+ * **Nada de esto viaja al navegador.** El archivo es `server-only`, la clave
+ * vive en el entorno del servidor, y ni la URL privada ni el secreto aparecen
+ * en respuestas, mensajes de error o registros.
  */
 
-/** Lo que se manda por un movimiento. Es lo que la bandeja guarda. */
-export interface EventoDeIngreso {
-  eventKey: string;
-  aplicacion: string;
-  direccion: typeof DIRECCION_DE_COMPRA;
-  plu: string;
-  quantity: string;
-  unit: string;
-  /** La sucursal, con la clave que usa Control de Stock. */
-  branchKey: string;
-  occurredAt: string;
-  /** Para la auditoría del otro lado: de qué comprobante salió. */
-  origen: {
-    documentId: string;
-    documentItemId: string;
-    fullNumber: string | null;
-    supplierCuit: string | null;
-  };
-}
+export type { LoteDeIngreso };
 
-export type ResultadoDelEnvio =
-  /** Aceptado. `externalId` es con qué identificador quedó del otro lado. */
-  | { estado: 'ACEPTADO'; externalId: string }
+/** Cómo terminó el envío de un lote. */
+export type ResultadoDelLote =
   /**
-   * Ya lo tenían. Es la respuesta que hace que un reintento sea inofensivo:
-   * Control de Stock reconoce la clave y devuelve lo de la vez anterior sin
-   * volver a mover nada.
+   * El otro lado lo tomó. Trae, por clave de idempotencia, si lo aplicó ahora
+   * o si ya lo tenía: las dos cosas terminan la sincronización, y la segunda
+   * es la que hace que un reintento sea inofensivo.
    */
-  | { estado: 'YA_ESTABA'; externalId: string }
-  /** Rechazado con motivo. No se reintenta solo: hay algo que corregir. */
-  | { estado: 'RECHAZADO'; motivo: string }
-  /**
-   * No se sabe. Un timeout, un 500, una conexión cortada: puede haber llegado
-   * o no. Es el caso peligroso, y por eso tiene nombre propio.
-   */
-  | { estado: 'INCIERTO'; motivo: string };
+  | {
+      clase: 'APLICADO';
+      porClave: Record<string, { estado: 'APPLIED' | 'ALREADY_APPLIED'; movementId?: string }>;
+    }
+  /** 401/403. Es configuración, no contenido: no se reintenta a ciegas. */
+  | { clase: 'SIN_AUTORIZACION'; motivo: string }
+  /** 409: la misma clave con otro contenido. Alguien tiene que mirarlo. */
+  | { clase: 'CONFLICTO'; motivo: string }
+  /** 422: el contenido está mal y lo va a seguir estando. Hay que corregir. */
+  | { clase: 'RECHAZADO'; motivo: string }
+  /** 429, 5xx, timeout: puede andar más tarde. Se conserva para reintentar. */
+  | { clase: 'RECUPERABLE'; motivo: string }
+  /** Contestó algo que no es este contrato. No se asume éxito. */
+  | { clase: 'RESPUESTA_INVALIDA'; motivo: string }
+  /** Falta la URL o la clave. No sale ningún pedido. */
+  | { clase: 'SIN_CONFIGURAR'; motivo: string };
 
 /**
  * Cómo se habla con Control de Stock.
  *
- * Es una interfaz y no una llamada directa por una razón concreta: **el
- * contrato de escritura todavía no existe**. La integración que hay hoy es de
- * lectura —se descarga el catálogo— y para escribir movimientos no hay
- * endpoint acordado, ni identificador de sucursal, ni lista de rechazos. Con
- * esto, todo lo que no depende de ese contrato se implementa y se prueba, y el
- * día que el contrato exista se escribe un transporte y nada más cambia.
+ * Es una interfaz y no una llamada directa para poder probar todo lo de este
+ * lado contra un receptor determinístico —sin red, sin reloj, sin azar— en vez
+ * de contra existencias reales.
  */
 export interface TransporteDeStock {
-  enviar(evento: EventoDeIngreso): Promise<ResultadoDelEnvio>;
+  enviar(lote: LoteDeIngreso): Promise<ResultadoDelLote>;
 }
 
-/**
- * El transporte real, que todavía no se puede escribir.
- *
- * No inventa una URL, ni un encabezado, ni una forma de solicitud. Falla con un
- * motivo explícito, y ese motivo termina visible en la pantalla: la compra
- * queda con la sincronización pendiente y dice por qué, en vez de aparecer
- * como terminada.
- */
-export const TRANSPORTE_SIN_CONTRATO: TransporteDeStock = {
+/** El transporte que no manda nada. Es el de por omisión hasta configurar. */
+export const TRANSPORTE_SIN_CONFIGURAR: TransporteDeStock = {
   async enviar() {
     return {
-      estado: 'RECHAZADO',
+      clase: 'SIN_CONFIGURAR',
       motivo:
-        'Todavía no hay un endpoint acordado con Control de Stock para registrar movimientos. ' +
-        'El ingreso queda anotado y se envía cuando el contrato exista.',
+        'La integración de escritura con Control de Stock no está configurada. ' +
+        'El ingreso queda anotado y no se envía.',
     };
   },
 };
 
-let transporte: TransporteDeStock = TRANSPORTE_SIN_CONTRATO;
+let transporte: TransporteDeStock = TRANSPORTE_SIN_CONFIGURAR;
 
-/** Cambia el transporte. Lo usan las pruebas con su servidor determinístico. */
+/** Cambia el transporte. Lo usan las pruebas con su receptor determinístico. */
 export function usarTransporteDeStock(nuevo: TransporteDeStock) {
   transporte = nuevo;
 }
@@ -142,15 +129,6 @@ export async function anotarIngresos(
       documentItemId: ingreso.documentItemId,
     });
 
-    /*
-     * Upsert y no create.
-     *
-     * Aplicar una compra rehace sus renglones, así que en un reintento los
-     * identificadores de renglón pueden ser otros; lo que no cambia es que el
-     * movimiento ya mandado no se puede volver a mandar. Las filas que ya están
-     * COMPLETADO no se tocan: se actualiza el dato descriptivo y se deja el
-     * estado y el identificador externo donde estaban.
-     */
     await tx.stockOutbox.upsert({
       where: { eventKey },
       create: {
@@ -180,6 +158,106 @@ export async function anotarIngresos(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Armar el lote                                                              */
+/* -------------------------------------------------------------------------- */
+
+export type ArmadoDelLote =
+  | { ok: true; lote: LoteDeIngreso }
+  | { ok: false; motivo: string };
+
+/**
+ * Arma el cuerpo exacto que va a viajar, o dice por qué no se puede.
+ *
+ * Separado del envío para poder mirarlo sin mandarlo: las pruebas comprueban el
+ * JOSN carácter por carácter —las cantidades como cadenas decimales, la
+ * dirección, el código de sucursal— sin abrir un socket.
+ */
+export async function armarLote(
+  documentId: string,
+  filas: StockOutbox[],
+  cliente?: PrismaClient,
+): Promise<ArmadoDelLote> {
+  const db = cliente ?? prisma;
+
+  const documento = await db.document.findUnique({
+    where: { id: documentId },
+    select: {
+      id: true,
+      letter: true,
+      pointOfSale: true,
+      number: true,
+      issueDate: true,
+      branch: { select: { name: true, stockKey: true } },
+      supplier: { select: { cuit: true, tradeName: true, legalName: true } },
+      validatedBy: { select: { id: true, name: true } },
+    },
+  });
+  if (!documento) return { ok: false, motivo: 'El comprobante ya no existe.' };
+
+  /*
+   * Sin la clave canónica de la sucursal no sale nada.
+   *
+   * `branches.code` de Control de Stock —devoto, pueyrredon, san_martin— es lo
+   * único que identifica el local sin ambigüedad entre ambientes. Mandar el
+   * nombre sería elegir la sucursal por parecido, que es lo que no se hace con
+   * los artículos; mandar un UUID interno sería peor, porque cambia de base en
+   * base.
+   */
+  if (!documento.branch.stockKey) {
+    return {
+      ok: false,
+      motivo:
+        `La sucursal «${documento.branch.name}» no tiene cargado su código de Control de ` +
+        'Stock. Hasta que lo tenga, el movimiento queda anotado y no se envía: mandarlo con ' +
+        'el nombre sería elegir el local por parecido.',
+    };
+  }
+
+  return {
+    ok: true,
+    lote: {
+      contractVersion: VERSION_DEL_CONTRATO,
+      source: APLICACION,
+      purchaseId: documento.id,
+      branchCode: documento.branch.stockKey,
+      document: {
+        documentId: documento.id,
+        type: documento.letter ?? '',
+        pointOfSale: documento.pointOfSale,
+        number: documento.number,
+        issuedAt: documento.issueDate
+          ? documento.issueDate.toISOString().slice(0, 10)
+          : '',
+        /* El CUIT sin guiones: el identificador, no su presentación. */
+        supplierTaxId: documento.supplier?.cuit?.replace(/\D/g, '') ?? null,
+        supplierName: documento.supplier?.tradeName ?? documento.supplier?.legalName ?? null,
+      },
+      confirmedBy: {
+        userId: documento.validatedBy?.id ?? filas[0]?.requestedById ?? null,
+        name: documento.validatedBy?.name ?? null,
+      },
+      movements: filas.map((fila) => ({
+        sourceLineId: fila.documentItemId,
+        idempotencyKey: fila.eventKey,
+        plu: fila.plu,
+        /*
+         * Cadena decimal, no número.
+         *
+         * 4,240 kg pasado por un flotante vuelve como 4.24 y los tres decimales
+         * del papel dejan de ser los tres decimales del papel. La base guarda
+         * Decimal y acá se serializa como texto, sin pasar por Number en
+         * ningún punto del camino.
+         */
+        quantity: fila.quantity.toString(),
+        unit: fila.unit,
+        direction: DIRECCION_DEL_CONTRATO,
+        reason: MOTIVO_DEL_CONTRATO,
+      })),
+    },
+  };
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Despachar                                                                  */
 /* -------------------------------------------------------------------------- */
 
@@ -187,24 +265,24 @@ export async function anotarIngresos(
 export const INTENTOS_MAXIMOS = 5;
 
 export interface ResumenDelDespacho {
-  intentados: number;
+  lotes: number;
   completados: number;
+  pendientes: number;
   fallidos: number;
   inciertos: number;
 }
 
 /**
- * Manda lo que esté pendiente.
+ * Manda lo que esté pendiente, un lote por compra.
  *
- * **Toma una fila por vez y la marca antes de mandarla.** Ese paso —pasar de
- * PENDIENTE a EN_PROCESO con un `updateMany` condicionado al estado— es lo que
- * impide que dos despachos concurrentes manden el mismo movimiento: el segundo
- * encuentra cero filas afectadas y no la toca. La unicidad de la base lo
- * respalda por si el reclamo fallara.
+ * **Reclama las filas antes de mandarlas.** Ese paso —pasar de PENDIENTE a
+ * EN_PROCESO con un `updateMany` condicionado al estado— es lo que impide que
+ * dos despachos concurrentes manden la misma compra: el segundo encuentra cero
+ * filas afectadas y no la toca.
  *
  * Una fila EN_PROCESO **no se reintenta sola**: quedó sin respuesta y puede
  * haber llegado. Se reintenta a pedido, y ahí la clave de idempotencia hace su
- * trabajo: Control de Stock reconoce la clave y devuelve lo de la vez anterior.
+ * trabajo, porque es la misma de siempre y nunca se genera una nueva.
  */
 export async function despacharPendientes(opciones?: {
   documentId?: string;
@@ -222,133 +300,130 @@ export async function despacharPendientes(opciones?: {
       attempts: { lt: INTENTOS_MAXIMOS },
       ...(opciones?.documentId ? { documentId: opciones.documentId } : {}),
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ documentId: 'asc' }, { createdAt: 'asc' }],
   });
 
+  const porCompra = new Map<string, StockOutbox[]>();
+  for (const fila of candidatas) {
+    const lista = porCompra.get(fila.documentId) ?? [];
+    lista.push(fila);
+    porCompra.set(fila.documentId, lista);
+  }
+
   const resumen: ResumenDelDespacho = {
-    intentados: 0,
+    lotes: 0,
     completados: 0,
+    pendientes: 0,
     fallidos: 0,
     inciertos: 0,
   };
 
-  for (const fila of candidatas) {
+  for (const [documentId, filas] of porCompra) {
     /*
-     * Reclamar antes de mandar. Si otro despacho ya la tomó, `count` es 0 y
-     * ésta se saltea sin haber mandado nada.
+     * Reclamar el lote entero. Si otro despacho ya tomó alguna, se saltea la
+     * compra completa: no se manda medio lote.
      */
-    const reclamo = await db.stockOutbox.updateMany({
-      where: { id: fila.id, status: fila.status },
-      data: {
-        status: 'EN_PROCESO',
-        attempts: { increment: 1 },
-        lastTriedAt: new Date(),
-      },
-    });
-    if (reclamo.count === 0) continue;
-
-    resumen.intentados += 1;
-    const resultado = await mandarUna(db, fila);
-
-    if (resultado.estado === 'ACEPTADO' || resultado.estado === 'YA_ESTABA') {
-      await db.stockOutbox.update({
-        where: { id: fila.id },
+    const reclamadas: StockOutbox[] = [];
+    for (const fila of filas) {
+      const reclamo = await db.stockOutbox.updateMany({
+        where: { id: fila.id, status: fila.status },
         data: {
-          status: 'COMPLETADO',
-          externalId: resultado.externalId,
-          lastError: null,
-          completedAt: new Date(),
+          status: 'EN_PROCESO',
+          attempts: { increment: 1 },
+          lastTriedAt: new Date(),
         },
       });
-      resumen.completados += 1;
-    } else if (resultado.estado === 'RECHAZADO') {
-      await db.stockOutbox.update({
-        where: { id: fila.id },
-        data: { status: 'FALLIDO', lastError: resultado.motivo },
-      });
+      if (reclamo.count > 0) reclamadas.push(fila);
+    }
+    if (reclamadas.length !== filas.length) {
+      // Otro despacho está con esta compra. Se devuelve lo reclamado a su sitio.
+      for (const fila of reclamadas) {
+        await db.stockOutbox.update({
+          where: { id: fila.id },
+          data: { status: fila.status, attempts: fila.attempts },
+        });
+      }
+      continue;
+    }
+
+    resumen.lotes += 1;
+    const armado = await armarLote(documentId, reclamadas, db);
+
+    if (!armado.ok) {
+      await marcarTodas(db, reclamadas, { status: 'FALLIDO', lastError: armado.motivo });
       resumen.fallidos += 1;
-    } else {
+      continue;
+    }
+
+    let resultado: ResultadoDelLote;
+    try {
+      resultado = await transporte.enviar(armado.lote);
+    } catch {
       /*
-       * Incierto: se queda en EN_PROCESO a propósito.
-       *
-       * Puede haber llegado. Marcarlo como fallido invitaría a un reenvío
-       * automático que duplicaría la mercadería si la primera sí llegó; y
-       * marcarlo como completado sería mentir. Queda visible, y el reintento
-       * explícito lo resuelve con la misma clave.
+       * Una excepción es incierta, no fallida: se cortó la conexión y no se
+       * sabe si el lote llegó. El motivo no lleva nada de lo enviado, para que
+       * ninguna credencial termine en la base.
        */
-      await db.stockOutbox.update({
-        where: { id: fila.id },
-        data: { lastError: resultado.motivo },
-      });
-      resumen.inciertos += 1;
+      resultado = {
+        clase: 'RECUPERABLE',
+        motivo: 'No hubo respuesta de Control de Stock.',
+      };
+    }
+
+    switch (resultado.clase) {
+      case 'APLICADO': {
+        for (const fila of reclamadas) {
+          const suyo = resultado.porClave[fila.eventKey];
+          await db.stockOutbox.update({
+            where: { id: fila.id },
+            data: suyo
+              ? {
+                  status: 'COMPLETADO',
+                  externalId: suyo.movementId ?? null,
+                  lastError: null,
+                  completedAt: new Date(),
+                }
+              : {
+                  /* Contestó el lote pero no este movimiento: no se asume éxito. */
+                  status: 'EN_PROCESO',
+                  lastError:
+                    'Control de Stock contestó el lote sin decir nada de este movimiento.',
+                },
+          });
+        }
+        resumen.completados += 1;
+        break;
+      }
+      case 'SIN_AUTORIZACION':
+      case 'CONFLICTO':
+      case 'RECHAZADO':
+        await marcarTodas(db, reclamadas, { status: 'FALLIDO', lastError: resultado.motivo });
+        resumen.fallidos += 1;
+        break;
+      case 'RECUPERABLE':
+      case 'SIN_CONFIGURAR':
+        /* Vuelve a la cola con la MISMA clave. Nunca se genera una nueva. */
+        await marcarTodas(db, reclamadas, { status: 'PENDIENTE', lastError: resultado.motivo });
+        resumen.pendientes += 1;
+        break;
+      case 'RESPUESTA_INVALIDA':
+        /* Queda en EN_PROCESO: no se sabe qué pasó y no se asume éxito. */
+        await marcarTodas(db, reclamadas, { lastError: resultado.motivo });
+        resumen.inciertos += 1;
+        break;
     }
   }
 
   return resumen;
 }
 
-async function mandarUna(
+async function marcarTodas(
   db: PrismaClient,
-  fila: StockOutbox,
-): Promise<ResultadoDelEnvio> {
-  const sucursal = await db.branch.findUnique({ where: { id: fila.branchId } });
-
-  /*
-   * Sin la clave de la sucursal no sale nada.
-   *
-   * Es el bloqueo que falta resolver con Control de Stock: no se acordó con qué
-   * identificador conoce a Devoto, Pueyrredón y San Martín. Mandar el nombre, o
-   * el código interno de Compras, sería elegir la sucursal por parecido, que es
-   * lo mismo que no se hace con los artículos. El movimiento queda anotado y
-   * dice exactamente qué falta.
-   */
-  if (!sucursal) {
-    return { estado: 'RECHAZADO', motivo: 'La sucursal del movimiento ya no existe.' };
-  }
-  if (!sucursal.stockKey) {
-    return {
-      estado: 'RECHAZADO',
-      motivo:
-        `La sucursal «${sucursal.name}» no tiene todavía el identificador con el que la ` +
-        'conoce Control de Stock. Hasta que esté acordado, el movimiento queda anotado y no ' +
-        'se envía: mandarlo con el nombre sería elegir el local por parecido.',
-    };
-  }
-
-  const documento = await db.document.findUnique({
-    where: { id: fila.documentId },
-    select: { fullNumber: true, supplier: { select: { cuit: true } } },
-  });
-
-  const evento: EventoDeIngreso = {
-    eventKey: fila.eventKey,
-    aplicacion: APLICACION,
-    direccion: DIRECCION_DE_COMPRA,
-    plu: fila.plu,
-    quantity: fila.quantity.toString(),
-    unit: fila.unit,
-    branchKey: sucursal.stockKey,
-    occurredAt: fila.occurredAt.toISOString().slice(0, 10),
-    origen: {
-      documentId: fila.documentId,
-      documentItemId: fila.documentItemId,
-      fullNumber: documento?.fullNumber ?? null,
-      supplierCuit: documento?.supplier?.cuit ?? null,
-    },
-  };
-
-  try {
-    return await transporte.enviar(evento);
-  } catch (error) {
-    /*
-     * Una excepción del transporte es incierta, no fallida: se cortó la
-     * conexión y no se sabe si el pedido llegó. El motivo se guarda sin nada
-     * de lo enviado, para que ninguna credencial termine en la base.
-     */
-    return {
-      estado: 'INCIERTO',
-      motivo: error instanceof AppError ? error.message : 'No hubo respuesta de Control de Stock.',
-    };
+  filas: StockOutbox[],
+  datos: { status?: StockOutbox['status']; lastError: string | null },
+) {
+  for (const fila of filas) {
+    await db.stockOutbox.update({ where: { id: fila.id }, data: datos });
   }
 }
 
@@ -380,7 +455,7 @@ export interface SincronizacionDelComprobante {
  *
  * Una compra con movimientos sin confirmar **no está terminada**, y la pantalla
  * no puede decir que sí: el egreso quedó agendado y la mercadería todavía no
- * entró a la otra aplicación. Que se vea la diferencia es la mitad del trabajo.
+ * entró a la otra aplicación.
  */
 export async function sincronizacionDe(
   documentId: string,
@@ -404,13 +479,5 @@ export async function sincronizacionDe(
   else if (enProceso > 0) estado = 'EN_PROCESO';
   else estado = 'PENDIENTE';
 
-  return {
-    estado,
-    total: filas.length,
-    completados,
-    pendientes,
-    enProceso,
-    fallidos,
-    motivos,
-  };
+  return { estado, total: filas.length, completados, pendientes, enProceso, fallidos, motivos };
 }

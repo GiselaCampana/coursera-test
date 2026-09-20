@@ -9,7 +9,7 @@ import {
   despacharPendientes,
   sincronizacionDe,
   usarTransporteDeStock,
-  TRANSPORTE_SIN_CONTRATO,
+  TRANSPORTE_SIN_CONFIGURAR,
 } from '@/lib/services/stock-ingreso';
 import { DIRECCION_DE_COMPRA, claveDelEvento } from '@/lib/domain/ingreso-de-stock';
 import { Decimal } from '@/lib/money';
@@ -67,24 +67,12 @@ beforeEach(async () => {
   completa = sembrada.completa;
   frenada = sembrada.frenada;
 
-  /*
-   * La sucursal, con la clave que usaría Control de Stock.
-   *
-   * En el sistema real esa clave todavía no está acordada y por eso la columna
-   * nace vacía. Acá se pone a propósito para poder probar el camino completo, y
-   * hay una prueba aparte que comprueba qué pasa cuando falta.
-   */
-  await prisma.branch.update({
-    where: { id: escenario.sucursales.devoto },
-    data: { stockKey: 'cs-devoto' },
-  });
-
   stock = new ControlDeStockFalso();
   usarTransporteDeStock(stock);
 });
 
 afterAll(() => {
-  usarTransporteDeStock(TRANSPORTE_SIN_CONTRATO);
+  usarTransporteDeStock(TRANSPORTE_SIN_CONFIGURAR);
 });
 
 async function aplicar(documentId = completa) {
@@ -118,8 +106,9 @@ describe('lo que entra, y lo que no', () => {
 
     expect(DIRECCION_DE_COMPRA).toBe('INGRESO');
     for (const movimiento of stock.movimientos()) {
-      expect(movimiento.direccion).toBe('INGRESO');
-      expect(movimiento.direccion).not.toMatch(/EGRESO|VENTA|SALIDA/i);
+      expect(movimiento.direction).toBe('IN');
+      expect(movimiento.reason).toBe('PURCHASE');
+      expect(movimiento.direction).not.toMatch(/OUT|EGRESO|VENTA|SALIDA/i);
     }
     const filas = await prisma.stockOutbox.findMany({ where: { documentId: completa } });
     expect(filas.every((f) => f.direction === 'INGRESO')).toBe(true);
@@ -235,7 +224,7 @@ describe('lo que frena, sin escribir a medias', () => {
     expect(stock.movimientos()).toHaveLength(0);
     const sync = await sincronizacionDe(completa);
     expect(sync.estado).toBe('FALLIDA');
-    expect(sync.motivos.join(' ')).toMatch(/identificador con el que la conoce Control de Stock/i);
+    expect(sync.motivos.join(' ')).toMatch(/código de Control de Stock/i);
   });
 });
 
@@ -264,21 +253,23 @@ describe('idempotencia: ni se pierde ni se duplica', () => {
   it('un timeout posterior a que el otro lado aplicó se reintenta sin duplicar', async () => {
     /*
      * El caso peligroso: Control de Stock recibió y aplicó, y la respuesta se
-     * perdió. Desde acá es indistinguible de un pedido que nunca llegó.
+     * perdió. Desde acá es indistinguible de un pedido que nunca llegó, así que
+     * el reintento sale igual —es recuperable— y lo único que impide que la
+     * mercadería entre dos veces es que lleve la MISMA clave.
      */
     await aplicar();
     stock.seComporta({ tipo: 'PERDER_LA_RESPUESTA' });
     await despacharPendientes({ documentId: completa });
 
-    // Del otro lado ya están los cinco; de este lado no se sabe.
+    // Del otro lado ya están los cinco; de este lado no se confirmó ninguno.
     expect(stock.movimientos()).toHaveLength(5);
     const enDuda = await sincronizacionDe(completa);
-    expect(enDuda.estado).toBe('EN_PROCESO');
+    expect(enDuda.estado).toBe('PENDIENTE');
     expect(enDuda.completados).toBe(0);
 
-    // El reintento explícito manda la MISMA clave y no mueve nada nuevo.
+    // El reintento contesta ALREADY_APPLIED y no mueve nada nuevo.
     stock.seComporta({ tipo: 'ACEPTAR' });
-    await despacharPendientes({ documentId: completa, incluirInciertas: true });
+    await despacharPendientes({ documentId: completa });
 
     expect(stock.movimientos()).toHaveLength(5);
     const resuelto = await sincronizacionDe(completa);
@@ -286,15 +277,23 @@ describe('idempotencia: ni se pierde ni se duplica', () => {
     expect(resuelto.completados).toBe(5);
   });
 
-  it('una fila sin respuesta no se reintenta sola', async () => {
-    // Porque puede haber llegado: reenviarla a ciegas duplicaría la mercadería.
+  it('el reintento lleva exactamente la misma clave, nunca una nueva', async () => {
+    /*
+     * Es la única razón por la que reintentar es inofensivo. Una clave nueva en
+     * el segundo intento haría que Control de Stock lo viera como un movimiento
+     * distinto y la mercadería entraría dos veces.
+     */
     await aplicar();
-    stock.seComporta({ tipo: 'PERDER_LA_RESPUESTA' });
+    stock.seComporta({ tipo: 'RECUPERABLE', motivo: '503' });
     await despacharPendientes({ documentId: completa });
+    const primeras = stock.ultimoLote()!.movements.map((m) => m.idempotencyKey).sort();
 
-    const llamadasAntes = stock.llamadas;
+    stock.seComporta({ tipo: 'ACEPTAR' });
     await despacharPendientes({ documentId: completa });
-    expect(stock.llamadas).toBe(llamadasAntes);
+    const segundas = stock.ultimoLote()!.movements.map((m) => m.idempotencyKey).sort();
+
+    expect(segundas).toEqual(primeras);
+    expect(stock.movimientos()).toHaveLength(5);
   });
 
   it('el mismo comprobante no se puede aplicar dos veces', async () => {
@@ -310,7 +309,7 @@ describe('idempotencia: ni se pierde ni se duplica', () => {
 describe('los errores se ven, y no mueven stock', () => {
   it('un rechazo de autenticación deja la sincronización fallida y recuperable', async () => {
     await aplicar();
-    stock.seComporta({ tipo: 'RECHAZAR', motivo: '401 INVALID_INTEGRATION_KEY' });
+    stock.seComporta({ tipo: 'SIN_AUTORIZACION', motivo: '401 INVALID_INTEGRATION_KEY' });
     await despacharPendientes({ documentId: completa });
 
     expect(stock.movimientos()).toHaveLength(0);

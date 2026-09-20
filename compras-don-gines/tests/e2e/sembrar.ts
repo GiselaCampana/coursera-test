@@ -98,9 +98,9 @@ async function sembrarCon(prisma: PrismaClient) {
   });
 
   const [devoto] = await Promise.all([
-    prisma.branch.create({ data: { code: 'DEVOTO', name: 'Devoto' } }),
-    prisma.branch.create({ data: { code: 'PUEYRREDON', name: 'Pueyrredón' } }),
-    prisma.branch.create({ data: { code: 'SAN_MARTIN', name: 'San Martín' } }),
+    prisma.branch.create({ data: { code: 'DEVOTO', name: 'Devoto', stockKey: 'devoto' } }),
+    prisma.branch.create({ data: { code: 'PUEYRREDON', name: 'Pueyrredón', stockKey: 'pueyrredon' } }),
+    prisma.branch.create({ data: { code: 'SAN_MARTIN', name: 'San Martín', stockKey: 'san_martin' } }),
   ]);
 
   const hash = await hashPassword(CREDENCIALES.admin.password);
