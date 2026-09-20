@@ -8,6 +8,7 @@ import { approveSalePrice } from '@/lib/services/pricing';
 import { normalizeText } from '@/lib/domain/matching';
 import { costItems } from '@/lib/domain/costing';
 import { Decimal } from '@/lib/money';
+import { EZRA_ENCABEZADO } from '../fixtures/ezra';
 
 /**
  * La compra excepcional a Distribuidora Ezra.
@@ -29,7 +30,16 @@ let ezraId: string;
 /** Los PLU de siempre, con Los Calvos como proveedor habitual. */
 let plu: { cremoso: string; pernil: string; dambo: string; jamonLC: string; jamonIM: string };
 
-const FECHA = '2026-09-09';
+/*
+ * La emisión sale del encabezado leído, no de un literal repetido acá.
+ *
+ * Había una copia suelta con el mismo valor, y una copia suelta de una fecha
+ * es una copia que algún día deja de coincidir sin que nadie se entere: se
+ * corrige el encabezado y esta prueba sigue afirmando la fecha vieja, verde y
+ * equivocada. `EZRA_ENCABEZADO.issueDate` es lo que el analizador congelado
+ * saca de la foto real, y `tests/unit/ezra.test.ts` lo deja clavado ahí.
+ */
+const FECHA = EZRA_ENCABEZADO.issueDate;
 
 /**
  * Los cinco renglones de mercadería de la factura de Ezra.

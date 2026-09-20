@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ingresar, sinScrollHorizontal, tamanoTactil } from './ayudas';
+import { EZRA_ENCABEZADO } from '../fixtures/ezra';
 
 /**
  * La vista previa de la compra, abierta como la abre una persona.
@@ -23,6 +24,27 @@ test.describe.configure({ timeout: 4 * MINUTOS });
 
 /** La factura completa: seis renglones asociados, total impreso. */
 const COMPLETA = '00000185';
+
+/*
+ * Las fechas se derivan de la emisión del encabezado leído, no se escriben a
+ * mano: un literal acá es una copia más de la fecha, y una copia que puede
+ * dejar de coincidir sin que la prueba lo note.
+ */
+const EMISION = EZRA_ENCABEZADO.issueDate;
+
+/** Suma días a una fecha ISO sin pasar por el huso local. */
+function sumarDias(iso: string, dias: number): string {
+  const [anio, mes, dia] = iso.split('-').map(Number);
+  const d = new Date(Date.UTC(anio, mes - 1, dia));
+  d.setUTCDate(d.getUTCDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
+/** "2026-09-09" => "09/09/2026", como lo escribe la pantalla. */
+function comoSeLee(iso: string): string {
+  const [anio, mes, dia] = iso.split('-');
+  return `${dia}/${mes}/${anio}`;
+}
 /** La frenada: la bolsa sin código legible y el total sin imprimir. */
 const FRENADA = '00000186';
 
@@ -130,19 +152,29 @@ test.describe('la vista previa de la compra', () => {
     await expect(boton).toBeEnabled();
 
     /*
-     * Y dice qué día cae, antes de aplicar. La factura se emitió el 09/09/2026,
-     * así que a 30 días vence el 09/10/2026. Sin este eco se elige el plazo a
-     * ciegas: lo que después se mira en Pagos es la fecha, no el plazo.
+     * Y dice qué día cae, antes de aplicar: a 30 días de la emisión. Sin este
+     * eco se elige el plazo a ciegas, y lo que después se mira en Pagos es la
+     * fecha, no el plazo.
      */
     const calculado = page.locator('[data-prueba="vencimiento-calculado"]');
-    await expect(calculado).toContainText('09/10/2026');
+    await expect(calculado).toContainText(comoSeLee(sumarDias(EMISION, 30)));
 
-    // Una fecha anterior a la emisión se rechaza en la pantalla, no recién al
+    // El encabezado y el cálculo hablan de la misma emisión: si la pantalla
+    // mostrara un día y calculara sobre otro, esto lo agarra.
+    await expect(page.getByText(comoSeLee(EMISION)).first()).toBeVisible();
+
+    // El día anterior a la emisión se rechaza en la pantalla, no recién al
     // aplicar, y con la misma cuenta que usa el servidor.
     await condicion.selectOption('FECHA');
-    await page.getByLabel('Fecha de vencimiento').fill('2026-09-08');
+    await page.getByLabel('Fecha de vencimiento').fill(sumarDias(EMISION, -1));
     await expect(page.getByText(/no puede ser anterior a la emisión/)).toBeVisible();
     await expect(boton).toBeDisabled();
+
+    // El mismo día de emisión sí se acepta: una factura puede vencer el día
+    // que se emite, y medir contra hoy rechazaría facturas viejas legítimas.
+    await page.getByLabel('Fecha de vencimiento').fill(EMISION);
+    await expect(calculado).toContainText(comoSeLee(EMISION));
+    await expect(boton).toBeEnabled();
   });
 
   test('la llamada directa al POST también se rechaza', async ({ page }) => {
