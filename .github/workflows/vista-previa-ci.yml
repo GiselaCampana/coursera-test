@@ -97,6 +97,9 @@ jobs:
           APP_URL="http://127.0.0.1:3100"
           STOCK_CATALOG_URL="http://127.0.0.1:3111/api/integrations/catalog"
           STOCK_INTEGRATION_KEY="clave-de-prueba-e2e-no-es-un-secreto"
+          # Qué día es, para el sembrado y para el servidor. Sin esto el estado
+          # de un pago depende del día en que corra CI. Ver .env.e2e.
+          APP_FAKE_TODAY="2026-09-10"
           EOF
 
       - name: TypeScript

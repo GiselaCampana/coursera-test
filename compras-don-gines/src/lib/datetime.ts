@@ -7,6 +7,8 @@
  * porque el servidor esté en otro huso.
  */
 
+import { esUnaBaseDePruebas, nombreDeLaBase } from '@/lib/base-de-pruebas';
+
 export const AR_TIMEZONE = 'America/Argentina/Buenos_Aires';
 
 const arDateParts = new Intl.DateTimeFormat('en-CA', {
@@ -16,13 +18,74 @@ const arDateParts = new Intl.DateTimeFormat('en-CA', {
   day: '2-digit',
 });
 
+/**
+ * La variable que fija el día. **Sólo para pruebas**, y sólo contra una base de
+ * pruebas: mirá `ahora()`.
+ */
+export const DIA_FIJADO = 'APP_FAKE_TODAY';
+
+/**
+ * El instante que la aplicación toma por «ahora».
+ *
+ * Existe por una sola razón: que una prueba pueda decir qué día es. El estado
+ * de un pago —agendado, vence hoy, vencido— es una función del vencimiento y
+ * del día de hoy, así que una prueba que afirme cualquiera de los tres sin
+ * controlar «hoy» no afirma nada: pasa hasta que el calendario avanza y después
+ * falla sola, un día cualquiera, sin que nadie haya tocado el código.
+ *
+ * **No hace falta para el huso horario.** Todo el negocio ocurre en
+ * `America/Argentina/Buenos_Aires` y el día se saca de ahí con `Intl`, así que
+ * el huso de la máquina que corre las pruebas ya era indiferente. Lo que esto
+ * agrega es lo otro: el instante.
+ *
+ * Fijarlo contra una base de verdad sería mucho peor que cualquier prueba
+ * frágil —toda la agenda de pagos clasificada contra un día que no existe— así
+ * que no se ignora en silencio: se corta. Un reloj congelado en producción no
+ * se ve en ninguna pantalla; se ve semanas después, en los pagos que nadie hizo
+ * porque la agenda nunca los mostró vencidos. La condición es la misma que
+ * usa el sembrador antes de borrar tablas, y por eso está escrita una sola vez.
+ */
+export function ahora(): Date {
+  const fijado =
+    typeof process === 'undefined' ? undefined : process.env[DIA_FIJADO]?.trim();
+  if (!fijado) return new Date();
+
+  if (!esUnaBaseDePruebas(process.env.DATABASE_URL)) {
+    /* Se nombra la base y sólo la base: la URL entera lleva la contraseña. */
+    throw new Error(
+      `${DIA_FIJADO} fija el día de hoy y sólo puede usarse contra una base de pruebas: ` +
+        'el nombre tiene que contener "e2e", "test" o "demo". ' +
+        `Base vista: ${nombreDeLaBase(process.env.DATABASE_URL ?? '') ?? '(ninguna)'}`,
+    );
+  }
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fijado)) {
+    throw new Error(`${DIA_FIJADO} tiene que ser "YYYY-MM-DD"; se leyó «${fijado}».`);
+  }
+
+  /*
+   * Mediodía argentino del día pedido: bien adentro del día, para que ningún
+   * huso lo corra al anterior o al siguiente. Las tres horas son el desfase de
+   * Argentina, que no tiene horario de verano desde 2009; si algún día lo
+   * tuviera, la comprobación de abajo lo dice en vez de devolver otro día.
+   */
+  const instante = new Date(dateOnlyFromISO(fijado).getTime() + 15 * 60 * 60 * 1000);
+  const dia = arDateParts.format(instante);
+  if (dia !== fijado) {
+    throw new Error(
+      `${DIA_FIJADO}=${fijado} cae en ${dia} hora argentina. Cambió el desfase del huso.`,
+    );
+  }
+  return instante;
+}
+
 /** Fecha argentina de hoy como "YYYY-MM-DD". */
-export function arTodayISO(now: Date = new Date()): string {
+export function arTodayISO(now: Date = ahora()): string {
   return arDateParts.format(now);
 }
 
 /** Medianoche UTC del día argentino de hoy. */
-export function arToday(now: Date = new Date()): Date {
+export function arToday(now: Date = ahora()): Date {
   return dateOnlyFromISO(arTodayISO(now));
 }
 

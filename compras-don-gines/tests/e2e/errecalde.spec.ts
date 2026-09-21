@@ -27,6 +27,26 @@ import { limpiarComprobantesLeidos } from './entorno';
 const MINUTOS = 60_000;
 test.describe.configure({ timeout: 8 * MINUTOS });
 
+/**
+ * Cuándo vence esta factura, y por qué el grupo de la agenda es estable.
+ *
+ * 22/08/2026 es la fecha del papel y treinta días es la condición cargada para
+ * Errecalde: el vencimiento cae el 21/09/2026. Ninguna de las dos cosas se
+ * toca acá —la factura no se mueve para que la prueba dé—, así que el grupo en
+ * el que aparece depende enteramente de qué día es hoy.
+ *
+ * Y qué día es hoy también está fijado: `APP_FAKE_TODAY` en `.env.e2e` lo deja
+ * en el 10/09/2026 para el sembrado y para el servidor. Sin eso esta prueba
+ * buscaba la factura en «Próximos» y la encontraba hasta el 20/09/2026; el 21
+ * pasó a «Vence hoy» y el 22 a «Vencidos», y falló sola sin que nadie hubiera
+ * tocado nada. La aplicación tenía razón las tres veces.
+ *
+ * Que el vencimiento se afirme además del grupo es lo que impide que esto
+ * vuelva a ser una prueba contra el almanaque: si algún día el grupo cambia, se
+ * va a ver si fue porque cambió la fecha o porque cambió la clasificación.
+ */
+const VENCE_ERRECALDE = '21/09/2026';
+
 async function fotoErrecalde(): Promise<Buffer> {
   return readFile(path.resolve(__dirname, '../fixtures/imagenes/errecalde-00008-00002647.jpg'));
 }
@@ -331,6 +351,7 @@ test.describe('aceptar desde el detalle un comprobante ya leído', () => {
 
     await page.goto('/pagos?grupo=proximos');
     await expect(page.getByText('00008-00002647').first()).toBeVisible();
+    await expect(page.getByText(`Vence ${VENCE_ERRECALDE}`).first()).toBeVisible();
   });
 });
 
@@ -440,13 +461,13 @@ test.describe('lo que queda usable después de validar la factura real', () => {
     // --- Pagos ------------------------------------------------------------
     /*
      * En "Próximos" y no en la pestaña por omisión: la condición cargada para
-     * este proveedor es a 30 días, así que la factura del 22/08 vence más
-     * adelante. Lo que se comprueba acá es que el pago exista y por cuánto; en
-     * qué fecha cae depende de la condición del proveedor, que es otra cosa y
-     * se corrige desde Pagos sin tocar la compra.
+     * este proveedor es a 30 días, así que la factura del 22/08 vence el
+     * 21/09/2026. Lo que se comprueba acá es que el pago exista, por cuánto y
+     * para cuándo.
      */
     await page.goto('/pagos?grupo=proximos');
     await expect(page.getByText('00008-00002647').first()).toBeVisible();
+    await expect(page.getByText(`Vence ${VENCE_ERRECALDE}`).first()).toBeVisible();
     await expect(page.getByText('$ 4.816.812,73').first()).toBeVisible();
 
     await sinScrollHorizontal(page);

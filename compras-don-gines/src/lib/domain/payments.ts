@@ -1,5 +1,5 @@
 import { Decimal, money, toDecimal, type MoneyInput } from '@/lib/money';
-import { addDays, arToday, toDateOnly } from '@/lib/datetime';
+import { addDays, ahora, arToday, toDateOnly } from '@/lib/datetime';
 
 export type TermType = 'SAME_DAY' | 'DAYS' | 'MANUAL' | 'NEXT_INVOICE';
 export type PaymentStatus = 'AGENDADO' | 'VENCE_HOY' | 'VENCIDO' | 'PAGADO' | 'CANCELADO';
@@ -82,7 +82,7 @@ export interface ScheduleState {
  */
 export function computePaymentStatus(
   state: ScheduleState,
-  now: Date = new Date(),
+  now: Date = ahora(),
 ): PaymentStatus {
   if (state.cancelled) return 'CANCELADO';
 

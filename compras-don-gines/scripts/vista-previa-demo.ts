@@ -51,7 +51,7 @@ async function main() {
   cargarEntornoDePruebas();
 
   const url = process.env.DATABASE_URL ?? '';
-  const { esUnaBaseDePruebas, nombreDeLaBase } = await import('../tests/fixtures/base-de-pruebas');
+  const { esUnaBaseDePruebas, nombreDeLaBase } = await import('../src/lib/base-de-pruebas');
   if (!esUnaBaseDePruebas(url)) {
     /*
      * Se nombra la base que se vio, y sólo la base: decir «no es de pruebas»

@@ -4,7 +4,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from '@
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { branchScopeFilter, hasPermission, type AuthUser } from '@/lib/auth/session';
 import { money, toDecimal } from '@/lib/money';
-import { arToday, parseArDate, toISODate } from '@/lib/datetime';
+import { ahora, arToday, parseArDate, toISODate } from '@/lib/datetime';
 import {
   computePaymentStatus,
   describeTerm,
@@ -50,7 +50,7 @@ async function importesAPagar(
  * acción de nadie, así que hace falta recalcularlo al consultar. Los pagados y
  * los cancelados no se tocan: ya son estados finales.
  */
-export async function refreshPaymentStatuses(now: Date = new Date()): Promise<number> {
+export async function refreshPaymentStatuses(now: Date = ahora()): Promise<number> {
   const today = arToday(now);
   const open = await prisma.paymentSchedule.findMany({
     where: { status: { in: ['AGENDADO', 'VENCE_HOY', 'VENCIDO'] } },

@@ -14,7 +14,7 @@ import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
 import { addDays, arToday } from '../../src/lib/datetime';
 import { sembrarLaCompraDeEzra } from '../fixtures/compra-de-ezra';
-import { exigirBaseDePruebas } from '../fixtures/base-de-pruebas';
+import { exigirBaseDePruebas } from '../../src/lib/base-de-pruebas';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 

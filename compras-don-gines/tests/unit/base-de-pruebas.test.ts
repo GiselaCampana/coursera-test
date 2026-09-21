@@ -3,7 +3,7 @@ import {
   esUnaBaseDePruebas,
   exigirBaseDePruebas,
   nombreDeLaBase,
-} from '@/../tests/fixtures/base-de-pruebas';
+} from '@/lib/base-de-pruebas';
 
 /**
  * **La guarda que decide si algo puede borrar tablas.**
