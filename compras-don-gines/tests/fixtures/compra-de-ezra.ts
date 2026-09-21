@@ -187,7 +187,14 @@ async function gastoDeEzra(prisma: PrismaClient, proveedorId: string) {
   });
 }
 
-async function facturaDeEzra(
+/**
+ * Una factura de Ezra con el número que se le pida.
+ *
+ * Exportada para poder sembrar una SEGUNDA compra pendiente: sin otro
+ * comprobante en la bandeja no hay forma de comprobar que el despacho a mano
+ * manda sólo el que se le pidió.
+ */
+export async function facturaDeEzra(
   prisma: PrismaClient,
   opciones: {
     sucursalId: string;

@@ -58,6 +58,22 @@ const RESPUESTA_LIMITE_BYTES = 200_000;
  * quien carga el secreto se acuerde de escribirlo. Y si ya viene con él, no se
  * duplica.
  */
+/**
+ * Qué falta configurar. **Devuelve nombres, nunca valores.**
+ *
+ * La pantalla necesita poder decir «falta cargar X» con el botón bloqueado, en
+ * vez de dejar apretar algo que no va a salir. Y necesita decirlo sin que el
+ * valor pase por el HTML: lo que cruza al navegador es una lista de nombres de
+ * variables, que no es un secreto y es exactamente lo que hace falta saber.
+ */
+export function faltaConfigurar(): string[] {
+  const url = process.env[NOMBRE_URL]?.trim();
+  const clave = process.env[NOMBRE_CLAVE]?.trim();
+  return [!url ? NOMBRE_URL : null, !clave ? NOMBRE_CLAVE : null].filter(
+    (nombre): nombre is string => nombre !== null,
+  );
+}
+
 function conEsquema(clave: string): string {
   const limpia = clave.trim();
   return /^Bearer\s/i.test(limpia) ? limpia : `Bearer ${limpia}`;

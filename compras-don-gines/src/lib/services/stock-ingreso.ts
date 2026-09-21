@@ -370,8 +370,14 @@ export async function despacharPendientes(opciones?: {
   /** Incluye las que quedaron sin respuesta. Es el reintento explícito. */
   incluirInciertas?: boolean;
   cliente?: PrismaClient;
+  /**
+   * Por dónde se manda. Explícito, para que quien compone el servidor elija y
+   * no haya que mutar nada global en medio de una solicitud.
+   */
+  transporte?: TransporteDeStock;
 }): Promise<ResumenDelDespacho> {
   const db = opciones?.cliente ?? prisma;
+  const via = opciones?.transporte ?? transporte;
   const estados: StockOutbox['status'][] = ['PENDIENTE', 'FALLIDO'];
   if (opciones?.incluirInciertas) estados.push('EN_PROCESO');
 
@@ -415,7 +421,7 @@ export async function despacharPendientes(opciones?: {
 
     let resultado: ResultadoDelLote;
     try {
-      resultado = await transporte.enviar(armado.lote);
+      resultado = await via.enviar(armado.lote);
     } catch {
       /*
        * Una excepción es incierta, no fallida: se cortó la conexión y no se
@@ -538,4 +544,72 @@ export async function sincronizacionDe(
   else estado = 'PENDIENTE';
 
   return { estado, total: filas.length, completados, pendientes, enProceso, fallidos, motivos };
+}
+
+/** Un movimiento de la bandeja, como se lo mira desde la pantalla. */
+export interface MovimientoParaMirar {
+  id: string;
+  /** La clave de idempotencia. Se muestra porque es lo que identifica el hecho. */
+  eventKey: string;
+  documentItemId: string;
+  sucursal: string;
+  /** El código canónico de Control de Stock, o null si la sucursal no lo tiene. */
+  branchCode: string | null;
+  plu: string;
+  quantity: string;
+  unit: StockOutbox['unit'];
+  direction: string;
+  status: StockOutbox['status'];
+  attempts: number;
+  lastError: string | null;
+  externalId: string | null;
+  /** Se puede volver a intentar: ni confirmado ni agotado. */
+  reintentable: boolean;
+}
+
+/**
+ * Los movimientos anotados para un comprobante, uno por uno.
+ *
+ * `sincronizacionDe` dice cómo va en una palabra; esto dice qué hay adentro.
+ * Hace falta para poder mirar **antes** de mandar: qué sucursal, qué PLU, qué
+ * cantidad y en qué unidad. Un botón que manda algo que no se puede ver antes
+ * es un botón que nadie puede revisar.
+ *
+ * Las cantidades salen como las guarda la base. La representación del contrato
+ * —tres decimales— se arma en `armarLote` y en ningún otro lado; mostrarla acá
+ * sería una segunda implementación de la misma regla, que es como empiezan a
+ * diferir.
+ */
+export async function movimientosDe(
+  documentId: string,
+  cliente?: PrismaClient,
+): Promise<MovimientoParaMirar[]> {
+  const db = cliente ?? prisma;
+  const filas = await db.stockOutbox.findMany({
+    where: { documentId },
+    include: { branch: { select: { name: true, stockKey: true } } },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  });
+
+  return filas.map((fila) => ({
+    id: fila.id,
+    eventKey: fila.eventKey,
+    documentItemId: fila.documentItemId,
+    sucursal: fila.branch.name,
+    branchCode: fila.branch.stockKey,
+    plu: fila.plu,
+    quantity: fila.quantity.toString(),
+    unit: fila.unit,
+    direction: fila.direction,
+    status: fila.status,
+    attempts: fila.attempts,
+    lastError: fila.lastError,
+    externalId: fila.externalId,
+    /*
+     * COMPLETADO no se reintenta nunca: ya entró del otro lado. EN_PROCESO
+     * tampoco se reintenta solo —puede haber llegado— pero sí a pedido, que es
+     * justamente lo que este botón es.
+     */
+    reintentable: fila.status !== 'COMPLETADO' && fila.attempts < INTENTOS_MAXIMOS,
+  }));
 }

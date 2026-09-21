@@ -8,8 +8,9 @@ implementado o no está acordado dice **pendiente**, y dice qué falta. Si al
 leerlo encontrás una diferencia con el código, el código es el que vale y el
 documento es el que está mal.
 
-Estado en una línea: **el emisor está construido y probado; la conexión está
-dormida a propósito y el primer recorrido real todavía no se hizo.**
+Estado en una línea: **el emisor está construido, probado y enchufado a un
+botón; la conexión sigue dormida porque faltan las variables, y el primer
+recorrido real todavía no se hizo.**
 
 ---
 
@@ -65,10 +66,35 @@ con el comprobante y el renglón, y la base tiene dos unicidades sobre eso, así
 que volver a aplicar el mismo comprobante no crea filas nuevas ni pierde el
 identificador externo de las que ya se mandaron.
 
-**Pendiente:** hoy **nada del lado de la aplicación llama a
-`despacharPendientes()`**. No hay ruta, ni acción de servidor, ni tarea
-programada que lo invoque; la función existe, está probada, y sólo la llaman las
-pruebas. Mirá §12.
+**Quién dispara el despacho hoy:** una persona, desde la pantalla del
+comprobante, para ese comprobante. No hay envío automático al aplicar la compra,
+ni tarea periódica, ni nada que recorra la bandeja entera. Mirá §2 bis.
+
+## 2 bis. El despacho a mano
+
+La única puerta por la que la aplicación despacha hoy.
+
+En la pantalla del comprobante, quien tenga el permiso `stock.sincronizar` ve
+los movimientos anotados —sucursal, código de Control de Stock, PLU, cantidad,
+unidad y estado—, los renglones que **no** mueven stock con su motivo, y un
+botón que pide confirmación aparte antes de mandar.
+
+Cómo está acotado, que es lo que importa:
+
+- **un comprobante, y sólo ése.** La pantalla no llama a `despacharPendientes()`
+  —ahí `documentId` es opcional y sin él manda *todo lo pendiente*— sino a
+  `despacharComprobante(user, documentId)`, donde el comprobante es obligatorio
+  y se valida antes de tocar nada. Ese modo no se alcanza desde la interfaz ni
+  por accidente;
+- **el permiso se comprueba en el servidor.** Esconder el botón es una
+  comodidad, no una defensa: llamar directamente a la acción encuentra lo mismo;
+- **lo ya confirmado no se reenvía**, y lo que salió y no volvió respuesta se
+  reintenta por un camino aparte, porque puede haber llegado;
+- **queda en la auditoría** con usuario, momento, comprobante y el estado de
+  cada movimiento antes y después.
+
+Lo que el despacho **no** toca: el pago, el costo, el egreso, el estado fiscal
+ni ningún importe del comprobante.
 
 ## 3. Qué entra y qué no
 
@@ -372,32 +398,31 @@ vez hace falta automatizarlo.
 
 Por orden, y separando lo que depende de cada lado:
 
-**De este lado (código):**
-
-1. **Instalar el transporte.** `TRANSPORTE_HTTP` existe y está probado, pero
-   nadie llama a `usarTransporteDeStock(TRANSPORTE_HTTP)` en la aplicación: el
-   transporte activo sigue siendo `TRANSPORTE_SIN_CONFIGURAR`.
-2. **Disparar el despacho.** No hay ruta, acción ni tarea que llame a
-   `despacharPendientes()`. Hay que decidir qué lo dispara —al aplicar la
-   compra, un botón en la pantalla, o una tarea periódica— y dejarlo escrito.
+**De este lado (código): listo.** El transporte está instalado —la composición
+lo elige en `stock-despacho-manual.ts` y lo pasa explícito— y el disparador es
+el botón de §2 bis, acotado a un comprobante.
 
 **De configuración:**
 
-3. Cargar las dos variables (§10) en el servicio aislado. Hoy no están.
+1. Cargar las dos variables (§10) en el servicio aislado. **Hoy no están**, y
+   mientras no estén el botón queda bloqueado diciendo cuáles faltan.
 
 **Del lado de Control de Stock:**
 
-4. Respaldo de las existencias actuales antes de cualquier movimiento.
-5. Arranque limpio y **clasificación correcta de KG/UNIT**: sus artículos
+2. Respaldo de las existencias actuales antes de cualquier movimiento.
+3. Arranque limpio y **clasificación correcta de KG/UNIT**: sus artículos
    migraron provisionalmente como `UNIT`, y un ingreso en la unidad equivocada
    es peor que ningún ingreso.
+4. Confirmar que el receptor publicado acepta el cuerpo de §5 tal cual, contra
+   un comprobante de prueba y no contra existencias reales.
 
 **Y recién entonces:**
 
-6. Un recorrido aislado, con un comprobante, mirando las dos puntas.
+5. Un recorrido aislado, con un comprobante, mirando las dos puntas.
 
-Nada de esto se hizo todavía. **No se ejecutó ningún POST contra Control de
-Stock desde esta aplicación.**
+**No se ejecutó ningún POST contra Control de Stock desde esta aplicación.** Lo
+único que se ejercitó es un receptor HTTP de mentira en `127.0.0.1`, dentro de
+las pruebas.
 
 ## 13. Auditar una compra, del comprobante a cada movimiento
 
@@ -467,10 +492,13 @@ HAVING count(*) FILTER (WHERE o.status = 'COMPLETADO') NOT IN (0, count(*));
 | Reglas puras, contrato, escala decimal | `src/lib/domain/ingreso-de-stock.ts` |
 | Bandeja, armado del lote y despacho | `src/lib/services/stock-ingreso.ts` |
 | El POST y la lectura del acuse | `src/lib/services/stock-transporte-http.ts` |
+| El despacho a mano de un comprobante | `src/lib/services/stock-despacho-manual.ts` |
+| El botón y los estados en pantalla | `src/app/(app)/comprobantes/[id]/DespacharStock.tsx` |
 | Lectura del catálogo (la otra punta, ya andando) | `src/lib/services/stock-descarga.ts` |
 | Tabla `stock_outbox` y `Branch.stockKey` | `prisma/schema.prisma` |
 | Reglas renglón por renglón | `tests/unit/ingreso-de-stock.test.ts` |
 | Cuerpo exacto, códigos de estado y transporte | `tests/integration/contrato-de-stock.test.ts` |
 | Bandeja, idempotencia, concurrencia | `tests/integration/ingreso-a-control-de-stock.test.ts` |
 | Encabezado y no filtración de la clave | `tests/integration/stock-auth.test.ts` |
+| Despacho a mano, permisos y receptor HTTP local | `tests/integration/despacho-manual.test.ts` |
 | Control de Stock de mentira, determinístico | `tests/fixtures/control-de-stock-falso.ts`, `scripts/stock-falso.mjs` |

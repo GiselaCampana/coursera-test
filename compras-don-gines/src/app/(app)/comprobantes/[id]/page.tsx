@@ -23,6 +23,8 @@ import {
 import { AccionesComprobante } from './AccionesComprobante';
 import { RepararDerivados } from './RepararDerivados';
 import { sincronizacionDe } from '@/lib/services/stock-ingreso';
+import { vistaDelDespacho } from '@/lib/services/stock-despacho-manual';
+import { DespacharStock } from './DespacharStock';
 
 export const metadata: Metadata = { title: 'Comprobante' };
 export const dynamic = 'force-dynamic';
@@ -101,6 +103,34 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
    * es justamente lo que hay que poder ver.
    */
   const sincronizacion = await sincronizacionDe(documento.id);
+
+  /*
+   * Qué se puede mandar a mano, y qué no mueve stock.
+   *
+   * Mirar no escribe ni abre ninguna conexión: abrir esta pantalla mil veces
+   * no mueve un gramo. El permiso decide si se ofrece el botón, y el servidor
+   * lo vuelve a comprobar cuando alguien lo aprieta.
+   */
+  const despacho = await vistaDelDespacho(user, documento.id);
+  const conMovimiento = new Set(despacho.movimientos.map((m) => m.documentItemId));
+  /*
+   * Los renglones que no mueven stock, con el motivo a la vista. La BOLSA
+   * GRANDE es el caso de todos los días: es un gasto, no mercadería, así que no
+   * hay existencias que mover. Se muestra igual —está en la factura y se pagó—
+   * pero separada, para que su ausencia del envío sea una decisión visible y no
+   * un renglón que se perdió.
+   */
+  const sinImpactoEnStock = documento.items
+    .filter((item) => !conMovimiento.has(item.id))
+    .map((item) => ({
+      descripcion: item.description,
+      motivo:
+        item.expenseKind !== null
+          ? 'gasto, no mercadería'
+          : item.productId === null
+            ? 'sin artículo asociado en el catálogo'
+            : 'no genera ingreso de stock',
+    }));
 
   const storage = await getStorage();
 
@@ -377,6 +407,20 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {/*
+        El despacho a mano, sólo para quien tiene el permiso.
+        Esconderlo no es la defensa —el servidor vuelve a comprobarlo— pero
+        ofrecer un botón que va a ser rechazado tampoco ayuda a nadie.
+      */}
+      {sincronizacion.estado !== 'SIN_MOVIMIENTOS' && despacho.puedeDespachar ? (
+        <DespacharStock
+          documentId={documento.id}
+          movimientos={despacho.movimientos}
+          faltaConfigurar={despacho.faltaConfigurar}
+          sinImpacto={sinImpactoEnStock}
+        />
       ) : null}
 
       {documento.paymentSchedule ? (

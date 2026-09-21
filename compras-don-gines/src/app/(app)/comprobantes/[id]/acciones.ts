@@ -6,6 +6,10 @@ import { requireUser } from '@/lib/auth/session';
 import { ValidationError, toUserMessage } from '@/lib/errors';
 import { acceptReadDocument, rejectDocument, voidDocument } from '@/lib/services/documents';
 import { repararDerivados } from '@/lib/services/reparar-derivados';
+import {
+  despacharComprobante,
+  type ResultadoDelDespachoManual,
+} from '@/lib/services/stock-despacho-manual';
 
 export interface ResultadoAccion {
   ok?: boolean;
@@ -130,6 +134,37 @@ export async function repararComprobante(
     age: reparacion.agendaCreada ? '1' : '0',
   });
   redirect(`/comprobantes/${documentId}?${params.toString()}`);
+}
+
+/**
+ * Manda a Control de Stock los movimientos **de este comprobante**.
+ *
+ * El comprobante llega por `formData` y se pasa como argumento obligatorio al
+ * servicio, que vuelve a comprobar el permiso. Esta función no decide nada:
+ * esconder el botón en la pantalla no es una defensa, así que la autorización
+ * se resuelve del lado del servidor aunque alguien llame directamente acá.
+ */
+export async function despacharMovimientosDeStock(
+  _prev: ResultadoDelDespacho,
+  formData: FormData,
+): Promise<ResultadoDelDespacho> {
+  const documentId = String(formData.get('documentId') ?? '');
+  try {
+    const user = await requireUser();
+    const resultado = await despacharComprobante(user, documentId, {
+      /* Sólo si quien apretó confirmó ese reintento aparte. */
+      incluirInciertas: formData.get('incluirInciertas') === '1',
+    });
+    revalidatePath(`/comprobantes/${documentId}`);
+    return { resultado };
+  } catch (error) {
+    return { error: toUserMessage(error) };
+  }
+}
+
+export interface ResultadoDelDespacho {
+  resultado?: ResultadoDelDespachoManual;
+  error?: string;
 }
 
 /** Los controles en error que viajan adentro de una ValidationError. */

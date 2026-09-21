@@ -44,6 +44,7 @@ export const AUDIT_ACTIONS = {
   GENERAL_MARKUPS_UPDATED: 'regla_general.marcajes_modificados',
   STOCK_SYNCED: 'catalogo.sincronizado_con_stock',
   IMAGENES_ARCHIVADAS: 'imagenes.archivadas',
+  STOCK_DESPACHADO: 'stock.movimientos_despachados',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -73,6 +74,7 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'proveedor.creado_desde_lectura': 'Proveedor dado de alta desde una factura',
   'producto.modificado': 'Producto modificado',
   'imagenes.archivadas': 'Imágenes de comprobantes archivadas',
+  'stock.movimientos_despachados': 'Movimientos de mercadería enviados a Control de Stock',
   'producto.alias_aprendido': 'Alias de producto aprendido',
   'familia.marcajes_modificados': 'Marcajes de una familia modificados',
   'regla_general.marcajes_modificados': 'Marcajes de la regla general modificados',

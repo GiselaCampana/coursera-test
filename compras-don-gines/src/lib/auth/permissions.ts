@@ -24,6 +24,15 @@ export const PERMISSIONS = {
   REPORTES_VER: 'reportes.ver',
   AUDITORIA_VER: 'auditoria.ver',
   ALMACENAMIENTO_GESTIONAR: 'almacenamiento.gestionar',
+  /**
+   * Mandar a Control de Stock la mercadería de una compra.
+   *
+   * Es su propio permiso y no cuelga de «validar comprobantes» a propósito:
+   * mueve existencias en OTRA aplicación, que es una consecuencia distinta de
+   * la misma compra. Quien revisa facturas no tiene por qué poder tocar el
+   * stock del local, y quien lo toca tiene que estar nombrado.
+   */
+  STOCK_SINCRONIZAR: 'stock.sincronizar',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -48,6 +57,7 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'reportes.ver': 'Ver reportes de compras',
   'auditoria.ver': 'Consultar la auditoría',
   'almacenamiento.gestionar': 'Archivar comprobantes y liberar espacio',
+  'stock.sincronizar': 'Enviar movimientos de mercadería a Control de Stock',
 };
 
 /** Permisos de los dos roles iniciales. Se siembran; después se editan en la app. */
