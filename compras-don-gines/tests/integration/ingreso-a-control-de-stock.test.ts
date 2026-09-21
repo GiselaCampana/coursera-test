@@ -250,6 +250,48 @@ describe('idempotencia: ni se pierde ni se duplica', () => {
     expect(await prisma.stockOutbox.count({ where: { documentId: completa } })).toBe(5);
   });
 
+  it('dos despachos que ven las filas en orden distinto no se trancan entre sí', async () => {
+    /*
+     * El caso que la prueba de arriba encontraba sólo cuando la máquina estaba
+     * cargada, y por eso pasaba en la de desarrollo y fallaba en CI.
+     *
+     * Las cinco filas se escriben en la misma transacción, así que tienen el
+     * mismo `createdAt` al milisegundo. Con el orden empatado, PostgreSQL no
+     * promete ninguno: dos despachos pueden recorrerlas al revés uno del otro.
+     * Cuando el lote se reclamaba de a una fila, cada uno se quedaba con un
+     * pedazo, ninguno juntaba las cinco, y los dos se retiraban dejando la
+     * compra sin mandar. Nada se perdía —volvían a PENDIENTE— pero tampoco
+     * salía nadie, y eso no se ve hasta que alguien pregunta por qué la
+     * mercadería no está del otro lado.
+     *
+     * Acá el desorden no se espera: se provoca. Un cliente da vuelta lo que
+     * devuelve `findMany`, así que los dos despachos recorren exactamente al
+     * revés y el empate deja de depender de la suerte de la máquina.
+     */
+    const alReves = prisma.$extends({
+      query: {
+        stockOutbox: {
+          async findMany({ args, query }) {
+            const filas = await query(args);
+            return Array.isArray(filas) ? [...filas].reverse() : filas;
+          },
+        },
+      },
+    }) as unknown as typeof prisma;
+
+    await aplicar();
+    await Promise.all([
+      despacharPendientes({ documentId: completa }),
+      despacharPendientes({ documentId: completa, cliente: alReves }),
+    ]);
+
+    // Uno de los dos se lleva el lote entero. Lo que no puede pasar es que no
+    // se lo lleve ninguno.
+    expect(stock.movimientos()).toHaveLength(5);
+    const sync = await sincronizacionDe(completa);
+    expect(sync.estado).toBe('COMPLETADA');
+  });
+
   it('un timeout posterior a que el otro lado aplicó se reintenta sin duplicar', async () => {
     /*
      * El caso peligroso: Control de Stock recibió y aplicó, y la respuesta se

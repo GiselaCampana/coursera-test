@@ -292,13 +292,74 @@ export interface ResumenDelDespacho {
   inciertos: number;
 }
 
+/** El lote es de otro despacho. No es un error: es ceder y volver después. */
+class LoteAjeno extends Error {}
+
+/**
+ * Toma las filas de una compra, todas o ninguna.
+ *
+ * Reclamarlas **de a una** parecía equivalente y no lo era. Las cinco filas de
+ * una factura se escriben en la misma transacción, así que comparten el
+ * `createdAt` al milisegundo; con el orden empatado, dos despachos concurrentes
+ * pueden recorrerlas en orden distinto, quedarse cada uno con un pedazo, y
+ * —como ninguno junta el lote entero— retirarse los dos. La compra no se pierde
+ * (las filas vuelven a PENDIENTE), pero no sale nadie: un bloqueo mutuo que en
+ * una máquina rápida no aparece nunca y en una cargada aparece solo.
+ *
+ * Una sola sentencia lo arregla: el `updateMany` toma las filas de a todas,
+ * quien llega segundo se queda esperando y después no encuentra ninguna en el
+ * estado que pedía. No hay pedazos que devolver, y si algo sale mal la
+ * transacción deshace el reclamo sola, sin un deshacer escrito a mano que
+ * también puede fallar por la mitad.
+ *
+ * El conteo de sobrantes es la otra mitad: un despacho que llegó cuando la
+ * compra ya estaba a medio reclamar ve sólo las filas que quedaban sueltas, y
+ * sin esta comprobación mandaría ese pedazo creyendo que es la factura entera.
+ */
+async function reclamarElLote(
+  db: PrismaClient,
+  documentId: string,
+  filas: StockOutbox[],
+  estados: StockOutbox['status'][],
+): Promise<StockOutbox[]> {
+  const ids = filas.map((fila) => fila.id);
+  const dispatchables = {
+    status: { in: estados },
+    attempts: { lt: INTENTOS_MAXIMOS },
+  };
+
+  try {
+    return await db.$transaction(async (tx) => {
+      const reclamo = await tx.stockOutbox.updateMany({
+        where: { id: { in: ids }, ...dispatchables },
+        data: {
+          status: 'EN_PROCESO',
+          attempts: { increment: 1 },
+          lastTriedAt: new Date(),
+        },
+      });
+      if (reclamo.count !== ids.length) throw new LoteAjeno();
+
+      const sueltas = await tx.stockOutbox.count({
+        where: { documentId, id: { notIn: ids }, ...dispatchables },
+      });
+      if (sueltas > 0) throw new LoteAjeno();
+
+      return filas;
+    });
+  } catch (error) {
+    if (error instanceof LoteAjeno) return [];
+    throw error;
+  }
+}
+
 /**
  * Manda lo que esté pendiente, un lote por compra.
  *
- * **Reclama las filas antes de mandarlas.** Ese paso —pasar de PENDIENTE a
- * EN_PROCESO con un `updateMany` condicionado al estado— es lo que impide que
- * dos despachos concurrentes manden la misma compra: el segundo encuentra cero
- * filas afectadas y no la toca.
+ * **Reclama el lote entero antes de mandarlo**, en una sola sentencia y dentro
+ * de una transacción. Ese paso —pasar de PENDIENTE a EN_PROCESO condicionado al
+ * estado— es lo que impide que dos despachos concurrentes manden la misma
+ * compra: el segundo encuentra cero filas afectadas y no la toca.
  *
  * Una fila EN_PROCESO **no se reintenta sola**: quedó sin respuesta y puede
  * haber llegado. Se reintenta a pedido, y ahí la clave de idempotencia hace su
@@ -339,32 +400,9 @@ export async function despacharPendientes(opciones?: {
   };
 
   for (const [documentId, filas] of porCompra) {
-    /*
-     * Reclamar el lote entero. Si otro despacho ya tomó alguna, se saltea la
-     * compra completa: no se manda medio lote.
-     */
-    const reclamadas: StockOutbox[] = [];
-    for (const fila of filas) {
-      const reclamo = await db.stockOutbox.updateMany({
-        where: { id: fila.id, status: fila.status },
-        data: {
-          status: 'EN_PROCESO',
-          attempts: { increment: 1 },
-          lastTriedAt: new Date(),
-        },
-      });
-      if (reclamo.count > 0) reclamadas.push(fila);
-    }
-    if (reclamadas.length !== filas.length) {
-      // Otro despacho está con esta compra. Se devuelve lo reclamado a su sitio.
-      for (const fila of reclamadas) {
-        await db.stockOutbox.update({
-          where: { id: fila.id },
-          data: { status: fila.status, attempts: fila.attempts },
-        });
-      }
-      continue;
-    }
+    const reclamadas = await reclamarElLote(db, documentId, filas, estados);
+    // Otro despacho está con esta compra: no se manda medio lote.
+    if (reclamadas.length === 0) continue;
 
     resumen.lotes += 1;
     const armado = await armarLote(documentId, reclamadas, db);
