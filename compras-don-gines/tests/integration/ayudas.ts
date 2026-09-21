@@ -10,18 +10,44 @@ import type { AuthUser } from '@/lib/auth/session';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 
-/** Vacía todas las tablas respetando las claves foráneas. */
+/**
+ * Vacía todas las tablas respetando las claves foráneas.
+ *
+ * El libro del Stock ERP es inmutable por disparador, y eso incluye TRUNCATE:
+ * es la forma más rápida de perder un inventario. Pero el TRUNCATE de abajo va
+ * en cascada sobre `products` y `branches`, así que **inevitablemente** alcanza
+ * al libro por las claves foráneas.
+ *
+ * Se resuelve en una sola transacción y en este orden:
+ *
+ *  1. la función guardada vacía las tablas de stock y —lo que importa—
+ *     **comprueba el nombre de la base antes de borrar nada**. Si esto no fuera
+ *     una base de pruebas, todo aborta acá y los pasos siguientes no corren;
+ *  2. recién entonces se baja el disparador de TRUNCATE, el mínimo tiempo
+ *     posible;
+ *  3. el TRUNCATE en cascada de siempre;
+ *  4. el disparador vuelve.
+ */
 export async function limpiarBase() {
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE
-      audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
-      sale_price_history, pricing_rules, sales_movements,
-      document_items, document_tax_lines, ocr_attempts, document_files, documents,
-      product_aliases, products, product_families,
-      supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
-      sessions, users, roles, branches
-    RESTART IDENTITY CASCADE;
-  `);
+  await prisma.$transaction([
+    prisma.$executeRawUnsafe(`SELECT stock_erp_reset_para_pruebas()`),
+    prisma.$executeRawUnsafe(
+      `ALTER TABLE "stock_ledger" DISABLE TRIGGER "stock_ledger_sin_truncate"`,
+    ),
+    prisma.$executeRawUnsafe(`
+      TRUNCATE TABLE
+        audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
+        sale_price_history, pricing_rules, sales_movements,
+        document_items, document_tax_lines, ocr_attempts, document_files, documents,
+        product_aliases, products, product_families,
+        supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
+        sessions, users, roles, branches
+      RESTART IDENTITY CASCADE;
+    `),
+    prisma.$executeRawUnsafe(
+      `ALTER TABLE "stock_ledger" ENABLE TRIGGER "stock_ledger_sin_truncate"`,
+    ),
+  ]);
 }
 
 /**

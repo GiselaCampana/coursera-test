@@ -45,16 +45,36 @@ export async function sembrar() {
 }
 
 async function sembrarCon(prisma: PrismaClient) {
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE
-      audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
-      sale_price_history, pricing_rules, sales_movements,
-      document_items, document_tax_lines, ocr_attempts, document_files, documents,
-      product_aliases, products, product_families,
-      supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
-      sessions, users, roles, branches
-    RESTART IDENTITY CASCADE;
-  `);
+  /*
+   * El libro del Stock ERP es inmutable por disparador, y eso incluye TRUNCATE:
+   * es la forma más rápida de perder un inventario. El TRUNCATE de abajo va en
+   * cascada sobre `products` y `branches`, así que lo alcanza por las claves
+   * foráneas.
+   *
+   * Se resuelve en una sola transacción y en este orden: la función guardada
+   * comprueba el nombre de la base **antes** de borrar nada —si no fuera una de
+   * pruebas, aborta ahí y no se llega a bajar ningún disparador—, después baja
+   * el de TRUNCATE el mínimo tiempo posible, y al final lo repone.
+   */
+  await prisma.$transaction([
+    prisma.$executeRawUnsafe(`SELECT stock_erp_reset_para_pruebas()`),
+    prisma.$executeRawUnsafe(
+      `ALTER TABLE "stock_ledger" DISABLE TRIGGER "stock_ledger_sin_truncate"`,
+    ),
+    prisma.$executeRawUnsafe(`
+      TRUNCATE TABLE
+        audit_logs, payment_events, payment_schedules, cost_history, purchase_movements,
+        sale_price_history, pricing_rules, sales_movements,
+        document_items, document_tax_lines, ocr_attempts, document_files, documents,
+        product_aliases, products, product_families,
+        supplier_tax_rules, supplier_payment_terms, supplier_aliases, suppliers,
+        sessions, users, roles, branches
+      RESTART IDENTITY CASCADE;
+    `),
+    prisma.$executeRawUnsafe(
+      `ALTER TABLE "stock_ledger" ENABLE TRIGGER "stock_ledger_sin_truncate"`,
+    ),
+  ]);
 
   const [rolAdmin, rolOperador] = await Promise.all([
     prisma.role.create({
