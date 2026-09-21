@@ -6,6 +6,8 @@ import { EZRA_PIE } from '../fixtures/ezra';
 import { aplicarCompra, vistaPreviaDeCompra } from '@/lib/services/vista-previa-compra';
 import { despacharComprobante, vistaDelDespacho } from '@/lib/services/stock-despacho-manual';
 import { Decimal } from '@/lib/money';
+import { confirmDocument } from '@/lib/services/documents';
+import { toISODate } from '@/lib/datetime';
 
 /**
  * **La versión candidata: Compras entera, y stock en ninguna parte.**
@@ -48,6 +50,53 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+/**
+ * Vuelve a confirmar la compra sembrada con **los mismos datos** que ya tiene.
+ *
+ * Es lo que pasa cuando alguien corrige un renglón y guarda de nuevo: el
+ * comprobante es el mismo y la escritura tiene que rehacerse, no acumularse.
+ * Los datos salen de la base y no de literales, así que la prueba no se apoya
+ * en una copia del fixture que algún día deje de coincidir.
+ */
+async function reconfirmarLaCompraDeEzra() {
+  const documento = await prisma.document.findUniqueOrThrow({
+    where: { id: completa },
+    select: {
+      supplierId: true,
+      docType: true,
+      letter: true,
+      pointOfSale: true,
+      number: true,
+      issueDate: true,
+      items: { orderBy: { lineNumber: 'asc' } },
+    },
+  });
+
+  await confirmDocument(escenario.admin, {
+    documentId: completa,
+    supplierId: documento.supplierId!,
+    docType: documento.docType as 'FACTURA' | 'REMITO',
+    letter: documento.letter!,
+    pointOfSale: documento.pointOfSale!,
+    number: documento.number,
+    issueDate: toISODate(documento.issueDate!),
+    printed: EZRA_PIE,
+    items: documento.items.map((item) => ({
+      lineNumber: item.lineNumber,
+      supplierCode: item.supplierCode,
+      description: item.description,
+      quantity: item.quantity.toString(),
+      unit: item.unit,
+      unitNetPrice: item.unitNetPrice?.toString() ?? '0',
+      discountPct: item.discountPct?.toString() ?? '0',
+      ivaRate: item.ivaRate?.toString() ?? '0.21',
+      productId: item.productId,
+      expenseKind: item.expenseKind,
+    })),
+    payment: { dueDate: '2026-10-09', paymentMethod: 'TRANSFERENCIA', notes: null },
+  });
+}
 
 /* ========================================================================== */
 
@@ -324,5 +373,48 @@ describe('la vista previa describe el impacto futuro sin escribir nada', () => {
 
     await expect(aplicarCompra(escenario.admin, completa, PAGO)).rejects.toThrow(/PLU/);
     expect(await prisma.product.count()).toBe(productosAntes);
+  });
+});
+
+/* ========================================================================== */
+
+describe('un comprobante ya confirmado no se vuelve a escribir', () => {
+  /*
+   * La protección contra aplicar el costo dos veces no está en rehacer la
+   * escritura sino **antes**: `confirmDocument` rechaza un comprobante que ya
+   * está validado, así que el segundo guardado no llega a la transacción.
+   *
+   * Se afirma con los conteos y no sólo con el rechazo: que tire un error y
+   * que además no haya escrito nada son dos cosas distintas, y la que importa
+   * es la segunda.
+   */
+  it('el segundo intento se rechaza y no suma movimientos, costos ni agenda', async () => {
+    await aplicarCompra(escenario.admin, completa, PAGO);
+
+    const antes = {
+      movimientos: await prisma.purchaseMovement.count({ where: { documentId: completa } }),
+      renglones: await prisma.documentItem.count({ where: { documentId: completa } }),
+      impuestos: await prisma.documentTaxLine.count({ where: { documentId: completa } }),
+      agendas: await prisma.paymentSchedule.count({ where: { documentId: completa } }),
+      costos: await prisma.costHistory.count({ where: { documentId: completa } }),
+    };
+    expect(antes.movimientos).toBeGreaterThan(0);
+    expect(antes.costos).toBeGreaterThan(0);
+
+    await expect(reconfirmarLaCompraDeEzra()).rejects.toThrow(/ya fue confirmado/i);
+
+    expect(await prisma.purchaseMovement.count({ where: { documentId: completa } })).toBe(
+      antes.movimientos,
+    );
+    expect(await prisma.documentItem.count({ where: { documentId: completa } })).toBe(
+      antes.renglones,
+    );
+    expect(await prisma.documentTaxLine.count({ where: { documentId: completa } })).toBe(
+      antes.impuestos,
+    );
+    expect(await prisma.paymentSchedule.count({ where: { documentId: completa } })).toBe(
+      antes.agendas,
+    );
+    expect(await prisma.costHistory.count({ where: { documentId: completa } })).toBe(antes.costos);
   });
 });

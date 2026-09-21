@@ -5,6 +5,10 @@ on:
     branches:
       - compras-don-gines-deploy
       - claude/compras-don-gines-app-xuy4qp
+      # La rama candidata: lo que se despliega en la demo pasa por la misma
+      # verificación bloqueante que gobierna producción, y no por una más
+      # liviana. Una candidata que se verifica distinto no es una candidata.
+      - compras-release-candidate
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'

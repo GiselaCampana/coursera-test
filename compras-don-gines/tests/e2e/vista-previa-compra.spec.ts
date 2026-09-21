@@ -74,7 +74,7 @@ test.describe('la vista previa de la compra', () => {
 
     // Las dos escrituras, cada una en su recuadro.
     await expect(page.getByRole('heading', { name: 'Egreso' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Movimiento de stock' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Impacto previsto en Stock ERP — módulo todavía no activado' })).toBeVisible();
 
     // Y el emisor, los renglones y el pie.
     await expect(page.getByRole('heading', { name: 'Emisor' })).toBeVisible();
@@ -101,7 +101,7 @@ test.describe('la vista previa de la compra', () => {
     await expect(renglonDeLaBolsa).toContainText('sin impacto en stock');
 
     // Y en el recuadro del stock, en su propia lista y no entre la mercadería.
-    const recuadroDeStock = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
+    const recuadroDeStock = page.locator('section.card', { hasText: 'Impacto previsto en Stock ERP — módulo todavía no activado' }).last();
     await expect(
       recuadroDeStock.getByRole('heading', { name: 'Sin impacto en stock' }),
     ).toBeVisible();
@@ -308,7 +308,7 @@ test.describe('la vista previa de la compra', () => {
     await ingresar(page, 'admin');
     await abrirLaVistaPrevia(page, COMPLETA);
 
-    const recuadro = page.locator('section.card', { hasText: 'Movimiento de stock' }).last();
+    const recuadro = page.locator('section.card', { hasText: 'Impacto previsto en Stock ERP — módulo todavía no activado' }).last();
     await expect(recuadro).toContainText('Ingreso por compra');
     await expect(recuadro).not.toContainText(/Egreso por compra|Salida|Venta/);
 
@@ -408,7 +408,7 @@ test.describe('la vista previa de la compra', () => {
     expect(['auto', 'scroll']).toContain(desplazable.overflow);
 
     // El egreso y la mercadería quedan usables: los dos visibles y enteros.
-    for (const titulo of ['Egreso', 'Movimiento de stock']) {
+    for (const titulo of ['Egreso', 'Impacto previsto en Stock ERP — módulo todavía no activado']) {
       const seccion = page.locator('section.card', { hasText: titulo }).last();
       await expect(seccion).toBeVisible();
       const caja = await seccion.boundingBox();
@@ -417,7 +417,7 @@ test.describe('la vista previa de la compra', () => {
 
     // El gasto sin impacto en stock también se lee entero en la pantalla angosta.
     const gastos = page
-      .locator('section.card', { hasText: 'Movimiento de stock' })
+      .locator('section.card', { hasText: 'Impacto previsto en Stock ERP — módulo todavía no activado' })
       .last()
       .locator('ul.lista-simple')
       .last();
