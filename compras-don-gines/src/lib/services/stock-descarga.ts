@@ -78,17 +78,27 @@ export const ORIGEN_DEL_CATALOGO = URL_CATALOGO;
  * El encabezado quedó confirmado contra el endpoint real, probando con un valor
  * ficticio: sin encabezado contesta «INTEGRATION_KEY_REQUIRED», y con
  * `Authorization: Bearer <lo que sea>` contesta «INVALID_INTEGRATION_KEY». Es
- * decir que lee ese encabezado y ese esquema. Por eso `Authorization` es el
- * valor canónico y no hay que configurarlo; STOCK_INTEGRATION_HEADER queda
- * solamente por si Control de Stock lo cambia, para poder seguirlo sin
- * desplegar.
+ * decir que lee ese encabezado y ese esquema, y el contrato de escritura lo
+ * confirmó: `Authorization` es el encabezado canónico de las dos puntas, para
+ * leer el catálogo y para registrar movimientos. No se configura.
  */
 const NOMBRE_CLAVE = 'STOCK_INTEGRATION_KEY';
-const NOMBRE_ENCABEZADO = 'STOCK_INTEGRATION_HEADER';
-const ENCABEZADO_CANONICO = 'Authorization';
+
+/**
+ * El encabezado, fijo y sin alternativa.
+ *
+ * Era configurable por `STOCK_INTEGRATION_HEADER`, «por si Control de Stock lo
+ * cambia». Ya no hace falta: el contrato está acordado y el encabezado es
+ * `Authorization` con esquema Bearer, el mismo para leer el catálogo y para
+ * escribir movimientos. Dejarlo configurable era dejar abierta la posibilidad
+ * de que las dos aplicaciones quedaran hablando encabezados distintos porque
+ * alguien cargó una variable en un solo lado, y eso del otro lado se ve igual
+ * que una clave equivocada: un 401 sin más explicación.
+ */
+const ENCABEZADO = 'Authorization';
 
 interface Credenciales {
-  encabezado: string;
+  encabezado: typeof ENCABEZADO;
   /** Lo que se manda: ya con el esquema puesto, no la clave cruda. */
   valor: string;
 }
@@ -122,11 +132,8 @@ function claveRechazada(): AppError {
  * de configuración fácil de cometer y que del otro lado se vería igual que una
  * clave equivocada.
  *
- * Un encabezado que no sea `Authorization` no lleva esquema: los encabezados
- * propios —un `x-api-key`, por ejemplo— llevan la credencial sola.
  */
-function valorDelEncabezado(encabezado: string, clave: string): string {
-  if (encabezado.toLowerCase() !== 'authorization') return clave;
+function valorDelEncabezado(clave: string): string {
   const yaTraePrefijo = /^bearer\s+/i.exec(clave);
   return `Bearer ${yaTraePrefijo ? clave.slice(yaTraePrefijo[0].length) : clave}`;
 }
@@ -141,8 +148,7 @@ function valorDelEncabezado(encabezado: string, clave: string): string {
 function credenciales(): Credenciales {
   const clave = process.env[NOMBRE_CLAVE]?.trim();
   if (!clave) throw noConfigurada();
-  const encabezado = process.env[NOMBRE_ENCABEZADO]?.trim() || ENCABEZADO_CANONICO;
-  return { encabezado, valor: valorDelEncabezado(encabezado, clave) };
+  return { encabezado: ENCABEZADO, valor: valorDelEncabezado(clave) };
 }
 
 /**

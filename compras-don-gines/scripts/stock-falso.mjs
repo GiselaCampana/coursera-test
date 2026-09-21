@@ -48,11 +48,12 @@ const PUERTO = Number(process.env.STOCK_FALSO_PUERTO ?? 3111);
  * contra el endpoint—, así que mandar la clave cruda tampoco alcanza acá.
  *
  * El valor es de prueba y vive en `.env.e2e`; el secreto de verdad no está en
- * el repositorio.
+ * el repositorio. El encabezado es fijo: `Authorization`, el canónico del
+ * contrato, sin variable que lo cambie.
  */
-const ENCABEZADO = (process.env.STOCK_INTEGRATION_HEADER ?? 'Authorization').toLowerCase();
+const ENCABEZADO = 'authorization';
 const CLAVE = process.env.STOCK_INTEGRATION_KEY ?? '';
-const ESPERADO = ENCABEZADO === 'authorization' ? `Bearer ${CLAVE}` : CLAVE;
+const ESPERADO = `Bearer ${CLAVE}`;
 
 /** Los PLU del sembrado de pruebas, para que ninguno quede inactivo por error. */
 const DEL_SEMBRADO = [

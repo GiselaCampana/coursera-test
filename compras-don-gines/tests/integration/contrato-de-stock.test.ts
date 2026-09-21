@@ -419,14 +419,14 @@ describe('el transporte HTTP real', () => {
 
   it('usa la URL configurada, el método POST y Authorization: Bearer', async () => {
     process.env.STOCK_INTEGRATION_WRITE_URL =
-      'https://ejemplo.invalido/api/integrations/stock-movements';
+      'https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/purchases';
     process.env.STOCK_INTEGRATION_KEY = 'clave-de-prueba';
 
     const resultado = await TRANSPORTE_HTTP.enviar(LOTE);
 
     expect(resultado.clase).toBe('APLICADO');
     expect(llamadas).toHaveLength(1);
-    expect(llamadas[0].url).toBe('https://ejemplo.invalido/api/integrations/stock-movements');
+    expect(llamadas[0].url).toBe('https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/purchases');
     expect(llamadas[0].init.method).toBe('POST');
     const encabezados = llamadas[0].init.headers as Record<string, string>;
     expect(encabezados.Authorization).toBe('Bearer clave-de-prueba');
@@ -527,5 +527,176 @@ describe('el transporte HTTP real', () => {
     if (resultado.clase !== 'APLICADO') return;
     expect(resultado.porClave.k1).toEqual({ estado: 'APPLIED', movementId: 'cs-1' });
     expect(resultado.porClave.k2).toEqual({ estado: 'ALREADY_APPLIED', movementId: 'cs-0' });
+  });
+});
+
+/* ========================================================================== */
+
+describe('el contrato canónico del receptor publicado', () => {
+  const original = { ...process.env };
+  const URL_CANONICA =
+    'https://control-stock-don-gines.gisela-campana.chatgpt.site/api/integrations/purchases';
+
+  const LOTE_MINIMO = {
+    contractVersion: 1 as const,
+    source: 'compras-don-gines' as const,
+    purchaseId: 'p1',
+    branchCode: 'devoto',
+    document: {
+      documentId: 'd1',
+      type: 'A',
+      pointOfSale: '0002',
+      number: '00000185',
+      issuedAt: '2026-09-09',
+      supplierTaxId: '30719519608',
+      supplierName: 'Distribuidora Ezra',
+    },
+    confirmedBy: { userId: 'u1', name: 'Ana' },
+    movements: [
+      {
+        sourceLineId: 'l1',
+        idempotencyKey: 'k1',
+        plu: '3101',
+        quantity: '4.240',
+        unit: 'KG' as const,
+        direction: 'IN' as const,
+        reason: 'PURCHASE' as const,
+      },
+    ],
+  };
+
+  const ACUSE = (estado: 'APPLIED' | 'ALREADY_APPLIED') =>
+    JSON.stringify({
+      contractVersion: 1,
+      purchaseId: 'p1',
+      status: estado,
+      movements: [{ idempotencyKey: 'k1', status: estado, movementId: 'cs-1' }],
+    });
+
+  beforeEach(() => {
+    process.env.STOCK_INTEGRATION_WRITE_URL = URL_CANONICA;
+    process.env.STOCK_INTEGRATION_KEY = 'clave-de-prueba';
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...original };
+  });
+
+  it('un 201 APPLIED completa el envío', async () => {
+    // El receptor publicado contesta 201 la primera vez, no 200.
+    vi.stubGlobal('fetch', async () => new Response(ACUSE('APPLIED'), { status: 201 }));
+
+    const resultado = await TRANSPORTE_HTTP.enviar(LOTE_MINIMO);
+    expect(resultado.clase).toBe('APLICADO');
+    if (resultado.clase !== 'APLICADO') return;
+    expect(resultado.porClave.k1).toEqual({ estado: 'APPLIED', movementId: 'cs-1' });
+  });
+
+  it('un 200 ALREADY_APPLIED también lo completa, sin duplicar', async () => {
+    vi.stubGlobal('fetch', async () => new Response(ACUSE('ALREADY_APPLIED'), { status: 200 }));
+
+    const resultado = await TRANSPORTE_HTTP.enviar(LOTE_MINIMO);
+    expect(resultado.clase).toBe('APLICADO');
+    if (resultado.clase !== 'APLICADO') return;
+    expect(resultado.porClave.k1.estado).toBe('ALREADY_APPLIED');
+  });
+
+  it('un timeout queda recuperable, y no se cuenta como éxito', async () => {
+    /*
+     * Lo que se simula es lo que hace `fetch` cuando el AbortController corta:
+     * lanza. Del lado de Compras es indistinguible de un pedido que nunca
+     * llegó, y por eso el reintento va con la misma clave.
+     */
+    vi.stubGlobal('fetch', async () => {
+      throw new DOMException('The operation was aborted.', 'AbortError');
+    });
+
+    const resultado = await TRANSPORTE_HTTP.enviar(LOTE_MINIMO);
+    expect(resultado.clase).toBe('RECUPERABLE');
+  });
+
+  it('el secreto no viaja en ningún lado salvo el encabezado', async () => {
+    const SECRETO = 'clave-que-no-tiene-que-aparecer';
+    process.env.STOCK_INTEGRATION_KEY = SECRETO;
+    let visto: { url: string; init: RequestInit } | null = null;
+    vi.stubGlobal('fetch', async (url: URL | string, init: RequestInit) => {
+      visto = { url: String(url), init };
+      return new Response(ACUSE('APPLIED'), { status: 201 });
+    });
+
+    await TRANSPORTE_HTTP.enviar(LOTE_MINIMO);
+
+    const { url, init } = visto!;
+    // Ni en la URL, ni en el cuerpo. Sólo en Authorization.
+    expect(url).not.toContain(SECRETO);
+    expect(String(init.body)).not.toContain(SECRETO);
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${SECRETO}`);
+  });
+});
+
+/* ========================================================================== */
+
+describe('lo que la bandeja hace con cada respuesta', () => {
+  it('409 y 422 no se reintentan solos: quedan para que alguien los mire', async () => {
+    for (const tipo of ['CONFLICTO', 'RECHAZAR'] as const) {
+      await limpiarBase();
+      escenario = await sembrarEscenario();
+      const sembrada = await sembrarLaCompraDeEzra(prisma, {
+        sucursalId: escenario.sucursales.devoto,
+        autorId: escenario.admin.id,
+      });
+      stock = new ControlDeStockFalso();
+      usarTransporteDeStock(stock);
+
+      await aplicarCompra(escenario.admin, sembrada.completa, PAGO);
+      stock.seComporta({ tipo, motivo: `motivo ${tipo}` });
+      await despacharPendientes({ documentId: sembrada.completa });
+
+      const llamadasTrasElFallo = stock.llamadas;
+      expect((await sincronizacionDe(sembrada.completa)).estado, tipo).toBe('FALLIDA');
+
+      /*
+       * El segundo despacho SÍ vuelve a intentar —la bandeja reintenta hasta
+       * el tope— pero nunca en silencio: el estado quedó FALLIDA y el motivo a
+       * la vista. Lo que no puede pasar es que un rechazo se reintente
+       * indefinidamente: el tope de intentos lo corta.
+       */
+      for (let i = 0; i < 10; i++) await despacharPendientes({ documentId: sembrada.completa });
+      expect(stock.llamadas - llamadasTrasElFallo, tipo).toBeLessThanOrEqual(4);
+      expect((await sincronizacionDe(sembrada.completa)).estado, tipo).toBe('FALLIDA');
+      expect(stock.movimientos(), tipo).toHaveLength(0);
+    }
+  });
+
+  it('un lote a medias no puede marcarse como completado', async () => {
+    /*
+     * Si Control de Stock contestara el lote pero omitiera un movimiento, ese
+     * movimiento **no** se da por aplicado: queda en duda y a la vista. Dar por
+     * bueno lo que el otro lado no confirmó es exactamente como se pierde
+     * mercadería sin que nadie se entere.
+     */
+    await aplicarCompra(escenario.admin, completa, PAGO);
+    const filas = await prisma.stockOutbox.findMany({ where: { documentId: completa } });
+
+    usarTransporteDeStock({
+      async enviar(lote) {
+        const porClave: Record<string, { estado: 'APPLIED'; movementId: string }> = {};
+        // Confirma cuatro de cinco.
+        for (const movimiento of lote.movements.slice(0, 4)) {
+          porClave[movimiento.idempotencyKey] = { estado: 'APPLIED', movementId: 'cs-x' };
+        }
+        return { clase: 'APLICADO', porClave };
+      },
+    });
+
+    await despacharPendientes({ documentId: completa });
+
+    const sync = await sincronizacionDe(completa);
+    expect(filas).toHaveLength(5);
+    expect(sync.estado).not.toBe('COMPLETADA');
+    expect(sync.completados).toBe(4);
+    expect(sync.enProceso).toBe(1);
+    expect(sync.motivos.join(' ')).toMatch(/sin decir nada de este movimiento/i);
   });
 });

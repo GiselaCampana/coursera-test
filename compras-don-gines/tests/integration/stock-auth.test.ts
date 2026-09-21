@@ -83,11 +83,8 @@ async function conEntorno(entorno: Record<string, string | undefined>) {
   return await import('@/lib/services/stock-descarga');
 }
 
-/** Sólo la clave: el encabezado tiene que salir del código, no del entorno. */
-const SOLO_LA_CLAVE = {
-  STOCK_INTEGRATION_KEY: CLAVE,
-  STOCK_INTEGRATION_HEADER: undefined,
-};
+/** Sólo la clave: el encabezado sale del código y no hay forma de cambiarlo. */
+const SOLO_LA_CLAVE = { STOCK_INTEGRATION_KEY: CLAVE };
 
 const original = { ...process.env };
 
@@ -104,7 +101,6 @@ describe('sin configurar', () => {
   it('lo dice con esas palabras, y no sale a la red', async () => {
     const { descargarCatalogoDeStock } = await conEntorno({
       STOCK_INTEGRATION_KEY: undefined,
-      STOCK_INTEGRATION_HEADER: undefined,
     });
 
     await expect(descargarCatalogoDeStock()).rejects.toThrow(
@@ -132,7 +128,6 @@ describe('con la clave rechazada', () => {
   it('lo dice con esas palabras y no como un error genérico', async () => {
     const { descargarCatalogoDeStock } = await conEntorno({
       STOCK_INTEGRATION_KEY: 'una-clave-que-no-es',
-      STOCK_INTEGRATION_HEADER: undefined,
     });
 
     await expect(descargarCatalogoDeStock()).rejects.toThrow(
@@ -143,9 +138,15 @@ describe('con la clave rechazada', () => {
   });
 
   it('el mensaje no repite la clave ni nada de lo enviado', async () => {
+    /*
+     * Se provoca el rechazo con una clave que el servidor de prueba no espera.
+     * Antes se provocaba cambiando el encabezado por una variable de entorno;
+     * esa variable ya no existe —el encabezado es `Authorization` y punto— y
+     * hacerlo así prueba lo mismo sin depender de una configuración que el
+     * contrato eliminó.
+     */
     const { descargarCatalogoDeStock } = await conEntorno({
-      STOCK_INTEGRATION_KEY: CLAVE,
-      STOCK_INTEGRATION_HEADER: 'x-encabezado-equivocado',
+      STOCK_INTEGRATION_KEY: `${CLAVE}-equivocada`,
     });
 
     const error = await descargarCatalogoDeStock().catch((e) => e);
@@ -193,7 +194,6 @@ describe('con la clave correcta', () => {
      */
     const { descargarCatalogoDeStock } = await conEntorno({
       STOCK_INTEGRATION_KEY: `Bearer ${CLAVE}`,
-      STOCK_INTEGRATION_HEADER: undefined,
     });
 
     await expect(descargarCatalogoDeStock()).resolves.toBeTruthy();
@@ -228,7 +228,6 @@ describe('la clave no se filtra', () => {
     vi.resetModules();
     process.env.STOCK_CATALOG_URL = `http://127.0.0.1:${PUERTO + 7}/api/integrations/catalog`;
     process.env.STOCK_INTEGRATION_KEY = CLAVE;
-    delete process.env.STOCK_INTEGRATION_HEADER;
     const { descargarCatalogoDeStock } = await import('@/lib/services/stock-descarga');
 
     const error = await descargarCatalogoDeStock().catch((e) => e);
