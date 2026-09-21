@@ -22,9 +22,6 @@ import {
 } from '@/components/Estado';
 import { AccionesComprobante } from './AccionesComprobante';
 import { RepararDerivados } from './RepararDerivados';
-import { sincronizacionDe } from '@/lib/services/stock-ingreso';
-import { vistaDelDespacho } from '@/lib/services/stock-despacho-manual';
-import { DespacharStock } from './DespacharStock';
 
 export const metadata: Metadata = { title: 'Comprobante' };
 export const dynamic = 'force-dynamic';
@@ -58,30 +55,6 @@ function resumenDeReparacion(p: {
   return `Se reconstruyó: ${partes.join(', ')}.`;
 }
 
-/**
- * Los cinco estados, cada uno con su color y su palabra.
- *
- * «Pendiente» y «fallida» se parecen desde afuera —en los dos casos el stock de
- * la otra aplicación todavía no se movió— pero se atienden distinto: una se
- * espera, la otra se mira. Y «en proceso» es el caso incómodo: salió y no
- * volvió respuesta, así que puede haber llegado.
- */
-const CHIP_DE_SINCRONIZACION: Record<string, string> = {
-  PENDIENTE: 'estado-aviso',
-  EN_PROCESO: 'estado-info',
-  COMPLETADA: 'estado-ok',
-  FALLIDA: 'estado-error',
-  SIN_MOVIMIENTOS: 'estado-neutro',
-};
-
-const TEXTO_DE_SINCRONIZACION: Record<string, string> = {
-  PENDIENTE: 'pendiente de enviar',
-  EN_PROCESO: 'enviada, sin confirmación',
-  COMPLETADA: 'confirmada por Control de Stock',
-  FALLIDA: 'falló, se puede reintentar',
-  SIN_MOVIMIENTOS: 'sin movimientos de mercadería',
-};
-
 export default async function PaginaComprobante({ params, searchParams }: Props) {
   const user = await requireUserOrRedirect();
   const { id } = await params;
@@ -96,41 +69,21 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
   }
 
   /*
-   * Cómo va el ingreso de la mercadería a Control de Stock.
+   * Acá se leía la sincronización con Control de Stock y se armaba el despacho
+   * a mano. **Las dos cosas se retiraron de esta pantalla**: la integración de
+   * escritura está cancelada y el módulo de stock propio todavía no está
+   * activado, así que no hay estado de envío que mostrar ni nada que despachar.
    *
-   * Se lee acá y no se deduce del estado del comprobante: un comprobante
-   * VALIDADO con movimientos sin confirmar está a medio camino, y la diferencia
-   * es justamente lo que hay que poder ver.
-   */
-  const sincronizacion = await sincronizacionDe(documento.id);
-
-  /*
-   * Qué se puede mandar a mano, y qué no mueve stock.
+   * `sincronizacionDe`, `vistaDelDespacho` y el componente `DespacharStock`
+   * siguen en el árbol a propósito —su retiro definitivo es una etapa aparte—
+   * pero esta pantalla ya no los llama: una lectura que nadie usa igual abre
+   * consultas, y una tarjeta que informa el estado de una integración cancelada
+   * no es información incompleta, es información falsa, porque del otro lado no
+   * hay nadie esperando esa confirmación.
    *
-   * Mirar no escribe ni abre ninguna conexión: abrir esta pantalla mil veces
-   * no mueve un gramo. El permiso decide si se ofrece el botón, y el servidor
-   * lo vuelve a comprobar cuando alguien lo aprieta.
+   * La clasificación útil no se perdió: vive en la vista previa, con más
+   * detalle que antes, como «Impacto previsto en Stock ERP».
    */
-  const despacho = await vistaDelDespacho(user, documento.id);
-  const conMovimiento = new Set(despacho.movimientos.map((m) => m.documentItemId));
-  /*
-   * Los renglones que no mueven stock, con el motivo a la vista. La BOLSA
-   * GRANDE es el caso de todos los días: es un gasto, no mercadería, así que no
-   * hay existencias que mover. Se muestra igual —está en la factura y se pagó—
-   * pero separada, para que su ausencia del envío sea una decisión visible y no
-   * un renglón que se perdió.
-   */
-  const sinImpactoEnStock = documento.items
-    .filter((item) => !conMovimiento.has(item.id))
-    .map((item) => ({
-      descripcion: item.description,
-      motivo:
-        item.expenseKind !== null
-          ? 'gasto, no mercadería'
-          : item.productId === null
-            ? 'sin artículo asociado en el catálogo'
-            : 'no genera ingreso de stock',
-    }));
 
   const storage = await getStorage();
 
@@ -362,66 +315,17 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
       </div>
 
       {/*
-        La mercadería, aparte del pago y con su estado real.
+        Acá iban dos tarjetas de la integración retirada: el estado de
+        sincronización con Control de Stock y el botón de despacho a mano.
 
-        Son dos consecuencias distintas de la misma compra y se auditan por
-        separado: una deuda con el proveedor y mercadería que entra. Mostrar
-        sólo la primera dejaba a la segunda invisible, y una compra con
-        movimientos sin confirmar **no está terminada** aunque el pago sí lo
-        esté. El estado se dice como es, sin redondear para arriba.
-      */}
-      {sincronizacion.estado !== 'SIN_MOVIMIENTOS' ? (
-        <div className="card">
-          <div className="card-titulo">
-            <h2>Movimiento de stock</h2>
-          </div>
-          <p className="ayuda">
-            Ingreso por compra en <strong>{documento.branch?.name ?? 'la sucursal'}</strong>. Se
-            registra en Control de Stock, que es otra aplicación: hasta que lo confirme, la
-            mercadería está pagada acá y todavía no entró allá.
-          </p>
-          <dl style={{ margin: 0 }}>
-            <div className="dato destacado">
-              <dt>Sincronización</dt>
-              <dd>
-                <span className={`etiqueta-estado ${CHIP_DE_SINCRONIZACION[sincronizacion.estado]}`}>
-                  {TEXTO_DE_SINCRONIZACION[sincronizacion.estado]}
-                </span>
-              </dd>
-            </div>
-            <div className="dato">
-              <dt>Renglones</dt>
-              <dd>
-                {sincronizacion.completados} de {sincronizacion.total} confirmados
-              </dd>
-            </div>
-          </dl>
-          {sincronizacion.motivos.length > 0 ? (
-            <div className="mensaje mensaje-aviso" style={{ marginTop: 10 }}>
-              <strong>Lo que falta resolver:</strong>
-              <ul className="lista-simple" style={{ marginTop: 6 }}>
-                {sincronizacion.motivos.map((motivo) => (
-                  <li key={motivo}>{motivo}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+        No se muestran más. El envío de movimientos a esa aplicación quedó
+        cancelado y el módulo de stock propio todavía no está activado, así que
+        no hay sincronización que informar ni nada que despachar.
 
-      {/*
-        El despacho a mano, sólo para quien tiene el permiso.
-        Esconderlo no es la defensa —el servidor vuelve a comprobarlo— pero
-        ofrecer un botón que va a ser rechazado tampoco ayuda a nadie.
+        Lo que la compra sí produce —costos, deuda y pago— sigue acá. Lo que
+        produciría en existencias está en la vista previa, como «Impacto
+        previsto en Stock ERP».
       */}
-      {sincronizacion.estado !== 'SIN_MOVIMIENTOS' && despacho.puedeDespachar ? (
-        <DespacharStock
-          documentId={documento.id}
-          movimientos={despacho.movimientos}
-          faltaConfigurar={despacho.faltaConfigurar}
-          sinImpacto={sinImpactoEnStock}
-        />
-      ) : null}
 
       {documento.paymentSchedule ? (
         <div className="card">

@@ -21,6 +21,7 @@ import {
   type ClaseDeGasto,
   type CodigoDeGasto,
 } from '@/lib/domain/gastos';
+import { planDeIngresos, type RenglonParaStock } from '@/lib/domain/ingreso-de-stock';
 
 /**
  * **Qué va a pasar si se confirma esta compra, dicho antes de que pase.**
@@ -207,6 +208,15 @@ export interface VistaPreviaDeCompra {
       porQueEsaUnidad: string | null;
     }[];
     renglonesSinMovimiento: number;
+    /**
+     * Lo que impediría registrar la existencia, dicho **antes** de aplicar.
+     *
+     * Son los dos problemas que sólo existen cuando el artículo ya está
+     * asociado —PLU vacío, unidad que no coincide— y que hasta ahora no se
+     * veían en ningún lado: la compra parecía aplicable y el rechazo llegaba
+     * recién del servidor, con un texto que nadie había anticipado.
+     */
+    impedimentos: { renglon: number; motivo: string }[];
   };
   /**
    * Lo que se paga y no entra al stock: bolsas, fletes.
@@ -679,6 +689,33 @@ export async function vistaPreviaDeCompra(
       };
     }),
     renglonesSinMovimiento: mercaderia.length - conProducto.length,
+    /*
+     * Los impedimentos se calculan con la MISMA función que usa el servidor al
+     * aplicar, no con una copia. Si fueran dos listas distintas, la pantalla
+     * podría decir que se puede y el servidor negarse, que es exactamente la
+     * clase de contradicción que esta vista previa existe para no tener.
+     */
+    impedimentos: planDeIngresos(
+      documento.items.map((item, i): RenglonParaStock => {
+        const fila = renglones[i];
+        const productoAsociado = fila.producto.id ? porId.get(fila.producto.id) : undefined;
+        return {
+          documentItemId: item.id,
+          lineNumber: fila.numero,
+          description: item.description ?? '',
+          quantity: (item.quantity ?? '0').toString(),
+          unit: item.unit,
+          producto: productoAsociado
+            ? {
+                id: productoAsociado.id,
+                plu: productoAsociado.internalCode,
+                purchaseUnit: productoAsociado.purchaseUnit,
+              }
+            : null,
+          esGasto: fila.gasto !== null,
+        };
+      }),
+    ).impedimentos.map((i) => ({ renglon: i.lineNumber, motivo: i.motivo })),
   };
 
   const gastos = renglones

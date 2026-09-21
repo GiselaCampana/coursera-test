@@ -38,6 +38,7 @@ import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
 import { asegurarEspacio } from '@/lib/services/almacenamiento';
 import { anotarIngresos } from '@/lib/services/stock-ingreso';
+import { seAnotanIngresosEnLaBandeja } from '@/lib/services/integracion-de-escritura';
 import {
   planDeIngresos,
   resolverDestino,
@@ -939,28 +940,35 @@ export async function confirmDocument(
     }
 
     /*
-     * Y la mercadería que tiene que entrar a Control de Stock, anotada **acá
-     * adentro**: en la misma transacción que acaba de escribir la compra.
+     * La mercadería **no se anota en ninguna bandeja**. La integración de
+     * escritura con Control de Stock está retirada y el módulo de stock propio
+     * todavía no está activado, así que aplicar una compra registra costos,
+     * deuda y pagos, y nada más.
      *
-     * Ése es el punto entero de la bandeja. Si se anotara después, una caída en
-     * el medio dejaría la mercadería pagada acá y ausente allá, sin nadie que
-     * se entere. Anotada adentro, o se escriben las dos cosas o no se escribe
-     * ninguna, y lo peor que puede pasar es que el envío tarde.
+     * El plan se sigue calculando igual, y no por prolijidad: sus impedimentos
+     * —renglón de mercadería sin artículo, PLU vacío, unidad incompatible—
+     * frenan la compra más arriba, y sus ingresos son lo que la vista previa
+     * muestra como impacto futuro. Lo único que se retiró es la escritura.
      *
-     * Los identificadores de renglón recién existen ahora, así que el plan se
-     * recorre emparejado con `createdItems`.
+     * Si algún día vuelve a anotarse, los identificadores de renglón recién
+     * existen acá adentro, así que el plan se recorre emparejado con
+     * `createdItems` y la anotación va en ESTA transacción: anotarla afuera
+     * dejaría la mercadería pagada acá y ausente allá tras una caída en el
+     * medio.
      */
-    await anotarIngresos(tx, {
-      documentId: document.id,
-      branchId: document.branchId,
-      supplierId: supplier.id,
-      requestedById: user.id,
-      occurredAt: issueDate,
-      ingresos: plan.ingresos.map((ingreso) => ({
-        ...ingreso,
-        documentItemId: createdItems[Number(ingreso.documentItemId)].id,
-      })),
-    });
+    if (seAnotanIngresosEnLaBandeja()) {
+      await anotarIngresos(tx, {
+        documentId: document.id,
+        branchId: document.branchId,
+        supplierId: supplier.id,
+        requestedById: user.id,
+        occurredAt: issueDate,
+        ingresos: plan.ingresos.map((ingreso) => ({
+          ...ingreso,
+          documentItemId: createdItems[Number(ingreso.documentItemId)].id,
+        })),
+      });
+    }
 
     // Agenda de pago. Vencer y pagar son eventos distintos: acá sólo se agenda.
     const status = computePaymentStatus({ dueDate, plannedAmount: total, paidAmount: 0 });

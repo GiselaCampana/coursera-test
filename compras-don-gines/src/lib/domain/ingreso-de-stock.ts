@@ -167,8 +167,8 @@ export function planDeIngresos(renglones: RenglonParaStock[]): PlanDeIngresos {
       impedimentos.push({
         lineNumber: renglon.lineNumber,
         motivo:
-          `El artículo del renglón ${renglon.lineNumber} no tiene PLU. Control de Stock ` +
-          'identifica los artículos por PLU y no se crea uno nuevo para poder enviarlo.',
+          `El artículo del renglón ${renglon.lineNumber} no tiene PLU. El stock identifica ` +
+          'los artículos por PLU y no se crea uno nuevo para poder registrarlo.',
       });
       continue;
     }

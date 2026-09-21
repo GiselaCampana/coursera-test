@@ -12,6 +12,10 @@ import {
   type MovimientoParaMirar,
 } from '@/lib/services/stock-ingreso';
 import { TRANSPORTE_HTTP, faltaConfigurar } from '@/lib/services/stock-transporte-http';
+import {
+  MOTIVO_DEL_RETIRO,
+  sePuedeDespacharAControlDeStock,
+} from '@/lib/services/integracion-de-escritura';
 
 /**
  * **Mandar a mano los movimientos de UN comprobante.**
@@ -63,6 +67,15 @@ export async function vistaDelDespacho(
   estado: EstadoDeSincronizacion;
   faltaConfigurar: string[];
 }> {
+  /*
+   * Con la escritura retirada nadie puede despachar, tenga el permiso que
+   * tenga. Se contesta sin leer nada: quien pregunte «¿muestro el botón?»
+   * recibe que no, y la pantalla ya ni siquiera pregunta.
+   */
+  if (!sePuedeDespacharAControlDeStock()) {
+    return { puedeDespachar: false, movimientos: [], estado: 'SIN_MOVIMIENTOS', faltaConfigurar: [] };
+  }
+
   const movimientos = await movimientosDe(documentId);
   const { estado } = await sincronizacionDe(documentId);
 
@@ -91,6 +104,30 @@ export async function despacharComprobante(
     incluirInciertas?: boolean;
   },
 ): Promise<ResultadoDelDespachoManual> {
+  /*
+   * **Primero de todo: la integración de escritura está retirada.**
+   *
+   * Va antes que el permiso, antes de leer el comprobante y antes de mirar la
+   * configuración, porque la promesa es que una llamada directa a esta acción
+   * no toca la base ni abre una conexión. Si la comprobación estuviera más
+   * abajo, contestar «retirada» costaría igual dos consultas, y una lectura
+   * sigue siendo tocar la base.
+   *
+   * No se lanza un error: esto no es una falla del usuario ni una
+   * autorización denegada, es una función que ya no está. Se devuelve el mismo
+   * tipo de resultado que devolvía antes, con el motivo adentro, para que
+   * cualquier llamador viejo lo muestre sin romperse.
+   */
+  if (!sePuedeDespacharAControlDeStock()) {
+    return {
+      ok: false,
+      estado: 'SIN_MOVIMIENTOS',
+      movimientos: [],
+      faltaConfigurar: [],
+      mensaje: MOTIVO_DEL_RETIRO,
+    };
+  }
+
   /*
    * El permiso se comprueba **acá**, en el servidor, y no alcanza con que la
    * pantalla haya escondido el botón: esconder un control no es una defensa,

@@ -5,6 +5,7 @@ import { sembrarLaCompraDeEzra, CATALOGO_DE_EZRA } from '../fixtures/compra-de-e
 import { EZRA_PIE } from '../fixtures/ezra';
 import { ControlDeStockFalso } from '../fixtures/control-de-stock-falso';
 import { aplicarCompra, vistaPreviaDeCompra } from '@/lib/services/vista-previa-compra';
+import { anotarLaBandejaComoAntes } from '../fixtures/bandeja-historica';
 import {
   despacharPendientes,
   sincronizacionDe,
@@ -75,8 +76,18 @@ afterAll(() => {
   usarTransporteDeStock(TRANSPORTE_SIN_CONFIGURAR);
 });
 
+/**
+ * Aplica la compra **y anota la bandeja**, que es lo que aplicar hacía antes.
+ *
+ * La integración de escritura quedó retirada, así que `aplicarCompra` ya no
+ * escribe en `StockOutbox`. Este archivo documenta la bandeja y el transporte,
+ * que siguen en el árbol y que alguien va a desarmar en una etapa aparte: sus
+ * afirmaciones no cambian, sólo cambió de dónde salen las filas que examinan.
+ */
 async function aplicar(documentId = completa) {
-  return aplicarCompra(escenario.admin, documentId, PAGO);
+  const resultado = await aplicarCompra(escenario.admin, documentId, PAGO);
+  await anotarLaBandejaComoAntes(documentId, { requestedById: escenario.admin.id });
+  return resultado;
 }
 
 /* ========================================================================== */

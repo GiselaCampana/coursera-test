@@ -10,9 +10,12 @@ import {
 import { EZRA_PIE } from '../fixtures/ezra';
 import { aplicarCompra, vistaPreviaDeCompra } from '@/lib/services/vista-previa-compra';
 import { despacharComprobante, vistaDelDespacho } from '@/lib/services/stock-despacho-manual';
-import { movimientosDe } from '@/lib/services/stock-ingreso';
+import { despacharPendientes, movimientosDe, sincronizacionDe } from '@/lib/services/stock-ingreso';
+import { TRANSPORTE_HTTP, faltaConfigurar } from '@/lib/services/stock-transporte-http';
+import { anotarLaBandejaComoAntes } from '../fixtures/bandeja-historica';
 import { AUDIT_ACTIONS } from '@/lib/services/audit';
-import { ForbiddenError } from '@/lib/errors';
+import { hasPermission } from '@/lib/auth/session';
+import { PERMISSIONS } from '@/lib/auth/permissions';
 import { Decimal } from '@/lib/money';
 
 /**
@@ -152,7 +155,34 @@ afterEach(() => {
 });
 
 async function aplicar(documentId: string) {
-  return aplicarCompra(escenario.admin, documentId, PAGO);
+  const resultado = await aplicarCompra(escenario.admin, documentId, PAGO);
+  await anotarLaBandejaComoAntes(documentId, { requestedById: escenario.admin.id });
+  return resultado;
+}
+
+/**
+ * **El envío, por abajo de la puerta que se retiró.**
+ *
+ * `despacharComprobante` ya no despacha: contesta que la integración está
+ * retirada y no toca nada. Lo que estas pruebas miden no es esa puerta sino lo
+ * que salía por el cable —la URL, el encabezado, el cuerpo, cómo se lee cada
+ * código de estado, qué pasa con un timeout— y eso vive en `despacharPendientes`
+ * con el transporte HTTP, que siguen enteros y que alguien va a desarmar en la
+ * etapa de retiro definitivo.
+ *
+ * El resultado se rearma con las mismas funciones que usaba el servicio, así
+ * que las afirmaciones no cambiaron. Lo único que no se reproduce es el texto
+ * del mensaje, que era de la puerta y no del transporte.
+ */
+async function despachar(opciones?: { incluirInciertas?: boolean }) {
+  await despacharPendientes({
+    documentId: completa,
+    incluirInciertas: opciones?.incluirInciertas === true,
+    transporte: TRANSPORTE_HTTP,
+  });
+  const movimientos = await movimientosDe(completa);
+  const { estado } = await sincronizacionDe(completa);
+  return { ok: estado === 'COMPLETADA', estado, movimientos, faltaConfigurar: faltaConfigurar() };
 }
 
 /* ========================================================================== */
@@ -162,13 +192,12 @@ describe('sin configuración no se abre ningún socket', () => {
     delete process.env.STOCK_INTEGRATION_WRITE_URL;
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(recibidos).toHaveLength(0);
     expect(resultado.faltaConfigurar).toEqual(['STOCK_INTEGRATION_WRITE_URL']);
-    expect(resultado.mensaje).toContain('STOCK_INTEGRATION_WRITE_URL');
     /* El nombre sí; el valor no tiene por qué estar en ningún lado. */
-    expect(resultado.mensaje).not.toContain(CLAVE);
+    expect(JSON.stringify(resultado.faltaConfigurar)).not.toContain(CLAVE);
     expect(resultado.estado).toBe('PENDIENTE');
   });
 
@@ -176,7 +205,7 @@ describe('sin configuración no se abre ningún socket', () => {
     delete process.env.STOCK_INTEGRATION_KEY;
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(recibidos).toHaveLength(0);
     expect(resultado.faltaConfigurar).toEqual(['STOCK_INTEGRATION_KEY']);
@@ -196,7 +225,7 @@ describe('sin configuración no se abre ningún socket', () => {
     delete process.env.STOCK_INTEGRATION_KEY;
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(recibidos).toHaveLength(0);
     expect(resultado.faltaConfigurar).toEqual([
@@ -206,31 +235,54 @@ describe('sin configuración no se abre ningún socket', () => {
   });
 });
 
-describe('quién puede despachar', () => {
+describe('quién puede despachar: ya nadie', () => {
+  /*
+   * Este grupo probaba que el permiso `stock.sincronizar` era la condición para
+   * despachar. Ahora la condición no se cumple para nadie, porque la puerta
+   * está cerrada, y eso es **más fuerte** que lo que probaba antes: no hace
+   * falta razonar sobre permisos para saber que no sale nada.
+   *
+   * El permiso no se borra —su retiro es una etapa aparte— así que se sigue
+   * comprobando quién lo tiene y quién no: cuando la puerta se desarme del
+   * todo, esa distinción tiene que seguir siendo cierta.
+   */
   it('un operador no puede, aunque llame directo al servicio', async () => {
-    /*
-     * Lo que se prueba no es que el botón esté escondido —eso es comodidad, no
-     * defensa— sino que llamar directamente a la acción del servidor tampoco
-     * alcance. Es el camino que usaría cualquiera que mire la red.
-     */
     await aplicar(completa);
 
-    await expect(despacharComprobante(escenario.operadorDevoto, completa)).rejects.toThrow(
-      ForbiddenError,
-    );
+    const resultado = await despacharComprobante(escenario.operadorDevoto, completa);
+    expect(resultado.ok).toBe(false);
+    expect(resultado.mensaje).toContain('retirada');
     expect(recibidos).toHaveLength(0);
   });
 
-  it('y la pantalla tampoco se lo ofrece', async () => {
+  it('el administrador tampoco, y ése es el punto', async () => {
     await aplicar(completa);
-    const vista = await vistaDelDespacho(escenario.operadorDevoto, completa);
-    expect(vista.puedeDespachar).toBe(false);
+
+    const resultado = await despacharComprobante(escenario.admin, completa);
+    expect(resultado.ok).toBe(false);
+    expect(resultado.mensaje).toContain('retirada');
+    expect(recibidos).toHaveLength(0);
+    /* Y los movimientos anotados siguen ahí, sin tocar: no se marcó nada. */
+    const movimientos = await movimientosDe(completa);
+    expect(movimientos).toHaveLength(5);
+    expect(movimientos.every((m) => m.status === 'PENDIENTE')).toBe(true);
+    expect(movimientos.every((m) => m.attempts === 0)).toBe(true);
   });
 
-  it('el administrador sí', async () => {
+  it('y la pantalla no se lo ofrece a nadie', async () => {
     await aplicar(completa);
-    const vista = await vistaDelDespacho(escenario.admin, completa);
-    expect(vista.puedeDespachar).toBe(true);
+    expect((await vistaDelDespacho(escenario.operadorDevoto, completa)).puedeDespachar).toBe(false);
+    expect((await vistaDelDespacho(escenario.admin, completa)).puedeDespachar).toBe(false);
+  });
+
+  it('el permiso sigue existiendo y sigue siendo del administrador', async () => {
+    /*
+     * `stock.sincronizar` no se elimina en esta entrega. Que el operador no lo
+     * tenga y el administrador sí es lo que hay que conservar hasta que alguien
+     * decida borrarlo, y es lo que esta afirmación fija.
+     */
+    expect(hasPermission(escenario.operadorDevoto, PERMISSIONS.STOCK_SINCRONIZAR)).toBe(false);
+    expect(hasPermission(escenario.admin, PERMISSIONS.STOCK_SINCRONIZAR)).toBe(true);
   });
 });
 
@@ -238,7 +290,7 @@ describe('se manda un comprobante, y sólo ése', () => {
   it('los cinco movimientos de Ezra, con la sucursal, los PLU y las cantidades del contrato', async () => {
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(recibidos).toHaveLength(1);
     const lote = recibidos[0]!.cuerpo as {
@@ -273,7 +325,7 @@ describe('se manda un comprobante, y sólo ése', () => {
      * por estar clasificada como gasto, no por cómo se llama.
      */
     await aplicar(completa);
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
 
     const lote = recibidos[0]!.cuerpo as { movements: { plu: string }[] };
     const bolsa = CATALOGO_DE_EZRA['4249'];
@@ -289,7 +341,7 @@ describe('se manda un comprobante, y sólo ése', () => {
     await aplicar(completa);
     await aplicar(otra);
 
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
 
     expect(recibidos).toHaveLength(1);
     expect((recibidos[0]!.cuerpo as { purchaseId: string }).purchaseId).toBe(completa);
@@ -301,7 +353,7 @@ describe('se manda un comprobante, y sólo ése', () => {
 
   it('el secreto viaja en el encabezado y en ningún otro lado', async () => {
     await aplicar(completa);
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
 
     expect(recibidos[0]!.autorizacion).toBe(`Bearer ${CLAVE}`);
     expect(recibidos[0]!.url).not.toContain(CLAVE);
@@ -319,8 +371,8 @@ describe('reintentos: ni se pierde ni se duplica', () => {
     await aplicar(completa);
 
     await Promise.all([
-      despacharComprobante(escenario.admin, completa),
-      despacharComprobante(escenario.admin, completa),
+      despachar(),
+      despachar(),
     ]);
 
     expect(recibidos).toHaveLength(1);
@@ -345,33 +397,37 @@ describe('reintentos: ni se pierde ni se duplica', () => {
      */
     comportamiento = { tipo: 'CUERPO_RARO' };
     await aplicar(completa);
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
     expect(recibidos).toHaveLength(1);
     expect((await movimientosDe(completa)).every((m) => m.status === 'EN_PROCESO')).toBe(true);
 
     comportamiento = { tipo: 'YA_APLICADO' };
     /* El envío normal no los vuelve a mandar. */
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
     expect(recibidos).toHaveLength(1);
 
     /* Pedirlo explícitamente sí, y con la misma clave. */
-    const resultado = await despacharComprobante(escenario.admin, completa, {
-      incluirInciertas: true,
-    });
+    const resultado = await despachar({ incluirInciertas: true });
     expect(recibidos).toHaveLength(2);
     expect(resultado.estado).toBe('COMPLETADA');
   }, 30_000);
 
   it('volver a apretar después de APPLIED no manda nada de nuevo', async () => {
     await aplicar(completa);
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
     expect(recibidos).toHaveLength(1);
 
-    const segundo = await despacharComprobante(escenario.admin, completa);
+    const segundo = await despachar();
 
     expect(recibidos).toHaveLength(1);
     expect(segundo.estado).toBe('COMPLETADA');
-    expect(segundo.mensaje).toContain('ya confirmó');
+    /*
+     * El «ya confirmó» era el mensaje de la puerta retirada. Lo que sostenía
+     * ese mensaje —que los cinco ya están confirmados y que no salió un segundo
+     * pedido— se afirma acá directamente, que es lo que importaba.
+     */
+    expect(segundo.movimientos.filter((m) => m.status === 'COMPLETADO')).toHaveLength(5);
+    expect(segundo.movimientos.every((m) => m.attempts === 1)).toBe(true);
   });
 
   it('ALREADY_APPLIED cuenta como conciliado', async () => {
@@ -383,7 +439,7 @@ describe('reintentos: ni se pierde ni se duplica', () => {
     comportamiento = { tipo: 'YA_APLICADO' };
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(resultado.estado).toBe('COMPLETADA');
     expect(resultado.ok).toBe(true);
@@ -394,7 +450,7 @@ describe('reintentos: ni se pierde ni se duplica', () => {
     await aplicar(completa);
     const antes = await movimientosDe(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(resultado.estado).not.toBe('COMPLETADA');
     const despues = await movimientosDe(completa);
@@ -404,7 +460,7 @@ describe('reintentos: ni se pierde ni se duplica', () => {
 
     /* Y el reintento manda exactamente lo mismo. */
     comportamiento = { tipo: 'APLICA' };
-    await despacharComprobante(escenario.admin, completa, { incluirInciertas: true });
+    await despachar({ incluirInciertas: true });
     expect(recibidos).toHaveLength(2);
     /*
      * Los mismos movimientos, comparados por clave y no por posición: el orden
@@ -424,7 +480,7 @@ describe('reintentos: ni se pierde ni se duplica', () => {
       comportamiento = { tipo: 'CODIGO', codigo };
       await aplicar(completa);
 
-      const resultado = await despacharComprobante(escenario.admin, completa);
+      const resultado = await despachar();
 
       expect(resultado.estado).toBe('PENDIENTE');
       const despues = await movimientosDe(completa);
@@ -445,7 +501,7 @@ describe('los errores se ven con su nombre, y no como éxito', () => {
       comportamiento = { tipo: 'CODIGO', codigo };
       await aplicar(completa);
 
-      const resultado = await despacharComprobante(escenario.admin, completa);
+      const resultado = await despachar();
 
       expect(resultado.estado).toBe('FALLIDA');
       expect(resultado.ok).toBe(false);
@@ -461,7 +517,7 @@ describe('los errores se ven con su nombre, y no como éxito', () => {
     comportamiento = { tipo: 'CUERPO_RARO' };
     await aplicar(completa);
 
-    const resultado = await despacharComprobante(escenario.admin, completa);
+    const resultado = await despachar();
 
     expect(resultado.estado).not.toBe('COMPLETADA');
     const despues = await movimientosDe(completa);
@@ -469,34 +525,40 @@ describe('los errores se ven con su nombre, y no como éxito', () => {
   });
 });
 
-describe('queda registrado', () => {
-  it('con usuario, comprobante, momento y resultado', async () => {
+describe('la puerta retirada no deja rastro porque no hace nada', () => {
+  /*
+   * Este grupo comprobaba que cada despacho quedara auditado con usuario,
+   * comprobante y resultado. La auditoría la escribía la puerta, y la puerta ya
+   * no llega a escribir: contesta que está retirada antes de tocar la base.
+   *
+   * Que NO haya asiento es ahora la afirmación correcta, y no una pérdida de
+   * cobertura: un asiento de un despacho que no ocurrió sería peor que ninguno.
+   * El asiento de cuando la puerta funcionaba queda documentado en el commit
+   * que la instaló.
+   */
+  it('llamarla no escribe auditoría, ni con permiso ni sin él', async () => {
     await aplicar(completa);
+
+    await despacharComprobante(escenario.operadorDevoto, completa);
     await despacharComprobante(escenario.admin, completa);
-
-    const registro = await prisma.auditLog.findFirst({
-      where: { action: AUDIT_ACTIONS.STOCK_DESPACHADO, entityId: completa },
-    });
-
-    expect(registro).not.toBeNull();
-    expect(registro!.userId).toBe(escenario.admin.id);
-    expect(registro!.entity).toBe('Document');
-    expect(registro!.createdAt).toBeInstanceOf(Date);
-
-    const despues = registro!.after as { estado: string; movimientos: { status: string }[] };
-    expect(despues.estado).toBe('COMPLETADA');
-    expect(despues.movimientos).toHaveLength(5);
-    /* Ni la clave ni el encabezado entran en la auditoría. */
-    expect(JSON.stringify(registro)).not.toContain(CLAVE);
-  });
-
-  it('un intento rechazado por permisos no escribe nada', async () => {
-    await aplicar(completa);
-    await despacharComprobante(escenario.operadorDevoto, completa).catch(() => null);
 
     expect(
       await prisma.auditLog.count({ where: { action: AUDIT_ACTIONS.STOCK_DESPACHADO } }),
     ).toBe(0);
+  });
+
+  it('el transporte, cuando se lo llama por abajo, sí deja los movimientos marcados', async () => {
+    /*
+     * La contracara: lo que la puerta ya no hace, la maquinaria lo sigue
+     * haciendo bien. Sin esto, «no pasó nada» sería indistinguible de «la
+     * bandeja se rompió».
+     */
+    await aplicar(completa);
+    const resultado = await despachar();
+
+    expect(resultado.estado).toBe('COMPLETADA');
+    expect(resultado.movimientos.filter((m) => m.status === 'COMPLETADO')).toHaveLength(5);
+    expect(JSON.stringify(resultado.movimientos)).not.toContain(CLAVE);
   });
 });
 
@@ -537,7 +599,7 @@ describe('lo que el despacho no toca', () => {
       where: { documentId: completa },
     });
 
-    await despacharComprobante(escenario.admin, completa);
+    await despachar();
 
     const despues = await prisma.document.findUniqueOrThrow({
       where: { id: completa },

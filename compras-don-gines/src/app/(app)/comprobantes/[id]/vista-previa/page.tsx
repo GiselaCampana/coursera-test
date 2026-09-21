@@ -248,41 +248,74 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
           </div>
         </section>
 
-        <section className="card">
+        <section className="card" data-prueba="impacto-en-stock-erp">
           <div className="card-titulo">
-            <h2>Movimiento de stock</h2>
+            <h2>Impacto previsto en Stock ERP — módulo todavía no activado</h2>
           </div>
           {/*
-            La dirección, arriba y con todas las letras.
-            Una compra hace ENTRAR mercadería. Decirlo acá no es redundante: el
-            error que hay que hacer imposible es mandarla como egreso, que vacía
-            el depósito de Control de Stock con números que parecen correctos.
+            El aviso va PRIMERO, antes de la lista.
+            Una lista de cantidades con PLU y unidad se lee como algo que pasó.
+            Acá no pasa: describe un efecto futuro de un módulo que no está
+            encendido. Si la aclaración fuera al pie, quien mira rápido vería
+            cinco movimientos y se iría creyendo que el stock se movió.
+          */}
+          <p className="mensaje mensaje-aviso" data-prueba="stock-erp-no-activado">
+            Aplicar esta compra <strong>registra costos, deuda y pagos</strong>, y{' '}
+            <strong>todavía no modifica ninguna existencia de Stock ERP</strong>. Lo que sigue es
+            la clasificación de lo que entraría cuando el módulo se active, para poder revisarla
+            desde ahora.
+          </p>
+          {/*
+            La dirección, con todas las letras.
+            Una compra hace ENTRAR mercadería. Decirlo no es redundante: el error
+            que hay que hacer imposible es registrarla como egreso, que vacía un
+            depósito con números que parecen correctos.
           */}
           <p className="ayuda">
             <strong>{previa.stock.direccion}</strong> en{' '}
             {previa.stock.sucursal ? (
-              <strong>{previa.stock.sucursal.nombre}</strong>
+              <strong data-prueba="sucursal-del-impacto">{previa.stock.sucursal.nombre}</strong>
             ) : (
               <span className="etiqueta-estado estado-error">sin sucursal de destino</span>
             )}
-            . Un movimiento por renglón asociado, que se audita aparte del egreso.
+            . Un movimiento por renglón asociado.
           </p>
+          {/*
+            Los impedimentos, arriba de la lista y no escondidos.
+            Son los dos que sólo se veían al aplicar —PLU vacío, unidad que no
+            coincide—: la compra parecía aplicable y el rechazo llegaba del
+            servidor, con un texto que nadie había anticipado.
+          */}
+          {previa.stock.impedimentos.length > 0 && (
+            <div className="mensaje mensaje-error" data-prueba="impedimentos-de-stock">
+              <strong>Impedimentos:</strong>
+              <ul className="lista-simple" style={{ marginTop: 6 }}>
+                {previa.stock.impedimentos.map((impedimento) => (
+                  <li key={impedimento.renglon} data-prueba="impedimento">
+                    {impedimento.motivo}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {previa.stock.movimientos.length === 0 ? (
             <p className="mensaje mensaje-aviso">Ningún renglón movería mercadería todavía.</p>
           ) : (
-            <ul className="lista-simple">
+            <ul className="lista-simple" data-prueba="movimientos-previstos">
               {previa.stock.movimientos.map((movimiento) => (
-                <li key={movimiento.renglon}>
+                <li key={movimiento.renglon} data-prueba="movimiento-previsto">
                   <strong>{movimiento.producto}</strong>
                   <div className="chico suave">
                     {/*
-                      El PLU, que es la identidad con la que Control de Stock
-                      conoce al artículo. Se muestra porque es por lo que se
-                      resuelve: nunca por el nombre, que puede repetirse casi
-                      igual entre dos artículos que cuestan la mitad uno del otro.
+                      El PLU, que es la identidad con la que se conoce al
+                      artículo. Se muestra porque es por lo que se resuelve:
+                      nunca por el nombre, que puede repetirse casi igual entre
+                      dos artículos que cuestan la mitad uno del otro.
                     */}
-                    PLU {movimiento.plu ?? '—'} · {formatQty(movimiento.cantidad, 3)}{' '}
-                    {movimiento.unidad} · {formatARS(movimiento.costoTotal)}
+                    PLU <span data-prueba="plu">{movimiento.plu ?? '—'}</span> ·{' '}
+                    <span data-prueba="cantidad">{formatQty(movimiento.cantidad, 3)}</span>{' '}
+                    <span data-prueba="unidad">{movimiento.unidad}</span> ·{' '}
+                    {formatARS(movimiento.costoTotal)}
                   </div>
                   {movimiento.porQueEsaUnidad ? (
                     <div className="chico suave">{movimiento.porQueEsaUnidad}</div>
@@ -292,7 +325,7 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
             </ul>
           )}
           {previa.stock.renglonesSinMovimiento > 0 && (
-            <p className="mensaje mensaje-aviso">
+            <p className="mensaje mensaje-aviso" data-prueba="renglones-excluidos">
               {previa.stock.renglonesSinMovimiento} renglón/es no moverían nada porque no están
               asociados de forma inequívoca.
             </p>
@@ -310,9 +343,9 @@ export default async function VistaPreviaDeLaCompra({ params }: Props) {
                 Se paga con la factura y no mueve existencias. Su costo no se reparte entre los
                 artículos: eso sería una decisión contable aparte.
               </p>
-              <ul className="lista-simple">
+              <ul className="lista-simple" data-prueba="gastos-sin-impacto">
                 {previa.gastos.map((gasto) => (
-                  <li key={gasto.renglon}>
+                  <li key={gasto.renglon} data-prueba="gasto">
                     <strong>{gasto.descripcion}</strong>
                     <div className="chico suave">
                       {formatQty(gasto.cantidad, 3)} {gasto.unidad} · {formatARS(gasto.importe)} ·{' '}

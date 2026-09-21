@@ -58,7 +58,9 @@ services:
     runtime: node
     plan: free
     region: oregon
-    branch: motor-general-facturas
+    # La rama candidata, no la de desarrollo: lo que se despliega en la demo es
+    # una versión revisada y no lo último que alguien empujó.
+    branch: compras-release-candidate
     rootDir: compras-don-gines
     # El mismo endpoint tonto que usa producción: contesta 200 si el proceso
     # está vivo, sin tocar cookies, sesión ni base. Un chequeo que consultara

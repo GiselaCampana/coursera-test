@@ -5,6 +5,7 @@ import { sembrarLaCompraDeEzra, CATALOGO_DE_EZRA } from '../fixtures/compra-de-e
 import { EZRA_ENCABEZADO, EZRA_PIE } from '../fixtures/ezra';
 import { ControlDeStockFalso } from '../fixtures/control-de-stock-falso';
 import { aplicarCompra } from '@/lib/services/vista-previa-compra';
+import { anotarLaBandejaComoAntes } from '../fixtures/bandeja-historica';
 import {
   despacharPendientes,
   sincronizacionDe,
@@ -58,6 +59,7 @@ afterAll(() => usarTransporteDeStock(TRANSPORTE_SIN_CONFIGURAR));
 
 async function aplicarYDespachar() {
   await aplicarCompra(escenario.admin, completa, PAGO);
+  await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
   await despacharPendientes({ documentId: completa });
 }
 
@@ -148,6 +150,7 @@ describe('el cuerpo que viaja', () => {
      * que Control de Stock tiene que rechazar como conflicto.
      */
     await aplicarCompra(escenario.admin, completa, PAGO);
+    await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
     stock.seComporta({ tipo: 'RECUPERABLE', motivo: '503' });
     await despacharPendientes({ documentId: completa });
     const primero = JSON.stringify(stock.ultimoLote());
@@ -161,6 +164,7 @@ describe('el cuerpo que viaja', () => {
 
   it('una cantidad con más de tres decimales frena el lote, sin redondear', async () => {
     await aplicarCompra(escenario.admin, completa, PAGO);
+    await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
     const fila = await prisma.stockOutbox.findFirstOrThrow({ where: { documentId: completa } });
     await prisma.stockOutbox.update({ where: { id: fila.id }, data: { quantity: '4.2401' } });
 
@@ -307,6 +311,7 @@ describe('cómo se interpreta la respuesta', () => {
   ]) {
     it(caso.nombre, async () => {
       await aplicarCompra(escenario.admin, completa, PAGO);
+      await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
       stock.seComporta({ tipo: caso.tipo, motivo: `motivo de ${caso.tipo}` });
       await despacharPendientes({ documentId: completa });
 
@@ -320,6 +325,7 @@ describe('cómo se interpreta la respuesta', () => {
 
   it('un 5xx conserva el lote para reintentar, con la misma clave', async () => {
     await aplicarCompra(escenario.admin, completa, PAGO);
+    await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
     stock.seComporta({ tipo: 'RECUPERABLE', motivo: '503 desde Control de Stock' });
     await despacharPendientes({ documentId: completa });
 
@@ -330,6 +336,7 @@ describe('cómo se interpreta la respuesta', () => {
 
   it('una respuesta malformada nunca se considera éxito', async () => {
     await aplicarCompra(escenario.admin, completa, PAGO);
+    await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
     stock.seComporta({ tipo: 'RESPUESTA_INVALIDA', motivo: 'contestó cualquier cosa' });
     await despacharPendientes({ documentId: completa });
 
@@ -650,6 +657,8 @@ describe('lo que la bandeja hace con cada respuesta', () => {
       usarTransporteDeStock(stock);
 
       await aplicarCompra(escenario.admin, sembrada.completa, PAGO);
+
+      await anotarLaBandejaComoAntes(sembrada.completa, { requestedById: escenario.admin.id });
       stock.seComporta({ tipo, motivo: `motivo ${tipo}` });
       await despacharPendientes({ documentId: sembrada.completa });
 
@@ -677,6 +686,7 @@ describe('lo que la bandeja hace con cada respuesta', () => {
      * mercadería sin que nadie se entere.
      */
     await aplicarCompra(escenario.admin, completa, PAGO);
+    await anotarLaBandejaComoAntes(completa, { requestedById: escenario.admin.id });
     const filas = await prisma.stockOutbox.findMany({ where: { documentId: completa } });
 
     usarTransporteDeStock({
