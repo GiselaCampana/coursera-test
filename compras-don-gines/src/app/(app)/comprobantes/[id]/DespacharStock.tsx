@@ -111,54 +111,63 @@ export function DespacharStock({
         compra, y se audita por separado.
       </p>
 
-      <table className="tabla" data-prueba="movimientos-de-stock">
-        <thead>
-          <tr>
-            <th>Sucursal</th>
-            <th>PLU</th>
-            <th>Cantidad</th>
-            <th>Unidad</th>
-            <th>Movimiento</th>
-            <th>Estado</th>
-          </tr>
-        </thead>
-        <tbody>
-          {enPantalla.map((m) => (
-            <tr key={m.id} data-prueba="movimiento" data-estado={m.status}>
-              <td>
-                {m.sucursal}
-                {m.branchCode ? (
-                  <span className="chico medio"> ({m.branchCode})</span>
-                ) : (
-                  <span className="chico" data-prueba="sin-codigo-de-sucursal">
-                    {' '}
-                    sin código de Control de Stock
-                  </span>
-                )}
-              </td>
-              <td data-prueba="plu">{m.plu}</td>
-              <td data-prueba="cantidad">{m.quantity}</td>
-              <td data-prueba="unidad">{m.unit}</td>
-              <td>{m.direction === 'INGRESO' ? 'Ingreso' : m.direction}</td>
-              <td>
-                <span className={`etiqueta-estado ${ESTADO[m.status]?.clase ?? 'estado-neutro'}`}>
-                  {ESTADO[m.status]?.texto ?? m.status}
-                </span>
-                {m.externalId ? (
-                  <div className="chico medio" data-prueba="id-externo">
-                    id {m.externalId}
-                  </div>
-                ) : null}
-                {m.lastError ? (
-                  <div className="chico" data-prueba="motivo-del-movimiento">
-                    {m.lastError}
-                  </div>
-                ) : null}
-              </td>
+      {/*
+        La tabla va envuelta, como las otras cuatro de la aplicación: `table`
+        tiene un ancho mínimo de 560px y la pantalla del teléfono mide 390. Sin
+        esto se desborda, empuja el cuerpo a lo ancho y —lo que es peor— queda
+        por encima del botón de enviar, que es justamente el control que no
+        puede quedar tapado. Lo encontró la prueba de navegador.
+      */}
+      <div className="tabla-scroll">
+        <table className="tabla" data-prueba="movimientos-de-stock">
+          <thead>
+            <tr>
+              <th>Sucursal</th>
+              <th>PLU</th>
+              <th>Cantidad</th>
+              <th>Unidad</th>
+              <th>Movimiento</th>
+              <th>Estado</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {enPantalla.map((m) => (
+              <tr key={m.id} data-prueba="movimiento" data-estado={m.status}>
+                <td>
+                  {m.sucursal}
+                  {m.branchCode ? (
+                    <span className="chico medio"> ({m.branchCode})</span>
+                  ) : (
+                    <span className="chico" data-prueba="sin-codigo-de-sucursal">
+                      {' '}
+                      sin código de Control de Stock
+                    </span>
+                  )}
+                </td>
+                <td data-prueba="plu">{m.plu}</td>
+                <td data-prueba="cantidad">{m.quantity}</td>
+                <td data-prueba="unidad">{m.unit}</td>
+                <td>{m.direction === 'INGRESO' ? 'Ingreso' : m.direction}</td>
+                <td>
+                  <span className={`etiqueta-estado ${ESTADO[m.status]?.clase ?? 'estado-neutro'}`}>
+                    {ESTADO[m.status]?.texto ?? m.status}
+                  </span>
+                  {m.externalId ? (
+                    <div className="chico medio" data-prueba="id-externo">
+                      id {m.externalId}
+                    </div>
+                  ) : null}
+                  {m.lastError ? (
+                    <div className="chico" data-prueba="motivo-del-movimiento">
+                      {m.lastError}
+                    </div>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
 
       {sinImpacto.length > 0 ? (
         <div className="mensaje mensaje-info" style={{ marginTop: 10 }}>

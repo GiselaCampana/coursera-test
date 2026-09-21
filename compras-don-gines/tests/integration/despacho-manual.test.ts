@@ -406,9 +406,17 @@ describe('reintentos: ni se pierde ni se duplica', () => {
     comportamiento = { tipo: 'APLICA' };
     await despacharComprobante(escenario.admin, completa, { incluirInciertas: true });
     expect(recibidos).toHaveLength(2);
-    const primero = recibidos[0]!.cuerpo as { movements: unknown[] };
-    const segundo = recibidos[1]!.cuerpo as { movements: unknown[] };
-    expect(JSON.stringify(segundo.movements)).toBe(JSON.stringify(primero.movements));
+    /*
+     * Los mismos movimientos, comparados por clave y no por posición: el orden
+     * dentro del lote no es parte del contrato ni es estable —las cinco filas
+     * comparten el `createdAt` al milisegundo— y compararlo haría fallar un
+     * reintento que manda exactamente lo mismo.
+     */
+    const porClave = (m: { idempotencyKey: string }[]) =>
+      JSON.stringify([...m].sort((a, b) => a.idempotencyKey.localeCompare(b.idempotencyKey)));
+    const primero = recibidos[0]!.cuerpo as { movements: { idempotencyKey: string }[] };
+    const segundo = recibidos[1]!.cuerpo as { movements: { idempotencyKey: string }[] };
+    expect(porClave(segundo.movements)).toBe(porClave(primero.movements));
   }, 30_000);
 
   for (const codigo of [429, 500, 503]) {
