@@ -72,6 +72,15 @@ model User {
   salePricesApproved SalePriceHistory[]
   archivosArchivados DocumentFile[]        @relation("ArchivosArchivados")
 
+  // --- Stock ERP (fase 1) -------------------------------------------------
+  stockConfigsApproved  ProductStockConfig[]
+  stockPresentationsApproved ProductPurchasePresentation[]
+  stockActivations      ProductStockActivation[]
+  stockLedger           StockLedger[]
+  stockOperations       StockOperation[]
+  stockCountSessions    StockCountSession[]
+  stockTransfers        StockTransfer[]
+
   @@index([roleId])
   @@index([branchId])
   @@map("users")
@@ -123,6 +132,15 @@ model Branch {
   costHistory       CostHistory[]
   salesMovements    SalesMovement[]
   stockOutbox       StockOutbox[]
+
+  // --- Stock ERP (fase 1) -------------------------------------------------
+  stockActivations  ProductStockActivation[]
+  stockLedger       StockLedger[]
+  stockBalances     StockBalance[]
+  stockOperations   StockOperation[]
+  stockCountSessions StockCountSession[]
+  stockTransfersFrom StockTransfer[]      @relation("TrasladoOrigen")
+  stockTransfersTo   StockTransfer[]      @relation("TrasladoDestino")
 
   @@map("branches")
 }
@@ -355,6 +373,14 @@ model Product {
   salePrices        SalePriceHistory[]
   salesMovements    SalesMovement[]
 
+  // --- Stock ERP (fase 1) -------------------------------------------------
+  stockConfig       ProductStockConfig?
+  stockActivations  ProductStockActivation[]
+  stockPresentations ProductPurchasePresentation[]
+  stockLedger       StockLedger[]
+  stockBalances     StockBalance[]
+  stockTransferLines StockTransferLine[]
+
   @@index([normalizedName])
   @@index([familyId])
   @@map("products")
@@ -555,6 +581,8 @@ model Document {
   purchaseMovements PurchaseMovement[]
   stockOutbox       StockOutbox[]
   costHistory       CostHistory[]
+  stockLedger       StockLedger[]
+  stockOperations   StockOperation[]
 
   @@unique([supplierId, docType, pointOfSale, number, dedupeKey], name: "uniq_document_number")
   @@index([branchId, issueDate])
@@ -1114,4 +1142,440 @@ model StockOutbox {
   @@index([status, createdAt])
   @@index([documentId])
   @@map("stock_outbox")
+}
+
+// ===========================================================================
+//  Stock ERP — fase 1
+//
+//  El stock CONTABLE del ERP, adentro de Compras. Es otra cosa que Control de
+//  Stock, que sigue siendo la aplicación de inventarios físicos de las
+//  sucursales y la fuente maestra del catálogo, de sólo lectura.
+//
+//  Tres ideas sostienen todo lo de abajo:
+//
+//  1. **El libro es la verdad.** `StockLedger` no se edita ni se borra: los
+//     errores se corrigen con una reversión o un ajuste, vinculados al
+//     original. El saldo de `StockBalance` es una materialización que se puede
+//     reconstruir sumando el libro.
+//
+//  2. **La activación es de a un artículo y una sucursal.** No hay una apertura
+//     global que obligue a contar el catálogo entero antes de empezar. Un
+//     artículo SIN_INICIAR **no vale cero**: vale «todavía no lo contamos», y
+//     eso es una diferencia que cuesta plata confundir.
+//
+//  3. **Las garantías viven en la base.** Inmutabilidad, tres decimales, saldo
+//     no negativo y traslados atómicos son restricciones y disparadores de
+//     PostgreSQL, no promesas del código de la aplicación.
+//
+//  En esta fase se crean las estructuras y sus garantías. No hay servicios ni
+//  pantallas todavía, y ninguna sucursal ni artículo real se activa.
+// ===========================================================================
+
+/// La unidad en la que el ERP lleva la existencia de un artículo.
+///
+/// Es un enum propio y no `PurchaseUnit` a propósito: la unidad de existencia
+/// es una decisión del ERP, aprobada a mano, y no tiene por qué moverse cuando
+/// cambie el vocabulario de las compras.
+enum StockUnit {
+  KG
+  UNIT
+}
+
+enum StockConfigStatus {
+  PENDIENTE
+  APROBADA
+}
+
+/// En qué punto de la incorporación está un artículo **en una sucursal**.
+enum StockActivationState {
+  /// Todavía no se contó. **No es cero**: es que no sabemos.
+  SIN_INICIAR
+  /// Falta aprobar la unidad de existencia.
+  PENDIENTE_CONFIGURACION
+  /// Unidad aprobada; espera el conteo inicial.
+  LISTO_PARA_CONTAR
+  /// Contado y confirmado. Desde su corte, los movimientos afectan el saldo.
+  ACTIVO
+  /// La sucursal no maneja este artículo. Exige motivo.
+  NO_SE_MANEJA
+  /// Se manejó y se dio de baja. Conserva la historia.
+  INACTIVO
+}
+
+enum StockMovementType {
+  OPENING_BALANCE
+  PURCHASE_IN
+  SALE_OUT
+  CUSTOMER_RETURN_IN
+  SUPPLIER_RETURN_OUT
+  TRANSFER_OUT
+  TRANSFER_IN
+  WASTE_OUT
+  INTERNAL_USE_OUT
+  ADJUSTMENT_IN
+  ADJUSTMENT_OUT
+  INVENTORY_CORRECTION
+}
+
+enum StockDirection {
+  IN
+  OUT
+}
+
+enum StockOperationKind {
+  ACTIVACION
+  RECEPCION_COMPRA
+  TRASLADO
+  AJUSTE
+  REVERSION
+}
+
+enum StockCountSessionStatus {
+  ABIERTA
+  CERRADA
+}
+
+enum StockTransferStatus {
+  APLICADO
+  REVERSADO
+}
+
+/// De dónde salió el saldo de un artículo en una sucursal.
+enum StockOpeningSource {
+  /// Nació de un conteo inicial confirmado.
+  APERTURA
+  /// El artículo se incorporó al catálogo después: nunca tuvo apertura.
+  POSTERIOR_AL_CORTE
+}
+
+/// La unidad de existencia del ERP, aprobada a mano.
+///
+/// **La sincronización del catálogo no nombra esta tabla.** Control de Stock
+/// informa su unidad en `Product.catalogUnit`, que es un dato externo; la
+/// unidad con la que el ERP lleva existencias se aprueba acá y no se pisa.
+model ProductStockConfig {
+  id        String @id @default(cuid())
+  productId String @unique
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// Nula mientras el estado sea PENDIENTE; obligatoria al aprobar.
+  stockUnit StockUnit?
+  status    StockConfigStatus @default(PENDIENTE)
+
+  approvedById String?
+  approvedBy   User?   @relation(fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  history ProductStockConfigHistory[]
+
+  @@map("product_stock_config")
+}
+
+/// Cada cambio de la configuración, para poder decir quién y por qué.
+model ProductStockConfigHistory {
+  id       String @id @default(cuid())
+  configId String
+  config   ProductStockConfig @relation(fields: [configId], references: [id], onDelete: Cascade)
+
+  campo   String
+  antes   String?
+  despues String?
+  reason  String
+  userId  String?
+  at      DateTime @default(now())
+
+  @@index([configId, at])
+  @@map("product_stock_config_history")
+}
+
+/// Cómo se compra un artículo: por proveedor, por código de proveedor, o en
+/// general.
+///
+/// Una sola unidad de compra por artículo no alcanza: el mismo queso se compra
+/// por kilo a uno y por caja a otro. La unicidad se resuelve con índices
+/// parciales —abajo, en la migración— porque un UNIQUE común con columnas
+/// nulas **permite duplicados** en PostgreSQL.
+model ProductPurchasePresentation {
+  id        String @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  supplierId   String?
+  supplierCode String?
+
+  purchaseUnit StockUnit
+  /// Cuántas unidades de existencia entran en una unidad de compra.
+  conversionFactor Decimal @db.Decimal
+  description      String?
+
+  status       StockConfigStatus @default(PENDIENTE)
+  approvedById String?
+  approvedBy   User?   @relation(fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([productId])
+  @@map("product_purchase_presentation")
+}
+
+/// Una sesión de conteo, para agrupar por comodidad.
+///
+/// Agrupa, no condiciona: la activación de cada artículo es individual y no
+/// espera a que la sesión termine.
+model StockCountSession {
+  id       String @id @default(cuid())
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  name   String
+  status StockCountSessionStatus @default(ABIERTA)
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+  closedAt    DateTime?
+
+  activations ProductStockActivation[]
+
+  @@index([branchId, status])
+  @@map("stock_count_session")
+}
+
+/// El estado de un artículo **en una sucursal**. El corazón de la activación
+/// gradual.
+model ProductStockActivation {
+  id        String @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  branchId  String
+  branch    Branch @relation(fields: [branchId], references: [id])
+
+  state StockActivationState @default(SIN_INICIAR)
+
+  /// El instante del conteo. Propio de esta combinación, no global.
+  ///
+  /// Todo lo que pasó físicamente antes queda absorbido por el conteo; sólo lo
+  /// posterior mueve el saldo.
+  cutoffAt DateTime?
+
+  /// La apertura que activó esta combinación. Única: no hay una segunda.
+  openingLedgerId String?      @unique
+  openingLedger   StockLedger? @relation(fields: [openingLedgerId], references: [id])
+
+  /// Obligatorio cuando el estado es NO_SE_MANEJA.
+  reason String?
+
+  activatedById String?
+  activatedBy   User?   @relation(fields: [activatedById], references: [id], onDelete: SetNull)
+  activatedAt   DateTime?
+
+  sessionId String?
+  session   StockCountSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, branchId])
+  @@index([branchId, state])
+  @@map("product_stock_activation")
+}
+
+/// Una operación idempotente: lo que hace que un reintento sea inofensivo.
+///
+/// Existe porque una transacción resuelve la atomicidad pero **no** la entrega
+/// de la respuesta: la base puede confirmar y el teléfono perder la conexión
+/// antes de enterarse. El resultado se guarda adentro de la misma transacción,
+/// así que un reintento con la misma clave devuelve lo que pasó de verdad en
+/// vez de volver a sumar.
+model StockOperation {
+  id           String @id @default(cuid())
+  operationKey String @unique
+
+  kind StockOperationKind
+
+  /// La versión del algoritmo de la huella. Sin esto, mejorar el algoritmo
+  /// convertiría todas las operaciones viejas en conflictos falsos.
+  hashVersion Int    @default(1)
+  contentHash String
+
+  documentId String?
+  document   Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  branchId   String?
+  branch     Branch?   @relation(fields: [branchId], references: [id])
+
+  requestedById String?
+  requestedBy   User?   @relation(fields: [requestedById], references: [id], onDelete: SetNull)
+
+  /// Cuándo llegó físicamente la mercadería. **No** es la fecha del papel.
+  receivedAt DateTime?
+
+  appliedAt     DateTime @default(now())
+  movementCount Int      @default(0)
+  result        Json?
+
+  /// Si esta operación reversa a otra. Una sola vez.
+  reversesOperationId String?         @unique
+  reversesOperation   StockOperation? @relation("ReversionDeOperacion", fields: [reversesOperationId], references: [id], onDelete: SetNull)
+  reversedBy          StockOperation? @relation("ReversionDeOperacion")
+
+  ledger    StockLedger[]
+  transfers StockTransfer[]
+
+  @@index([kind, appliedAt])
+  @@index([documentId])
+  @@map("stock_operation")
+}
+
+/// **El libro.** Inmutable, y la única fuente de verdad de las existencias.
+model StockLedger {
+  id  String @id @default(cuid())
+  /// Orden de registración. Es lo que da un orden total y estable.
+  seq BigInt @unique @default(autoincrement())
+  /// La transacción que lo escribió. El saldo lo usa para probar que se movió
+  /// junto con un movimiento y no por afuera.
+  txId BigInt
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  /// El PLU tal como era al momento del movimiento. La historia no se reescribe.
+  pluHistorico String
+  branchId  String
+  branch    Branch @relation(fields: [branchId], references: [id])
+
+  type      StockMovementType
+  direction StockDirection
+  quantity  Decimal   @db.Decimal
+  unit      StockUnit
+
+  /// Cuándo ocurrió el hecho. Puede ser anterior a la registración.
+  effectiveAt DateTime
+  createdAt   DateTime @default(now())
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  reason String?
+  notes  String?
+  sourceSystem String @default("compras-don-gines")
+
+  documentId     String?
+  document       Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  documentItemId String?
+
+  operationId String
+  operation   StockOperation @relation(fields: [operationId], references: [id])
+
+  idempotencyKey String @unique
+
+  /// A qué movimiento reversa. Una reversión por movimiento.
+  reversesId String?      @unique
+  reverses   StockLedger? @relation("ReversionDeMovimiento", fields: [reversesId], references: [id])
+  reversedBy StockLedger? @relation("ReversionDeMovimiento")
+
+  transferLineId String?
+  transferLine   StockTransferLine? @relation(fields: [transferLineId], references: [id])
+
+  /// El saldo que quedó **por orden de registración**. No se recalcula cuando
+  /// después entra un movimiento con fecha efectiva anterior: para eso está la
+  /// reconstrucción desde el libro.
+  balanceAfterSeq Decimal @db.Decimal
+
+  /// Datos de peso variable. Se guardan los tres y el factor aprobado que se
+  /// usó; no se inventa ninguna equivalencia.
+  invoicedQuantity     Decimal?   @db.Decimal
+  invoicedUnit         StockUnit?
+  pieceCount           Int?
+  realWeightKg         Decimal?   @db.Decimal
+  conversionFactorUsed Decimal?   @db.Decimal
+
+  activation ProductStockActivation?
+
+  @@index([productId, branchId, effectiveAt])
+  @@index([branchId, effectiveAt])
+  @@index([operationId])
+  @@index([documentId])
+  @@map("stock_ledger")
+}
+
+/// El saldo materializado. Reconstruible desde el libro; nunca la verdad.
+model StockBalance {
+  id        String @id @default(cuid())
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  branchId  String
+  branch    Branch @relation(fields: [branchId], references: [id])
+
+  quantity Decimal   @db.Decimal
+  unit     StockUnit
+
+  version      Int    @default(0)
+  /// El movimiento que dejó este saldo, y la operación que lo escribió. El
+  /// disparador los exige: sirven para probar que el saldo se movió junto con
+  /// un movimiento, y no por afuera.
+  lastLedgerId    String
+  lastOperationId String
+
+  openingSource StockOpeningSource
+
+  updatedAt DateTime @updatedAt
+
+  @@unique([productId, branchId])
+  @@index([branchId])
+  @@map("stock_balance")
+}
+
+/// Un traslado entre sucursales: una operación, varios artículos.
+model StockTransfer {
+  id           String @id @default(cuid())
+  fromBranchId String
+  fromBranch   Branch @relation("TrasladoOrigen", fields: [fromBranchId], references: [id])
+  toBranchId   String
+  toBranch     Branch @relation("TrasladoDestino", fields: [toBranchId], references: [id])
+
+  operationId String
+  operation   StockOperation @relation(fields: [operationId], references: [id])
+
+  status StockTransferStatus @default(APLICADO)
+
+  userId String?
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  reason String?
+
+  /// La reversión es un traslado NUEVO, al revés, vinculado al original. No se
+  /// reutilizan los renglones: eso dejaría cuatro movimientos bajo una regla
+  /// que exige dos.
+  reversesTransferId String?        @unique
+  reversesTransfer   StockTransfer? @relation("ReversionDeTraslado", fields: [reversesTransferId], references: [id])
+  reversedBy         StockTransfer? @relation("ReversionDeTraslado")
+
+  createdAt DateTime @default(now())
+
+  lines StockTransferLine[]
+
+  @@index([fromBranchId])
+  @@index([toBranchId])
+  @@map("stock_transfer")
+}
+
+model StockTransferLine {
+  id         String @id @default(cuid())
+  transferId String
+  transfer   StockTransfer @relation(fields: [transferId], references: [id], onDelete: Cascade)
+
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity Decimal   @db.Decimal
+  unit     StockUnit
+
+  ledger StockLedger[]
+
+  @@index([transferId])
+  @@map("stock_transfer_line")
 }
