@@ -371,13 +371,24 @@ describe('una foto que no se leyó no llega a la revisión', () => {
     expect(lectura.cuerpo.puedeGuardar).toBe(true);
   });
 
-  it('con la tabla caída sobre el membrete, la ruta contesta con el mensaje y no guarda nada', async () => {
+  it('con la tabla caída sobre el membrete queda en revisión, sin renglones y sin inventar nada', async () => {
     /*
      * Los Calvos 0010-00212356: de la página entera salieron mil quinientos
      * caracteres, ninguna línea con forma de fila, y el recorte de artículos
      * terminó sobre la dirección del proveedor. Ningún analizador reconoce un
-     * comprobante ahí, y la ruta tiene que decirlo en castellano en vez de
-     * dejar un comprobante vacío dando vueltas.
+     * comprobante ahí.
+     *
+     * **ESTE CONTRATO CAMBIÓ, a propósito.** Antes la ruta contestaba 4xx y el
+     * comprobante quedaba varado: no había forma de volver a entrar a
+     * completarlo, así que una factura que la cámara no puede mejorar bloqueaba
+     * la operación para siempre. Ahora contesta 200 con el control de calidad
+     * en ERROR, y el comprobante queda **editable y en revisión** para que una
+     * persona lo transcriba.
+     *
+     * Lo que NO cambió, y es lo que hay que seguir afirmando: no se escribe ni
+     * un renglón que no se pudo leer, no hay compra, no hay costos, y el
+     * comprobante no queda en un estado que permita aplicarlo. La tercera
+     * puerta es para cargar a mano, no para dejar pasar una lectura incompleta.
      */
     const documentId = await abrirComprobante(escenario.sucursales.devoto);
     const lectura = await mandarLectura(documentId, [
@@ -391,12 +402,33 @@ describe('una foto que no se leyó no llega a la revisión', () => {
       },
     ]);
 
-    expect(lectura.estado).toBeGreaterThanOrEqual(400);
-    expect(lectura.cuerpo.error).toContain('No pudimos leer correctamente los renglones');
+    /* Contesta bien, y el veredicto viaja adentro como ERROR. */
+    expect(lectura.estado).toBeLessThan(300);
+    expect(lectura.cuerpo.puedeGuardar).toBeFalsy();
+    const control = (lectura.cuerpo.controles as { code: string; severity: string; message: string }[]).find(
+      (c) => c.code === 'LECTURA_UTILIZABLE',
+    );
+    expect(control?.severity).toBe('ERROR');
+    expect(control?.message).toContain('No pudimos leer correctamente los renglones');
 
-    // Y nada quedó escrito: ni renglones, ni impuestos, ni compra.
+    /* Nada escrito: ni renglones, ni impuestos, ni compra, ni costos. */
     expect(await prisma.documentItem.count({ where: { documentId } })).toBe(0);
+    expect(await prisma.documentTaxLine.count({ where: { documentId } })).toBe(0);
     expect(await prisma.purchaseMovement.count()).toBe(0);
     expect(await prisma.costHistory.count()).toBe(0);
+
+    /* Y el comprobante queda donde se puede completar, no donde se puede aplicar. */
+    const documento = await prisma.document.findUniqueOrThrow({
+      where: { id: documentId },
+      select: { status: true, checkState: true, total: true },
+    });
+    expect(documento.status).toBe('REQUIERE_REVISION');
+    expect(documento.checkState).toBe('PENDIENTE');
+    /* Sin total no hay nada que aplicar: el freno no depende del estado. */
+    expect(documento.total).toBeNull();
+
+    /* La evidencia sobrevive: el texto reconocido queda guardado. */
+    const intento = await prisma.ocrAttempt.findFirstOrThrow({ where: { documentId } });
+    expect(intento.recognizedText).toContain('LOS CALVOS');
   });
 });

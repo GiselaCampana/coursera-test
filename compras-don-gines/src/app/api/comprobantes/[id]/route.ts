@@ -4,6 +4,8 @@ import { getDocumentForReview } from '@/lib/services/documents';
 import { getStorage } from '@/lib/storage';
 import { handle } from '@/lib/api';
 import { toISODate } from '@/lib/datetime';
+import { prisma } from '@/lib/db';
+import { clasificarRenglon, indicePorCodigo } from '@/lib/domain/gastos';
 import { versionEnEjecucion } from '@/lib/version';
 
 /** Datos completos del comprobante para la pantalla de revisión. */
@@ -12,6 +14,29 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     const user = await requireUser();
     const { id } = await params;
     const document = await getDocumentForReview(user, id);
+
+    /*
+     * La clasificación **efectiva** de cada renglón, no sólo la persistida.
+     *
+     * `item.expenseKind` sólo tiene valor cuando una persona ya lo decidió o
+     * cuando una confirmación anterior lo escribió. Hasta entonces la
+     * clasificación sale de los códigos de gasto configurados del proveedor, que
+     * es lo que hace que la BOLSA GRANDE de Ezra sea un gasto sin que nadie la
+     * toque.
+     *
+     * Devolver sólo lo persistido hacía que el editor mostrara la bolsa como
+     * mercadería: la pantalla contradecía a la vista previa, que sí la muestra
+     * como gasto. Un editor que miente sobre lo que va a pasar es peor que uno
+     * que no muestra el dato.
+     */
+    const codigosDeGasto = indicePorCodigo(
+      document.supplierId
+        ? await prisma.supplierExpenseCode.findMany({
+            where: { supplierId: document.supplierId },
+            select: { supplierCode: true, kind: true, unit: true, label: true },
+          })
+        : [],
+    );
     const storage = await getStorage();
 
     const paginas = await Promise.all(
@@ -111,6 +136,18 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         producto: item.product?.normalizedName ?? null,
         asociacion: item.matchMethod,
         devolucion: item.stockReturn,
+        /*
+         * Cómo está clasificado el renglón: mercadería o gasto, y de qué clase.
+         *
+         * Va en el detalle porque el editor tiene que poder mostrarlo y
+         * cambiarlo, y porque el servidor lo compara al confirmar para saber si
+         * alguien lo reclasificó. `null` es mercadería.
+         */
+        gasto:
+          clasificarRenglon(
+            { expenseKind: item.expenseKind, supplierCode: item.supplierCode },
+            codigosDeGasto,
+          ).kind ?? null,
       })),
       paginas,
       /*

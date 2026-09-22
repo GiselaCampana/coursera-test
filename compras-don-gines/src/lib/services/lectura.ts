@@ -126,6 +126,18 @@ interface Candidato {
 }
 
 interface CandidatoEvaluado extends Candidato {
+  /**
+   * ¿La bonificación de los renglones se infirió, o la leyó el analizador?
+   *
+   * Son dos procedencias distintas y no se pueden confundir. El analizador de
+   * Barraza **lee** la bonificación de la columna impresa y la verifica
+   * resolviendo la aritmética de cada renglón: eso es LEIDO. La inferencia
+   * uniforme es la red de seguridad para cuando ningún analizador la
+   * recupera, y lo que produce es INFERIDO. Marcar como inferido algo que se
+   * leyó sería degradar un dato; marcar como leído algo inferido sería
+   * inventar evidencia.
+   */
+  bonificacionInferida: boolean;
   printed: PrintedSummary;
   costeados: CostedItem[];
   informe: ValidationReport;
@@ -222,9 +234,50 @@ export async function registrarLectura(
     }
 
     if (candidatos.length === 0) {
-      // Ningún analizador reconoció un comprobante en el texto. No hay compra
-      // parcial que ofrecer: hay que sacar la foto de nuevo.
-      throw new ValidationError(MENSAJE_LECTURA_INSUFICIENTE);
+      /*
+       * Ningún analizador reconoció un comprobante en el texto.
+       *
+       * **Antes esto terminaba acá**, con un error, y la persona volvía al paso
+       * 1 a sacar la foto de nuevo. Era lo correcto mientras las únicas dos
+       * opciones fueran «confirmar una factura a medias» o «repetir la foto»:
+       * ofrecer a revisión lo que no se leyó habría creado una compra por una
+       * fracción de lo que dice el papel.
+       *
+       * Ahora hay una tercera puerta: cargar los renglones a mano. Así que en
+       * vez de terminar, el comprobante queda **editable y en revisión**, con
+       * la evidencia intacta y sin un solo valor inventado:
+       *
+       *  - la imagen ya está subida y no se toca;
+       *  - el intento de OCR ya está guardado con su texto reconocido;
+       *  - no se escribe ningún renglón, porque no se pudo demostrar ninguno;
+       *  - el estado queda en REQUIERE_REVISION, que es exactamente lo que es.
+       *
+       * Lo que decide que no se aplique por accidente no es este estado sino
+       * los frenos de la vista previa, que siguen mirando cada renglón. Un
+       * comprobante sin renglones no tiene total, así que no se puede aplicar
+       * hasta que alguien lo complete y cierre.
+       */
+      await prisma.document.update({
+        where: { id: documentId },
+        data: { status: 'REQUIERE_REVISION', checkState: 'PENDIENTE' },
+      });
+
+      return {
+        documentId,
+        report: informeDeLecturaInsuficiente(
+          'No se reconoció ningún comprobante en el texto leído.',
+        ),
+        supplierId: null,
+        analizador: 'ninguno',
+        renglonesAsociados: 0,
+        renglonesSinAsociar: 0,
+        intentos: intentos.length,
+        observaciones: [
+          'No se reconoció ningún comprobante en el texto leído. La imagen y el texto ' +
+            'quedaron guardados: se puede sacar la foto de nuevo o cargar los renglones a mano.',
+        ],
+        releer: null,
+      };
     }
 
     // --- 3. Proveedor y condiciones ---------------------------------------
@@ -708,6 +761,7 @@ function elegirMejor(
 
     return {
       ...candidato,
+      bonificacionInferida: bonificado.inferida !== null,
       printed,
       costeados,
       informe,
@@ -757,6 +811,16 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
   /** Qué franja pediría releer el ciclo de lectura, si es que pediría alguna. */
   zonaSugerida: ZonaAReleer | null;
   /**
+   * De dónde salió la bonificación de los renglones.
+   *
+   * `LEIDO` cuando el analizador la recuperó de la columna impresa —que es lo
+   * que pasa en Barraza, donde además la verifica resolviendo la aritmética de
+   * cada renglón—. `INFERIDO` cuando ningún analizador la recuperó y se
+   * demostró una tasa uniforme contra el neto del pie. `NINGUNA` cuando los
+   * renglones no llevan bonificación.
+   */
+  procedenciaDeLaBonificacion: 'LEIDO' | 'INFERIDO' | 'NINGUNA';
+  /**
    * Cada renglón interpretado, con de dónde salió su importe.
    *
    * Es lo que hace falta para explicar una diferencia contra el pie. Saber que
@@ -795,6 +859,7 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
       filasSinResolver: 0,
       filasEsperadas: null,
       zonaSugerida: null,
+      procedenciaDeLaBonificacion: 'NINGUNA',
       renglones: [],
     };
   }
@@ -811,6 +876,11 @@ export function analizarSinGuardar(paginas: PaginaLeida[]): {
     filasSinResolver: mejor.filasSinResolver,
     filasEsperadas: mejor.filasEnLaImagen,
     zonaSugerida: zonaAReleer(mejor),
+    procedenciaDeLaBonificacion: mejor.bonificacionInferida
+      ? 'INFERIDO'
+      : mejor.costeados.some((i) => i.discountPct.greaterThan(0))
+        ? 'LEIDO'
+        : 'NINGUNA',
     renglones: mejor.costeados.map(aRenglonInterpretado),
   };
 }
@@ -895,4 +965,49 @@ export function describirProblema(informe: ValidationReport): string {
   const fallas = informe.checks.filter((c) => c.severity === 'ERROR');
   if (fallas.length === 0) return 'La lectura anterior no quedó controlada.';
   return fallas.map((c) => `${c.label}: ${c.message}`).join(' ');
+}
+
+/**
+ * El informe de una lectura que no reconoció ningún comprobante.
+ *
+ * Existe para que la respuesta tenga la misma forma que cualquier otra —el
+ * cliente no tiene que aprender un segundo contrato— y para que el control de
+ * calidad viaje como ERROR, que es lo que hace que la pantalla ofrezca las dos
+ * puertas en vez de seguir de largo.
+ *
+ * Todos los importes van en cero y `itemCount` en 0, que es la verdad: no se
+ * leyó nada. No hay ningún valor inventado acá.
+ */
+function informeDeLecturaInsuficiente(detalle: string): ValidationReport {
+  return {
+    state: 'PENDIENTE',
+    canSave: false,
+    checks: [
+      {
+        code: CODIGO_LECTURA_UTILIZABLE,
+        label: 'Calidad de la lectura',
+        severity: 'ERROR',
+        message: `${MENSAJE_LECTURA_INSUFICIENTE} ${detalle}`,
+      },
+    ],
+    computed: {
+      itemCount: 0,
+      grossSubtotal: '0.00',
+      discountAmount: '0.00',
+      netAmount: '0.00',
+      ivaAmount: '0.00',
+      perceptionAmount: '0.00',
+      perceptionsByLabel: [],
+      netRounding: '0.00',
+      totalCost: '0.00',
+      totalQuantityKg: '0.000',
+      totalUnits: '0.000',
+      kgItemCount: 0,
+      unitItemCount: 0,
+    },
+    errorCount: 1,
+    warningCount: 0,
+    reconciliation: null,
+    lectura: null,
+  };
 }

@@ -45,6 +45,15 @@ export interface ArticuloRevision {
   asociacion: string;
   /** Sólo en notas de crédito: ¿volvió mercadería por este renglón? */
   devolucion: boolean;
+  /**
+   * Cómo está clasificado el renglón. `null` es mercadería.
+   *
+   * Es el `ExpenseKind` real del dominio y no una etiqueta paralela de
+   * pantalla: lo que se elige acá es lo que se guarda, lo que la vista previa
+   * muestra como «sin impacto» y lo que deja el renglón fuera del impacto
+   * previsto en stock.
+   */
+  gasto: 'EMBALAJE' | 'FLETE' | 'OTRO' | null;
 }
 
 export interface ResumenComprobante {

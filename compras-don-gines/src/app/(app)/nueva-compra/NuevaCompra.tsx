@@ -52,6 +52,8 @@ interface Props {
   hoy: string;
   puedeForzar: boolean;
   maximoIntentos: number;
+  /** Un comprobante ya guardado que hay que reabrir para completarlo a mano. */
+  comprobanteId?: string | null;
 }
 
 export function NuevaCompra({
@@ -62,6 +64,7 @@ export function NuevaCompra({
   hoy,
   puedeForzar,
   maximoIntentos,
+  comprobanteId = null,
 }: Props) {
   const router = useRouter();
   const [paso, setPaso] = useState<Paso>(1);
@@ -74,6 +77,54 @@ export function NuevaCompra({
   const [despertando, setDespertando] = useState<string | null>(null);
   const [etapasHechas, setEtapasHechas] = useState<string[]>([]);
   const [comprobante, setComprobante] = useState<ComprobanteRevision | null>(null);
+  /**
+   * La lectura no alcanzó: el motivo, y las dos puertas que se ofrecen.
+   *
+   * No es un error. Un error se muestra y se va; esto es una bifurcación con
+   * dos salidas legítimas —sacar la foto de nuevo, o cargar los renglones a
+   * mano— y tiene que quedar en pantalla hasta que la persona elija una.
+   */
+  const [lecturaInsuficiente, setLecturaInsuficiente] = useState<string | null>(null);
+  /** El comprobante que quedó guardado, para poder abrirlo a mano. */
+  const [documentoARevisar, setDocumentoARevisar] = useState<string | null>(null);
+
+  /*
+   * Reabrir un comprobante que ya está guardado, cuando llega por la URL.
+   *
+   * Se trae del mismo endpoint que usa el resto del circuito, así que no hay
+   * una segunda proyección del comprobante que pueda quedar desincronizada. Si
+   * falla, se queda en el paso 1 con el error a la vista en vez de mostrar un
+   * editor vacío que no se puede guardar.
+   */
+  useEffect(() => {
+    if (!comprobanteId) return;
+    let vigente = true;
+    (async () => {
+      setTrabajando(true);
+      try {
+        const detalle = await consultar(`/api/comprobantes/${comprobanteId}`, {
+          alEsperar: setDespertando,
+        });
+        const datos = await detalle.json();
+        if (!vigente) return;
+        if (!detalle.ok) {
+          throw new AppError(datos.error ?? 'No pudimos abrir ese comprobante.');
+        }
+        setComprobante(datos as ComprobanteRevision);
+        setPaso(2);
+      } catch (e) {
+        if (vigente) setError(toUserMessage(e));
+      } finally {
+        if (vigente) {
+          setTrabajando(false);
+          setDespertando(null);
+        }
+      }
+    })();
+    return () => {
+      vigente = false;
+    };
+  }, [comprobanteId]);
 
   const inputCamara = useRef<HTMLInputElement>(null);
   const inputGaleria = useRef<HTMLInputElement>(null);
@@ -230,7 +281,23 @@ export function NuevaCompra({
        * dos botones para sacar la foto de nuevo o elegir otra.
        */
       if (salida.lecturaInsuficiente) {
-        throw new AppError(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+        /*
+         * La lectura no alcanzó. **No se entra solo a la revisión**, y no se
+         * termina tampoco.
+         *
+         * Entrar solo crearía una compra por una fracción de lo que dice el
+         * papel: de once renglones salieron dos y confirmarlos sería registrar
+         * una factura que no existe. Terminar dejaba la operación bloqueada
+         * cuando la foto no se puede mejorar, que es el caso de Los Calvos.
+         *
+         * Así que se ofrecen las dos puertas y decide la persona. El
+         * comprobante ya quedó guardado en REQUIERE_REVISION con la imagen y el
+         * texto reconocido; lo que el OCR no pudo demostrar sigue sin estar.
+         */
+        setLecturaInsuficiente(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+        setDocumentoARevisar(documentId);
+        setProgreso({ etapa: 'ERROR' });
+        return;
       }
 
       // 3. Traer el comprobante ya calculado para revisarlo.
@@ -255,7 +322,41 @@ export function NuevaCompra({
 
   const volverAlPaso1 = () => {
     setComprobante(null);
+    setLecturaInsuficiente(null);
+    setDocumentoARevisar(null);
     setPaso(1);
+  };
+
+  /**
+   * La tercera puerta: abrir el comprobante para cargarlo a mano.
+   *
+   * No inventa nada. Abre el MISMO editor de revisión sobre el comprobante que
+   * ya quedó guardado, con lo que el OCR pudo demostrar —que puede ser nada— y
+   * con la imagen al lado para transcribir. Los frenos de siempre siguen
+   * puestos: no se puede aplicar con un renglón sin resolver, sin proveedor, o
+   * con el total sin cerrar.
+   */
+  const cargarAMano = async () => {
+    if (!documentoARevisar) return;
+    setTrabajando(true);
+    setError(null);
+    try {
+      const detalle = await consultar(`/api/comprobantes/${documentoARevisar}`, {
+        alEsperar: setDespertando,
+      });
+      const datos = await detalle.json();
+      if (!detalle.ok) {
+        throw new AppError(datos.error ?? 'No pudimos abrir el comprobante para cargarlo a mano.');
+      }
+      setComprobante(datos as ComprobanteRevision);
+      setLecturaInsuficiente(null);
+      setPaso(2);
+    } catch (e) {
+      setError(toUserMessage(e));
+    } finally {
+      setTrabajando(false);
+      setDespertando(null);
+    }
   };
 
   /**
@@ -296,10 +397,16 @@ export function NuevaCompra({
         alEsperar: setDespertando,
       });
       if (salida.observaciones.length > 0) setAvisos(salida.observaciones);
-      // Volver a leer la misma imagen guardada no la mejora: si sigue sin
-      // leerse, hace falta otra foto, no otra vuelta.
+      /*
+       * Volver a leer la misma imagen guardada no la mejora: si sigue sin
+       * leerse, hace falta otra foto **o cargarla a mano**. Las dos puertas,
+       * igual que en el alta.
+       */
       if (salida.lecturaInsuficiente) {
-        throw new AppError(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+        setLecturaInsuficiente(salida.motivoInsuficiente ?? MENSAJE_LECTURA_INSUFICIENTE);
+        setDocumentoARevisar(comprobante.id);
+        setProgreso({ etapa: 'ERROR' });
+        return;
       }
 
       const detalle = await consultar(`/api/comprobantes/${comprobante.id}`, {
@@ -355,6 +462,51 @@ export function NuevaCompra({
         <p className="mensaje mensaje-error" role="alert">
           {error}
         </p>
+      ) : null}
+
+      {/*
+        La lectura no alcanzó, y hay DOS salidas legítimas.
+
+        Va antes de los avisos y con las dos puertas juntas, porque lo que hay
+        que decidir es cuál de las dos: una foto mejor puede arreglarlo, y
+        cuando no —una factura con la tabla borrosa, un papel arrugado— la
+        operación no puede quedar bloqueada esperando una foto que no va a
+        salir. Lo que no se ofrece es seguir de largo: el botón de continuar no
+        existe acá.
+      */}
+      {lecturaInsuficiente ? (
+        <div className="card" data-prueba="lectura-insuficiente">
+          <div className="card-titulo">
+            <h2>La lectura no alcanzó</h2>
+          </div>
+          <p className="mensaje mensaje-error" role="alert" data-prueba="motivo-insuficiente">
+            {lecturaInsuficiente}
+          </p>
+          <p className="ayuda">
+            La imagen y el texto reconocido quedaron guardados. No se cargó ningún renglón que
+            no se pudiera leer: lo que falte hay que escribirlo mirando la foto.
+          </p>
+          <div className="acciones">
+            <button
+              type="button"
+              className="boton"
+              onClick={volverAlPaso1}
+              disabled={trabajando}
+              data-prueba="otra-foto"
+            >
+              Sacar la foto de nuevo
+            </button>
+            <button
+              type="button"
+              className="boton boton-secundario"
+              onClick={cargarAMano}
+              disabled={trabajando || !documentoARevisar}
+              data-prueba="cargar-a-mano"
+            >
+              Cargar los renglones a mano
+            </button>
+          </div>
+        </div>
       ) : null}
 
       {avisos.length > 0 ? (

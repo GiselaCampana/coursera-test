@@ -179,6 +179,26 @@ export default async function PaginaComprobante({ params, searchParams }: Props)
         </Link>
       </p>
 
+      {/*
+        La puerta de vuelta al editor, para un comprobante que quedó en revisión.
+
+        Sin esto, un comprobante cuya lectura no alcanzó quedaba varado: existía,
+        tenía su imagen guardada, y no había forma de volver a entrar a
+        completarlo. «Se puede cargar a mano» habría sido cierto sólo mientras
+        no se cerrara la pestaña.
+      */}
+      {documento.status === 'REQUIERE_REVISION' || documento.status === 'BORRADOR' ? (
+        <p style={{ marginBottom: 14 }}>
+          <Link
+            href={`/nueva-compra?comprobante=${documento.id}`}
+            className="boton boton-secundario"
+            data-prueba="completar-a-mano"
+          >
+            Completar o corregir a mano
+          </Link>
+        </p>
+      ) : null}
+
       {documento.status === 'ANULADO' && documento.voidReason ? (
         <div className="mensaje mensaje-error">
           <strong>Comprobante anulado.</strong> Motivo: {documento.voidReason}

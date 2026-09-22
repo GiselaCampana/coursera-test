@@ -64,6 +64,19 @@ interface ArticuloEditable {
    * para siempre.
    */
   devolucion: boolean;
+  /**
+   * Cómo se clasifica el renglón, y es una de TRES cosas, no dos.
+   *
+   * `MERCADERIA` entra al impacto previsto en stock. Un `ExpenseKind` —el real
+   * del dominio, no una etiqueta de pantalla— lo saca del impacto y lo deja
+   * dentro del total y de la deuda. Y `PENDIENTE` es la tercera: nadie decidió
+   * todavía, y **bloquea la aplicación**.
+   *
+   * Hace falta que PENDIENTE exista y sea distinto de MERCADERIA. Sin él, un
+   * renglón que nadie miró se aplicaría como mercadería por omisión, que es
+   * justamente la decisión silenciosa que no puede tomar el sistema.
+   */
+  clasificacion: 'MERCADERIA' | 'PENDIENTE' | 'EMBALAJE' | 'FLETE' | 'OTRO';
 }
 
 
@@ -144,6 +157,13 @@ export function PasoRevision({
        * descripción rara, un artículo que vino por única vez—.
        */
       recordar: true,
+      /*
+       * Lo que ya está guardado manda. Un renglón sin gasto es mercadería: no
+       * se marca PENDIENTE al abrir, porque el OCR ya lo clasificó como
+       * mercadería y eso es una decisión tomada. PENDIENTE es para los
+       * renglones que una persona agrega y todavía no clasificó.
+       */
+      clasificacion: a.gasto ?? 'MERCADERIA',
     })),
   );
 
@@ -497,6 +517,14 @@ export function PasoRevision({
         asociacionOriginal: 'MANUAL',
         recordar: true,
         devolucion: false,
+        /*
+         * Un renglón que alguien acaba de agregar arranca SIN CLASIFICAR, y
+         * eso bloquea aplicar hasta que se decida. Arrancarlo en mercadería
+         * sería elegir por la persona en el único momento en que no hay
+         * ninguna evidencia: el renglón lo escribió ella y el papel no dijo
+         * nada al respecto.
+         */
+        clasificacion: 'PENDIENTE',
       },
     ]);
   };
@@ -523,6 +551,15 @@ export function PasoRevision({
       setError(
         'Marcá en qué renglones volvió la mercadería. Si no volvió nada, elegí otro motivo: ' +
           'la nota de crédito descuenta del saldo igual.',
+      );
+      return;
+    }
+
+    const sinClasificar = articulos.filter((a) => a.clasificacion === 'PENDIENTE');
+    if (sinClasificar.length > 0) {
+      setError(
+        `Falta decidir qué son los renglones ${sinClasificar.map((a) => a.renglon).join(', ')}: ` +
+          'mercadería o gasto. Un renglón sin clasificar no se puede aplicar.',
       );
       return;
     }
@@ -829,6 +866,30 @@ export function PasoRevision({
         <p className="mensaje mensaje-error" role="alert">
           {error}
         </p>
+      ) : null}
+
+      {/*
+        La lectura no alcanzó y esto es una carga manual.
+
+        Va primero y con todas las letras, porque cambia lo que la persona
+        tiene que hacer: no está revisando lo que leyó el OCR, está
+        transcribiendo desde la foto. Un banner que diga «revisá» cuando en
+        realidad hay que escribir todo invita a apretar guardar sin mirar.
+      */}
+      {articulos.length === 0 || comprobante.control === 'PENDIENTE' ? (
+        <div className="card" data-prueba="carga-manual">
+          <p className="mensaje mensaje-aviso mb0" role="status">
+            <strong>
+              {articulos.length === 0
+                ? 'Esta lectura no recuperó ningún renglón.'
+                : 'Esta lectura quedó incompleta.'}
+            </strong>{' '}
+            Lo que falte hay que escribirlo mirando la foto, que está abajo. No se cargó ningún
+            renglón que no se pudiera leer: lo que ves acá es lo único que el lector pudo
+            demostrar. Agregá los que falten con «Agregar renglón», decidí de cada uno si es
+            mercadería o gasto, y el control de abajo te dice cuándo cierra.
+          </p>
+        </div>
       ) : null}
 
       {/*
@@ -1222,6 +1283,44 @@ export function PasoRevision({
                     />
                   </div>
                   <div className="campo">
+                    <label htmlFor={`clase-${articulo.clave}`}>Qué es este renglón</label>
+                    {/*
+                      Las tres opciones, y la tercera no es decorativa.
+
+                      «Sin clasificar» bloquea aplicar. Es lo que impide que un
+                      renglón que alguien agregó y nadie miró entre como
+                      mercadería por omisión: el sistema no puede decidir eso
+                      solo, porque el papel no lo dice y el renglón lo escribió
+                      una persona.
+
+                      Los gastos usan el ExpenseKind real del dominio, así que
+                      elegir acá es lo mismo que configurar el código del
+                      proveedor: el renglón se paga, entra al total y a la
+                      deuda, y queda fuera del impacto previsto en stock.
+                    */}
+                    <select
+                      id={`clase-${articulo.clave}`}
+                      value={articulo.clasificacion}
+                      data-prueba="clasificacion"
+                      onChange={(e) =>
+                        actualizarArticulo(articulo.clave, 'clasificacion', e.target.value)
+                      }
+                    >
+                      <option value="PENDIENTE">Sin clasificar — no se puede aplicar</option>
+                      <option value="MERCADERIA">Mercadería</option>
+                      <option value="EMBALAJE">Gasto: embalaje (bolsas, cajones)</option>
+                      <option value="FLETE">Gasto: flete</option>
+                      <option value="OTRO">Gasto: otro</option>
+                    </select>
+                    {articulo.clasificacion !== 'MERCADERIA' &&
+                    articulo.clasificacion !== 'PENDIENTE' ? (
+                      <div className="chico suave" data-prueba="gasto-sin-impacto">
+                        Se paga con la factura y no mueve existencias. No necesita artículo.
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <div className="campo">
                     <label htmlFor={`prod-${articulo.clave}`}>PLU Don Ginés</label>
                     {/*
                       Buscar en el catálogo antes de elegir.
@@ -1542,7 +1641,12 @@ export function PasoRevision({
         </ul>
 
         <div className="acciones">
-          <button type="button" className="boton boton-secundario" onClick={agregarArticulo}>
+          <button
+            type="button"
+            className="boton boton-secundario"
+            onClick={agregarArticulo}
+            data-prueba="agregar-renglon"
+          >
             Agregar un renglón
           </button>
         </div>

@@ -537,6 +537,47 @@ async function sembrarCon(prisma: PrismaClient) {
   });
 
   /*
+   * Y un comprobante cuya LECTURA NO ALCANZÓ: en revisión y sin un solo renglón.
+   *
+   * Es el caso de las dos fotos de Los Calvos, que el OCR no recupera. Va
+   * sembrado porque es la mitad del módulo que esta etapa vino a cerrar: sin un
+   * comprobante así en la demo, la carga manual no se puede ni mirar ni probar.
+   *
+   * Sin renglones, sin proveedor y sin totales, que es exactamente lo que
+   * queda cuando no se pudo leer nada. Lo único que tiene es su imagen, igual
+   * que en la realidad.
+   */
+  const sinLeer = await prisma.document.create({
+    data: {
+      branchId: devoto.id,
+      docType: 'FACTURA',
+      pointOfSale: '',
+      number: '',
+      fullNumber: '',
+      status: 'REQUIERE_REVISION',
+      checkState: 'PENDIENTE',
+      createdById: admin.id,
+    },
+  });
+  await prisma.ocrAttempt.create({
+    data: {
+      documentId: sinLeer.id,
+      attemptNumber: 1,
+      stage: 'FULL',
+      strategy: 'completo',
+      provider: 'tesseract',
+      model: 'spa',
+      success: true,
+      startedAt: new Date(),
+      finishedAt: new Date(),
+      durationMs: 9000,
+      recognizedText:
+        'LOS CALVOS S.A. ... texto ilegible, la tabla no se pudo recortar ... 0010-00212356',
+      rawResponse: { paginas: [] },
+    },
+  });
+
+  /*
    * La compra de Ezra, sin confirmar, para la vista previa.
    *
    * Va acá y no en la prueba porque la pantalla se mira en el navegador con

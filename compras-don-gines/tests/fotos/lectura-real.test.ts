@@ -141,6 +141,7 @@ async function interpretar(lectura: { paginas: unknown[] }) {
 function informarRenglones(
   renglones: RenglonInterpretado[],
   impresos: { codigo: string; descripcion: string; subtotal: string }[],
+  procedencia: 'LEIDO' | 'INFERIDO' | 'NINGUNA' = 'NINGUNA',
 ) {
   /*
    * Emparejamiento **uno a uno**, en dos pasadas y consumiendo lo emparejado.
@@ -266,7 +267,8 @@ function informarRenglones(
   if (conBonificacion.length > 0) {
     console.log(
       `  bonificación aplicada en ${conBonificacion.length} renglón/es: ` +
-        `${[...new Set(conBonificacion.map((r) => `${r.bonificacion}%`))].join(', ')}`,
+        `${[...new Set(conBonificacion.map((r) => `${r.bonificacion}%`))].join(', ')}` +
+        ` · procedencia ${procedencia}`,
     );
   }
 
@@ -363,7 +365,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       );
       console.log('  controles en error:', JSON.stringify(i.controles.filter((c) => c.severity === 'ERROR').map((c) => c.code)));
       console.log('  calculado:', JSON.stringify(i.calculado));
-      informarRenglones(i.renglones, ERRECALDE_ARTICULOS_IMPRESOS);
+      informarRenglones(i.renglones, ERRECALDE_ARTICULOS_IMPRESOS, i.procedenciaDeLaBonificacion);
 
       // El piso que hay que mover. Se afirma sobre el número real de hoy para
       // que cualquier cambio del preproceso se note, en la dirección que sea.
@@ -493,7 +495,11 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       volcarSiSePide('mabelherdi', lectura.paginas);
 
       const { MABELHERDI_ARTICULOS_IMPRESOS } = await import('../fixtures/mabelherdi');
-      informarRenglones(interpretado.renglones, MABELHERDI_ARTICULOS_IMPRESOS);
+      informarRenglones(
+        interpretado.renglones,
+        MABELHERDI_ARTICULOS_IMPRESOS,
+        interpretado.procedenciaDeLaBonificacion,
+      );
       console.log('  ¿nº 00348491?', plano.includes('00348491'));
       console.log('  ¿total 40506,09?', plano.includes('40506,09') || plano.includes('40.506,09'));
 
@@ -539,6 +545,7 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
           descripcion: a.descripcion,
           subtotal: a.neto,
         })),
+        interpretado.procedenciaDeLaBonificacion,
       );
 
       /*
@@ -586,7 +593,11 @@ describe.runIf(ENCENDIDO)('el lector real sobre las fotos reales', () => {
       console.log('  calculado:', JSON.stringify(interpretado.calculado));
 
       const { EZRA_ARTICULOS_IMPRESOS } = await import('../fixtures/ezra');
-      informarRenglones(interpretado.renglones, EZRA_ARTICULOS_IMPRESOS);
+      informarRenglones(
+        interpretado.renglones,
+        EZRA_ARTICULOS_IMPRESOS,
+        interpretado.procedenciaDeLaBonificacion,
+      );
 
       /*
        * El kilaje no puede estar adentro del nombre.

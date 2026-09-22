@@ -38,6 +38,7 @@ import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, getSupplierConditions } from '@/lib/services/suppliers';
 import { asegurarEspacio } from '@/lib/services/almacenamiento';
 import { anotarIngresos } from '@/lib/services/stock-ingreso';
+import { correccionesManuales } from '@/lib/domain/correcciones-manuales';
 import { seAnotanIngresosEnLaBandeja } from '@/lib/services/integracion-de-escritura';
 import {
   planDeIngresos,
@@ -423,6 +424,15 @@ export interface ConfirmItemInput extends RawItem {
    * códigos de gasto configurados para el proveedor; nunca por la descripción.
    */
   expenseKind?: ClaseDeGasto | null;
+  /**
+   * Qué decidió la persona que es este renglón, en crudo.
+   *
+   * Hace falta además de `expenseKind` porque ese campo viaja en `null` tanto
+   * para mercadería como para «sin clasificar», y el servidor tiene que poder
+   * rechazar la segunda. Sin esto el freno viviría sólo en la pantalla, que es
+   * comodidad y no defensa: quien llame a la acción directamente la saltearía.
+   */
+  clasificacion?: 'MERCADERIA' | 'PENDIENTE' | ClaseDeGasto | null;
 }
 
 export interface ConfirmDocumentInput {
@@ -492,6 +502,46 @@ export async function confirmDocument(
   }
   if (document.status === 'ANULADO') {
     throw new ConflictError('Este comprobante está anulado.');
+  }
+
+  /*
+   * Un renglón sin clasificar no se aplica, y se comprueba **acá**.
+   *
+   * La pantalla ya lo avisa, pero eso es para que la persona no pierda el
+   * viaje: la defensa es ésta. Un renglón que nadie miró entrando como
+   * mercadería por omisión es una decisión que el sistema no puede tomar solo,
+   * porque el papel no dice nada y el renglón lo escribió una persona.
+   */
+  /*
+   * Lo que estaba guardado, leído ANTES de escribir nada.
+   *
+   * Es la evidencia contra la que se compara lo que llega. Se lee acá y no
+   * dentro de la transacción de escritura porque ahí ya estaría pisado: la
+   * transacción borra y rehace los renglones.
+   */
+  const renglonesGuardados = await prisma.documentItem.findMany({
+    where: { documentId: input.documentId },
+    orderBy: { lineNumber: 'asc' },
+    select: {
+      lineNumber: true,
+      supplierCode: true,
+      description: true,
+      quantity: true,
+      unit: true,
+      unitNetPrice: true,
+      discountPct: true,
+      ivaRate: true,
+      productId: true,
+      expenseKind: true,
+    },
+  });
+
+  const sinClasificar = input.items.filter((i) => i.clasificacion === 'PENDIENTE');
+  if (sinClasificar.length > 0) {
+    throw new ValidationError(
+      `Falta decidir qué son los renglones ${sinClasificar.map((i) => i.lineNumber).join(', ')}: ` +
+        'mercadería o gasto. Un renglón sin clasificar no se puede aplicar.',
+    );
   }
 
   const supplier = await prisma.supplier.findUnique({ where: { id: input.supplierId } });
@@ -1022,6 +1072,85 @@ export async function confirmDocument(
 
     return { scheduleId: schedule.id };
   });
+
+  /*
+   * Y el asiento de lo que una persona corrigió respecto de lo leído.
+   *
+   * Lo calcula el SERVIDOR comparando lo persistido contra lo que llegó. No se
+   * le pregunta al navegador cuál era el valor original: el navegador es
+   * exactamente quien acaba de cambiarlo, y una auditoría que le crea al que
+   * hizo el cambio no audita nada.
+   *
+   * Va aparte del asiento de confirmación porque «se confirmó el comprobante» y
+   * «se cambiaron estos siete valores respecto de lo leído» son dos preguntas
+   * distintas, y la segunda es la que hay que poder contestar meses después
+   * cuando alguien discute un costo.
+   *
+   * No pide motivo. Obligar a justificar cada campo haría impracticable cargar
+   * una factura de veintitrés renglones, que es el caso que la revisión manual
+   * existe para resolver; el motivo sigue siendo obligatorio donde ya lo era,
+   * que es forzar una validación.
+   */
+  const correcciones = correccionesManuales({
+    encabezadoGuardado: {
+      supplierId: document.supplierId,
+      docType: document.docType,
+      letter: document.letter,
+      pointOfSale: document.pointOfSale,
+      number: document.number,
+      issueDate: document.issueDate ? toISODate(toDateOnly(document.issueDate)) : null,
+      netTotal: document.netTotal,
+      ivaTotal: document.ivaTotal,
+      perceptionsTotal: document.perceptionsTotal,
+      total: document.total,
+    },
+    encabezadoEnviado: {
+      supplierId: input.supplierId,
+      docType: input.docType ?? 'FACTURA',
+      letter: input.letter ?? null,
+      pointOfSale,
+      number,
+      issueDate: input.issueDate,
+      netTotal: input.printed.netTotal ?? null,
+      ivaTotal: input.printed.ivaTotal ?? null,
+      perceptionsTotal: input.printed.perceptionsTotal ?? null,
+      total: input.printed.total ?? null,
+    },
+    renglonesGuardados,
+    renglonesEnviados: input.items.map((i) => ({
+      lineNumber: i.lineNumber,
+      supplierCode: i.supplierCode ?? null,
+      description: i.description ?? null,
+      quantity: i.quantity ?? null,
+      unit: i.unit ?? null,
+      unitNetPrice: i.unitNetPrice ?? null,
+      discountPct: i.discountPct ?? null,
+      ivaRate: i.ivaRate ?? null,
+      productId: i.productId ?? null,
+      expenseKind: i.expenseKind ?? null,
+    })),
+  });
+
+  if (correcciones.huboCorrecciones) {
+    await recordAudit({
+      userId: user.id,
+      action: AUDIT_ACTIONS.DOCUMENT_CORRECTED,
+      entity: 'Document',
+      entityId: document.id,
+      before: {
+        origen: 'lo que estaba guardado de la lectura',
+        renglones: renglonesGuardados.length,
+      },
+      after: {
+        comprobante: `${pointOfSale}-${number}`,
+        campos: correcciones.campos,
+        renglonesAgregados: correcciones.renglonesAgregados,
+        renglonesQuitados: correcciones.renglonesQuitados,
+        asociacionesCambiadas: correcciones.asociacionesCambiadas,
+        clasificacionesCambiadas: correcciones.clasificacionesCambiadas,
+      },
+    });
+  }
 
   await recordAudit({
     userId: user.id,

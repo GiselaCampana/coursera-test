@@ -21,6 +21,15 @@ export const AUDIT_ACTIONS = {
   DOCUMENT_READ: 'comprobante.leido',
   CENTAVOS_CONCILIADOS: 'comprobante.centavos_conciliados',
   DOCUMENT_CONFIRMED: 'comprobante.confirmado',
+  /**
+   * Lo que una persona corrigió a mano sobre lo que había leído el OCR.
+   *
+   * Es un asiento aparte del de confirmación a propósito: «se confirmó el
+   * comprobante» y «se cambiaron estos siete valores respecto de lo leído» son
+   * dos preguntas distintas, y la segunda es la que hay que poder contestar
+   * meses después, cuando alguien discute un costo.
+   */
+  DOCUMENT_CORRECTED: 'comprobante.corregido_a_mano',
   DOCUMENT_OVERRIDDEN: 'comprobante.forzado',
   DOCUMENT_VOIDED: 'comprobante.anulado',
   DOCUMENT_REJECTED: 'comprobante.rechazado',
