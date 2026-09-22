@@ -52,6 +52,30 @@ describe('la demo usa su propia base y nada más', () => {
   it('no crea entornos de vista previa por rama', () => {
     expect(DEMO).toMatch(/generation:\s*"off"/);
   });
+
+  it('despliega la rama autorizada para la demo, y una sola', () => {
+    /*
+     * La rama es lo ÚNICO de este archivo que decide qué código corre en la
+     * demo, y hasta ahora no la miraba nadie: el resto de las guardas vigila
+     * variables y nombres de recursos, que son lo que podría tocar producción,
+     * pero no lo que podría dejar la demo probando otra cosa.
+     *
+     * Que el nombre esté escrito acá es a propósito. Cambiar de rama en la demo
+     * tiene que ser una decisión, no un renglón que se cuela en un commit de
+     * otra cosa: quien la cambie pasa por esta prueba y la actualiza a mano.
+     */
+    const ramas = [...DEMO.matchAll(/^\s*branch:\s*(\S+)\s*$/gm)].map((m) => m[1]);
+    expect(ramas, 'un solo servicio, una sola rama').toEqual(['compras-cierre-operativo']);
+  });
+
+  it('no despliega la rama de producción', () => {
+    /*
+     * La otra mitad, y la que de verdad duele: si este archivo apuntara a la
+     * rama que gobierna producción, la demo dejaría de ser una demo aunque
+     * todos los nombres de recursos siguieran siendo los correctos.
+     */
+    expect(DEMO).not.toContain('compras-don-gines-deploy');
+  });
 });
 
 describe('la demo no habla con ningún servicio real', () => {

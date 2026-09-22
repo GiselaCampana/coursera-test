@@ -58,9 +58,21 @@ services:
     runtime: node
     plan: free
     region: oregon
-    # La rama candidata, no la de desarrollo: lo que se despliega en la demo es
-    # una versión revisada y no lo último que alguien empujó.
-    branch: compras-release-candidate
+    # La rama del cierre operativo, no la de desarrollo: lo que se despliega en
+    # la demo es una versión revisada y no lo último que alguien empujó.
+    #
+    # Antes apuntaba a `compras-release-candidate`. Cambia porque lo que hay que
+    # probar en la demo ahora es el cierre: la bonificación por renglón, la
+    # tercera puerta para las lecturas que no alcanzan, la clasificación
+    # persistida y la auditoría del lado del servidor. La candidata queda
+    # intacta en su rama, sin tocar.
+    #
+    # Esto es lo ÚNICO que decide qué código corre en la demo. El SHA no se
+    # escribe acá: Render despliega la cabeza de esta rama y publica el commit
+    # que desplegó en `RENDER_GIT_COMMIT`, que es lo que contesta
+    # `/api/version`. Así el número que se lee desde el teléfono es el que la
+    # plataforma desplegó y no el que este archivo dice que debería.
+    branch: compras-cierre-operativo
     rootDir: compras-don-gines
     # El mismo endpoint tonto que usa producción: contesta 200 si el proceso
     # está vivo, sin tocar cookies, sesión ni base. Un chequeo que consultara
