@@ -30,7 +30,15 @@ async function abrirElSinLeer(page: Page) {
    * inventar.
    */
   await page.goto('/comprobantes?estado=REQUIERE_REVISION');
-  const fila = page.locator('a.fila-dato', { hasText: 'sin número' });
+  /*
+   * Por proveedor Y por «sin número», las dos cosas. Sólo con «sin número» el
+   * localizador también agarraba comprobantes que otras pruebas crean sin
+   * número, y entonces esta prueba abría el comprobante de otra: pasaba sola y
+   * fallaba en la suite completa.
+   */
+  const fila = page
+    .locator('a.fila-dato', { hasText: 'Los Calvos' })
+    .filter({ hasText: 'sin número' });
   await expect(fila.first()).toBeVisible();
   await fila.first().click();
   await expect(page).toHaveURL(/\/comprobantes\/[^/]+$/);
@@ -87,7 +95,12 @@ test.describe('un comprobante que no se pudo leer se puede completar', () => {
      * decisión solo, porque el papel no dice nada y el renglón lo escribió una
      * persona.
      */
-    const clase = page.locator('[data-prueba="clasificacion"]').first();
+    /*
+     * El renglón agregado es el ÚLTIMO: `agregarArticulo` lo appendea. Tomar el
+     * primero pasaba sobre un comprobante vacío y fallaba en cuanto el
+     * comprobante tenía algún renglón, que es lo que pasa en la suite completa.
+     */
+    const clase = page.locator('[data-prueba="clasificacion"]').last();
     await expect(clase).toBeVisible();
     await expect(clase).toHaveValue('PENDIENTE');
   });
@@ -98,15 +111,12 @@ test.describe('un comprobante que no se pudo leer se puede completar', () => {
     await page.locator('[data-prueba="completar-a-mano"]').click();
     await page.getByRole('button', { name: 'Agregar un renglón' }).click();
 
-    const clase = page.locator('[data-prueba="clasificacion"]').first();
+    const clase = page.locator('[data-prueba="clasificacion"]').last();
     await clase.selectOption('EMBALAJE');
 
-    await expect(page.locator('[data-prueba="gasto-sin-impacto"]').first()).toContainText(
-      'no mueve existencias',
-    );
-    await expect(page.locator('[data-prueba="gasto-sin-impacto"]').first()).toContainText(
-      'No necesita artículo',
-    );
+    const aviso = page.locator('[data-prueba="gasto-sin-impacto"]').last();
+    await expect(aviso).toContainText('no mueve existencias');
+    await expect(aviso).toContainText('No necesita artículo');
   });
 
   test('las cinco opciones están, y mercadería es una decisión explícita', async ({ page }) => {
@@ -117,7 +127,7 @@ test.describe('un comprobante que no se pudo leer se puede completar', () => {
 
     const opciones = await page
       .locator('[data-prueba="clasificacion"]')
-      .first()
+      .last()
       .locator('option')
       .allInnerTexts();
     expect(opciones.join(' | ')).toContain('Sin clasificar');

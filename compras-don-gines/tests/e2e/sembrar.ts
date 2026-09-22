@@ -550,6 +550,13 @@ async function sembrarCon(prisma: PrismaClient) {
   const sinLeer = await prisma.document.create({
     data: {
       branchId: devoto.id,
+      /*
+       * El proveedor sí se identificó —el CUIT del membrete se leyó— y la tabla
+       * no. Es el caso realista y además hace la fila inconfundible en el
+       * listado: «Los Calvos» + «sin número» no lo produce ningún otro
+       * comprobante sembrado ni ninguna otra prueba.
+       */
+      supplierId: proveedor.id,
       docType: 'FACTURA',
       pointOfSale: '',
       number: '',
