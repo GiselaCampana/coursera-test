@@ -9,6 +9,9 @@ on:
       # verificación bloqueante que gobierna producción, y no por una más
       # liviana. Una candidata que se verifica distinto no es una candidata.
       - compras-release-candidate
+      # La rama del cierre operativo, por la misma razón: lo que va a quedar
+      # como Compras terminada se verifica con lo que gobierna producción.
+      - compras-cierre-operativo
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -120,4 +123,5 @@ jobs:
             tests/e2e/auditoria-atribucion.spec.ts \
             tests/e2e/marcajes-familia.spec.ts \
             tests/e2e/marcajes-modalidad.spec.ts \
-            tests/e2e/stock-sync.spec.ts
+            tests/e2e/stock-sync.spec.ts \
+            tests/e2e/carga-manual.spec.ts
