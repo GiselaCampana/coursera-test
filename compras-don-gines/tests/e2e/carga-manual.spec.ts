@@ -21,26 +21,101 @@ import { ingresar, sinScrollHorizontal } from './ayudas';
 const MINUTOS = 60_000;
 test.describe.configure({ timeout: 5 * MINUTOS });
 
-/** El comprobante que el sembrado deja en revisión y sin renglones. */
+/**
+ * Crea el escenario **por el camino real**, y no lo busca en el listado.
+ *
+ * HALLAZGO que obligó a este cambio: la primera versión buscaba el comprobante
+ * sembrado en `/comprobantes?estado=REQUIERE_REVISION`. Pasaba corriendo el
+ * archivo solo y fallaba en la suite completa, porque otras pruebas dejan
+ * comprobantes en revisión y el sembrado —el más viejo— se cae de la primera
+ * página del listado. Depender de la posición en una lista compartida es
+ * depender del orden de ejecución.
+ *
+ * Así que cada prueba abre su propio comprobante y le manda una lectura
+ * ilegible, que es exactamente lo que pasa con la foto de Los Calvos: el
+ * servidor la rechaza como lectura y deja el comprobante editable y en
+ * revisión. No hay fila mutable compartida y no hay orden entre pruebas.
+ */
+async function abrirUnaLecturaInsuficiente(page: Page): Promise<string> {
+  /*
+   * 1. Un comprobante nuevo.
+   *
+   * La sucursal se toma del selector de la pantalla y no de un literal: el
+   * administrador ve las tres, así que el alta la exige, y un identificador
+   * escrito acá sería una copia que deja de coincidir en cuanto cambia el
+   * sembrado.
+   */
+  await page.goto('/nueva-compra');
+  const sucursalId = await page.locator('#sucursal').inputValue();
+  expect(sucursalId, 'la pantalla tiene que ofrecer una sucursal').not.toBe('');
+
+  /*
+   * Los pedidos van **desde la página** con `fetch`, no con `page.request`.
+   *
+   * `page.request` no arrastró la cookie de sesión en este montaje y el alta
+   * contestaba «Necesitás iniciar sesión». Desde adentro de la página el
+   * navegador manda la cookie como en cualquier clic, que además es lo que se
+   * quiere probar: el mismo camino que usa la aplicación.
+   */
+  const alta = await page.evaluate(async (branchId) => {
+    const r = await fetch('/api/comprobantes', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ branchId }),
+    });
+    return { ok: r.ok, cuerpo: await r.text() };
+  }, sucursalId);
+  expect(alta.ok, `alta: ${alta.cuerpo}`).toBeTruthy();
+  const { id } = JSON.parse(alta.cuerpo) as { id: string };
+
+  /*
+   * 2. Una lectura de la que ningún analizador puede sacar un comprobante:
+   *    membrete y dirección, sin una sola fila con forma de renglón. Es el
+   *    texto que sale de la foto 0010-00212356 cuando la tabla cae sobre el
+   *    membrete.
+   */
+  const lectura = await page.evaluate(async (documentId) => {
+    const r = await fetch(`/api/comprobantes/${documentId}/lectura`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        intento: 1,
+        estrategia: 'completo',
+        proveedor: 'tesseract',
+        modelo: 'spa',
+        duracionMs: 9000,
+        paginas: [
+          {
+            numero: 1,
+            textoCompleto:
+              'LOS CALVOS S.A.\nAv. San Martín 2345\nSan Martín, Buenos Aires\nTel 4755-0000',
+            textoEncabezado: null,
+            textoArticulos: 'LOS CALVOS S.A.\nAv. San Martín 2345',
+            textoResumen: null,
+            confianza: 0.4,
+            regiones: { filasDetectadas: 0 },
+          },
+        ],
+      }),
+    });
+    return { ok: r.ok, cuerpo: await r.text() };
+  }, id);
+  expect(lectura.ok, `lectura: ${lectura.cuerpo}`).toBeTruthy();
+  const cuerpo = JSON.parse(lectura.cuerpo) as {
+    puedeGuardar?: boolean;
+    controles?: { code: string; severity: string }[];
+  };
+  /* El veredicto tiene que ser ERROR: si no, la prueba no probaría el caso. */
+  const control = (cuerpo.controles ?? []).find((c) => c.code === 'LECTURA_UTILIZABLE');
+  expect(control?.severity, 'la lectura tiene que quedar rechazada').toBe('ERROR');
+
+  return id;
+}
+
+/** Abre ese comprobante en el editor, por la puerta de la pantalla. */
 async function abrirElSinLeer(page: Page) {
-  /*
-   * Se filtra por estado y se busca «sin número», no un número concreto: este
-   * comprobante no tiene número justamente porque no se pudo leer. Buscarlo por
-   * un número inventado sería inventar el dato que la prueba existe para no
-   * inventar.
-   */
-  await page.goto('/comprobantes?estado=REQUIERE_REVISION');
-  /*
-   * Por proveedor Y por «sin número», las dos cosas. Sólo con «sin número» el
-   * localizador también agarraba comprobantes que otras pruebas crean sin
-   * número, y entonces esta prueba abría el comprobante de otra: pasaba sola y
-   * fallaba en la suite completa.
-   */
-  const fila = page
-    .locator('a.fila-dato', { hasText: 'Los Calvos' })
-    .filter({ hasText: 'sin número' });
-  await expect(fila.first()).toBeVisible();
-  await fila.first().click();
+  const id = await abrirUnaLecturaInsuficiente(page);
+  await page.goto(`/comprobantes/${id}`);
   await expect(page).toHaveURL(/\/comprobantes\/[^/]+$/);
 }
 
