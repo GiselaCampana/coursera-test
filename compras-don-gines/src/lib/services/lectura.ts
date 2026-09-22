@@ -30,6 +30,7 @@ import { env } from '@/lib/env';
 import { versionEnEjecucion } from '@/lib/version';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { findSupplierByReading, formatCuit, getSupplierConditions } from '@/lib/services/suppliers';
+import { completarBonificacionUniforme } from '@/lib/domain/bonificacion-uniforme';
 import {
   createTaxLines,
   itemToColumns,
@@ -613,7 +614,36 @@ function elegirMejor(
       filasEnLaImagen: candidato.filasEnLaImagen,
     });
 
-    const costeados = costItems(conciliado.items, {
+    /*
+     * Y la bonificación que el OCR perdió, **si se puede demostrar**.
+     *
+     * Va acá por la misma razón que la conciliación de centavos: es una regla
+     * del negocio y no del formato de un proveedor. Hay facturas —la de
+     * Barraza— donde los kilos y el precio por kilo salen bien y la columna de
+     * bonificación no sale. El comprobante cierra igual, porque el neto del pie
+     * manda y el motor deriva un descuento global, pero **cada renglón queda
+     * costeado sobre su bruto**: el total estaría bien y el costo de cada
+     * artículo estaría mal, que es la peor combinación porque no la ve ningún
+     * control.
+     *
+     * Sólo completa cuando una única tasa uniforme reproduce el neto impreso
+     * renglón por renglón, al centavo. Si no, devuelve los renglones intactos y
+     * el motivo, que baja al informe y lleva el comprobante a revisión.
+     */
+    const bonificado = completarBonificacionUniforme(conciliado.items, printed.netTotal);
+    if (bonificado.inferida) {
+      candidato.observaciones.push(
+        `Bonificación del ${bonificado.inferida.tasa} % inferida y aplicada a los ` +
+          `${bonificado.inferida.renglones} renglones: el bruto suma ` +
+          `${bonificado.inferida.bruto} y con esa tasa reconstruye ` +
+          `${bonificado.inferida.netoReconstruido} contra el neto impreso de ` +
+          `${bonificado.inferida.netoImpreso}.`,
+      );
+    } else if (bonificado.motivo) {
+      candidato.observaciones.push(bonificado.motivo);
+    }
+
+    const costeados = costItems(bonificado.items, {
       netTotal: printed.netTotal ?? '0',
       ivaTotal: printed.ivaTotal ?? '0',
       perceptionsTotal: printed.perceptionsTotal ?? '0',
@@ -804,6 +834,17 @@ export interface RenglonInterpretado {
    */
   importeImpreso: boolean;
   neto: string;
+  /** La bonificación aplicada al renglón, en porcentaje. */
+  bonificacion: string;
+  /**
+   * ¿El código del proveedor se recuperó?
+   *
+   * Se informa aparte de `codigo` porque son dos cosas distintas y confundirlas
+   * fue un error real: un renglón **presente** cuyo código no se leyó se
+   * informaba como un renglón **ausente** del papel. Lo primero es una molestia
+   * —hay que emparejar a mano—; lo segundo sería una compra incompleta.
+   */
+  codigoRecuperado: boolean;
 }
 
 function aRenglonInterpretado(item: CostedItem): RenglonInterpretado {
@@ -817,6 +858,8 @@ function aRenglonInterpretado(item: CostedItem): RenglonInterpretado {
     importe: item.grossSubtotal.toFixed(2),
     importeImpreso: item.grossFromPrint,
     neto: item.netAmount.toFixed(2),
+    bonificacion: item.discountPct.times(100).toFixed(2),
+    codigoRecuperado: item.supplierCode !== null && item.supplierCode.trim() !== '',
   };
 }
 

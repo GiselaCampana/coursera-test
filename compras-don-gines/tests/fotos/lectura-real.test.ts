@@ -142,37 +142,135 @@ function informarRenglones(
   renglones: RenglonInterpretado[],
   impresos: { codigo: string; descripcion: string; subtotal: string }[],
 ) {
-  const porCodigo = new Map(impresos.map((a) => [a.codigo, a]));
+  /*
+   * Emparejamiento **uno a uno**, en dos pasadas y consumiendo lo emparejado.
+   *
+   * Emparejar sólo por código fue un error real de esta herramienta. Sobre la
+   * factura de Barraza el renglón 1 se leyó entero y su código no, así que
+   * quedaba «sin correspondencia» y el código 30 del papel salía listado como
+   * «no se leyó»: las dos líneas describían el MISMO renglón, que estaba. Y
+   * sobre Errecalde, donde el OCR recupera 19 de 23 códigos, cuatro renglones
+   * presentes se informaban como ausentes por el mismo motivo.
+   *
+   * Un renglón AUSENTE y un renglón PRESENTE CON EL CÓDIGO MAL LEÍDO son
+   * problemas de gravedad muy distinta —el primero es una compra incompleta, el
+   * segundo es emparejar a mano— y la herramienta no puede confundirlos.
+   *
+   * Se consume lo emparejado para que dos renglones leídos no puedan apuntar al
+   * mismo renglón impreso y dejar otro huérfano.
+   */
+  const normalizar = (t: string) => t.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const libres = new Set(impresos);
+  const par = new Map<RenglonInterpretado, { codigo: string; descripcion: string; subtotal: string }>();
+  const comoSeEmparejo = new Map<RenglonInterpretado, 'codigo' | 'descripcion'>();
+
+  /* Primera pasada: código exacto, que es la identidad fuerte. */
+  for (const r of renglones) {
+    if (!r.codigoRecuperado || !r.codigo) continue;
+    const papel = impresos.find((a) => libres.has(a) && a.codigo === r.codigo);
+    if (papel) {
+      par.set(r, papel);
+      comoSeEmparejo.set(r, 'codigo');
+      libres.delete(papel);
+    }
+  }
+
+  /* Segunda pasada: descripción, sólo sobre lo que quedó libre. */
+  for (const r of renglones) {
+    if (par.has(r)) continue;
+    const papel = impresos.find(
+      (a) => libres.has(a) && normalizar(a.descripcion) === normalizar(r.descripcion),
+    );
+    if (papel) {
+      par.set(r, papel);
+      comoSeEmparejo.set(r, 'descripcion');
+      libres.delete(papel);
+    }
+  }
+
   let diferencia = 0;
 
   console.log('  renglón por renglón (leído → impreso):');
   for (const r of renglones) {
-    const papel = r.codigo ? porCodigo.get(r.codigo) : undefined;
+    const papel = par.get(r);
     const esperado = papel ? Number(papel.subtotal) : null;
-    const leido = Number(r.importe);
+    /* Contra el papel se compara el NETO, que es lo que el papel imprime. */
+    const leido = Number(r.neto);
     const delta = esperado === null ? null : leido - esperado;
     if (delta !== null) diferencia += delta;
+    const codigo = r.codigoRecuperado ? (r.codigo ?? '—') : '(sin código)';
     console.log(
-      `    ${String(r.linea).padStart(2)} ${(r.codigo ?? '—').padEnd(10)} ` +
-        `${r.descripcion.slice(0, 34).padEnd(34)} ` +
-        `${r.cantidad.padStart(10)} ${r.unidad.padEnd(3)} × ${r.precioUnitario.padStart(11)} = ` +
-        `${r.importe.padStart(12)}${r.importeImpreso ? ' (del papel)' : ' (CALCULADO)'}` +
+      `    ${String(r.linea).padStart(2)} ${codigo.padEnd(12)} ` +
+        `${r.descripcion.slice(0, 32).padEnd(32)} ` +
+        `${r.cantidad.padStart(9)} ${r.unidad.padEnd(3)} × ${r.precioUnitario.padStart(10)}` +
+        ` − ${r.bonificacion.padStart(5)}% ` +
+        `= bruto ${r.importe.padStart(11)} → neto ${r.neto.padStart(11)}` +
+        `${r.importeImpreso ? ' (del papel)' : ' (CALCULADO)'}` +
         (delta === null
-          ? '   ¿sin correspondencia en el papel?'
+          ? '   RENGLÓN SIN CORRESPONDENCIA EN EL PAPEL'
           : Math.abs(delta) < 0.005
             ? '   ok'
             : `   papel ${esperado!.toFixed(2)} → ${delta > 0 ? '+' : ''}${delta.toFixed(2)}`),
     );
   }
 
-  const sinLeer = impresos.filter((a) => !renglones.some((r) => r.codigo === a.codigo));
-  if (sinLeer.length > 0) {
-    console.log('  renglones del papel que no se leyeron:');
-    for (const a of sinLeer) {
+  /*
+   * Y la distinción que de verdad importa, en tres categorías y no en una.
+   *
+   * Un renglón impreso que quedó sin pareja NO es necesariamente un renglón
+   * ausente. Sobre Errecalde se leen 23 renglones, el papel tiene 23 y el total
+   * concilia al centavo: no falta nada. Lo que pasa es que en dos de ellos el
+   * OCR ensució el código Y la descripción, así que no se pueden emparejar con
+   * ninguna de las dos claves. Llamar «ausente» a eso es la clase de informe
+   * que manda a buscar una compra que está.
+   *
+   * Lo que decide si falta algo es el CONTEO: si se leyeron menos renglones que
+   * los que imprime el papel, la diferencia está ausente de verdad. Si se
+   * leyeron tantos como imprime, lo que hay es un problema de emparejado.
+   */
+  const faltanDeVerdad = Math.max(0, impresos.length - renglones.length);
+  const sinPareja = [...libres];
+  if (faltanDeVerdad > 0) {
+    console.log(
+      `  RENGLONES DEL PAPEL REALMENTE AUSENTES (${faltanDeVerdad}: se leyeron ` +
+        `${renglones.length} de ${impresos.length}):`,
+    );
+    for (const a of sinPareja.slice(0, faltanDeVerdad)) {
       console.log(`    ${a.codigo} ${a.descripcion} ${a.subtotal}`);
     }
   }
-  console.log(`  suma de las diferencias explicadas: ${diferencia.toFixed(2)}`);
+  const soloSinEmparejar = sinPareja.slice(faltanDeVerdad);
+  if (soloSinEmparejar.length > 0) {
+    console.log(
+      `  renglones impresos que no se pudieron emparejar, aunque se leyeron ` +
+        `${renglones.length} de ${impresos.length} —el código y la descripción salieron ` +
+        'sucios; no falta ninguna compra:',
+    );
+    for (const a of soloSinEmparejar) {
+      console.log(`    ${a.codigo} ${a.descripcion} ${a.subtotal}`);
+    }
+  }
+
+  const porDescripcion = renglones.filter((r) => comoSeEmparejo.get(r) === 'descripcion');
+  if (porDescripcion.length > 0) {
+    console.log(
+      `  renglones PRESENTES emparejados por descripción porque su código no se reconoció: ` +
+        `${porDescripcion.map((r) => r.linea).join(', ')} — no falta ninguna compra, hay que ` +
+        'corregir el código a mano',
+    );
+  }
+  const codigosRecuperados = renglones.filter((r) => r.codigoRecuperado).length;
+  console.log(`  códigos recuperados: ${codigosRecuperados} de ${renglones.length}`);
+
+  const conBonificacion = renglones.filter((r) => Number(r.bonificacion) > 0);
+  if (conBonificacion.length > 0) {
+    console.log(
+      `  bonificación aplicada en ${conBonificacion.length} renglón/es: ` +
+        `${[...new Set(conBonificacion.map((r) => `${r.bonificacion}%`))].join(', ')}`,
+    );
+  }
+
+  console.log(`  suma de las diferencias contra el papel: ${diferencia.toFixed(2)}`);
 }
 
 /**
