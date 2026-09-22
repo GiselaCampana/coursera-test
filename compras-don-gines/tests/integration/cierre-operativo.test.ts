@@ -448,6 +448,78 @@ describe('la auditoría de las correcciones la calcula el servidor', () => {
     expect(codigo!.despues).toBe('A9');
   });
 
+  it('el número del comprobante corregido a mano también sale de la base', async () => {
+    /*
+     * HALLAZGO de una rotura deliberada. Cambié el encabezado guardado para que
+     * el punto de venta y el número se tomaran **del pedido** en lugar de la
+     * base —exactamente «creerle al navegador cuál era el valor anterior»— y
+     * las 17 pruebas siguieron verdes. El motivo: todas mandaban el número sin
+     * cambiar, así que ninguna podía notar la diferencia. Un campo que nadie
+     * corrige en ninguna prueba es un campo sin protección.
+     *
+     * Y es justo el campo donde más importa: el número es lo que el OCR lee
+     * peor y lo que la persona corrige más seguido, y es la clave por la que
+     * después se busca la factura. Si la auditoría toma el número corregido
+     * como si fuese el original, la corrección desaparece del registro.
+     */
+    await confirmDocument(escenario.admin, {
+      documentId,
+      supplierId: proveedorId,
+      docType: 'FACTURA',
+      letter: 'A',
+      /* El papel decía 0002-80000009. La lectura había dejado 0001-80000001. */
+      pointOfSale: '0002',
+      number: '80000009',
+      issueDate: '2026-09-10',
+      printed: { netTotal: '1000.00', ivaTotal: '210.00', total: '1210.00' },
+      items: [
+        {
+          lineNumber: 1,
+          supplierCode: 'A1',
+          description: 'PRIMER RENGLÓN',
+          quantity: '10',
+          unit: 'KG' as const,
+          unitNetPrice: '100',
+          discountPct: '0',
+          ivaRate: '0.21',
+          productId: productoId,
+          matchMethod: 'MANUAL',
+          clasificacion: 'MERCADERIA' as const,
+          expenseKind: null,
+        },
+      ],
+      payment: { dueDate: '2026-10-10', paymentMethod: 'TRANSFERENCIA', notes: null },
+    });
+
+    const asiento = await prisma.auditLog.findFirst({
+      where: { action: AUDIT_ACTIONS.DOCUMENT_CORRECTED, entityId: documentId },
+      orderBy: { createdAt: 'desc' },
+    });
+    expect(asiento, 'tiene que haber asiento: el número cambió').not.toBeNull();
+    const despues = asiento!.after as {
+      campos: { campo: string; antes: string | null; despues: string | null }[];
+    };
+
+    /*
+     * Los dos campos, con el valor anterior que sólo la base conocía: el pedido
+     * manda el número ya corregido y nada más.
+     */
+    const numero = despues.campos.find((c) => c.campo === 'number');
+    expect(numero, 'el número corregido tiene que quedar auditado').toBeDefined();
+    expect(numero!.antes).toBe('80000001');
+    expect(numero!.despues).toBe('80000009');
+
+    const punto = despues.campos.find((c) => c.campo === 'pointOfSale');
+    expect(punto, 'el punto de venta corregido tiene que quedar auditado').toBeDefined();
+    expect(punto!.antes).toBe('0001');
+    expect(punto!.despues).toBe('0002');
+
+    /* Y el comprobante quedó con el número del papel, no con el de la lectura. */
+    const guardado = await prisma.document.findUnique({ where: { id: documentId } });
+    expect(guardado!.number).toBe('80000009');
+    expect(guardado!.pointOfSale).toBe('0002');
+  });
+
   it('audita un renglón agregado y uno quitado', async () => {
     await confirmDocument(escenario.admin, {
       documentId,
