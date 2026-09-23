@@ -663,6 +663,40 @@ async function sembrarCon(prisma: PrismaClient) {
    */
   await sembrarLaCompraDeEzra(prisma, { sucursalId: devoto.id, autorId: admin.id });
 
+  /*
+   * Tres artículos con unidad de existencia aprobada, para Stock ERP.
+   *
+   * Sin esto, TODAS las líneas de una apertura nacen bloqueadas por falta de
+   * unidad y no hay nada que contar: las pruebas del conteo no tendrían sobre
+   * qué correr, y las capturas mostrarían un tablero de un solo color.
+   *
+   * Se aprueban tres y no todos a propósito. El tablero realista de una
+   * apertura tiene las dos cosas —artículos listos para contar y artículos
+   * todavía sin unidad— y esa mezcla es justamente lo que la pantalla tiene
+   * que saber mostrar.
+   *
+   * La aprobación se escribe acá directamente, con `approvedById`, porque es
+   * sembrado: el camino con permiso y doble confirmación lo ejercitan las
+   * pruebas de la fase 2.
+   */
+  const paraContar = await prisma.product.findMany({
+    where: { active: true },
+    orderBy: { internalCode: 'asc' },
+    take: 3,
+  });
+  for (const p of paraContar) {
+    await prisma.productStockConfig.create({
+      data: {
+        productId: p.id,
+        stockUnit: p.purchaseUnit === 'UNIT' ? 'UNIT' : 'KG',
+        status: 'APROBADA',
+        approvedById: admin.id,
+        approvedAt: new Date('2026-09-22T12:00:00Z'),
+        notes: 'Sembrado para las pruebas de apertura.',
+      },
+    });
+  }
+
   console.log('Datos de prueba listos.');
 }
 
