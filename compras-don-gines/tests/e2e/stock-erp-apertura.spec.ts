@@ -18,7 +18,9 @@ import { ingresar, sinScrollHorizontal } from './ayudas';
  * apertura es irreversible por diseño —ésa es su gracia— así que no alcanza con
  * «limpiar antes»: hace falta que cada proyecto tenga una sucursal propia.
  *
- * Devoto no se toca nunca: es la que prueba «sucursal sin apertura».
+ * Devoto queda para «sucursal sin apertura» y para la prueba de permisos, que
+ * corre después y la prepara: por eso el archivo va en modo serial y el caso
+ * «sin apertura» está primero.
  *
  * De paso deja las capturas para revisión visual, en `test-results/capturas/`.
  */
@@ -26,7 +28,7 @@ import { ingresar, sinScrollHorizontal } from './ayudas';
 const MINUTOS = 60_000;
 test.describe.configure({ mode: 'serial', timeout: 5 * MINUTOS });
 
-/** La sucursal de este proyecto. Devoto queda libre para el caso «sin apertura». */
+/** La sucursal de este proyecto. Devoto la usan los casos de sólo lectura. */
 function sucursalDe(proyecto: string): string {
   return proyecto === 'iphone' ? 'PUEYRREDON' : 'SAN_MARTIN';
 }
@@ -80,15 +82,24 @@ test.describe('una sucursal sin apertura lo dice', () => {
     await expect(i).toContainText('base de pruebas');
   });
 
-  test('el administrador de fábrica no puede preparar', async ({ page }) => {
+  test('el administrador puede preparar, pero no confirmar', async ({ page }) => {
     /*
-     * Ni «preparar» ni «confirmar» vienen en el rol administrador. El de
-     * preparar no es sensible —contar es trabajo de todos los días— pero
-     * tampoco se hereda: se otorga igual que los demás.
+     * La línea exacta, que me equivoqué al escribir la primera vez: «preparar»
+     * NO es un permiso sensible y sí viene en el rol administrador, porque
+     * contar es el trabajo de todos los días. El que no viene —ni se hereda—
+     * es «confirmar», que es el acto que escribe el libro.
      */
     await ingresar(page, 'admin');
     await page.goto('/stock-erp/aperturas');
-    await expect(page.locator('[data-prueba="preparar"]')).toHaveCount(0);
+    await expect(page.locator('[data-prueba="preparar"]').first()).toBeVisible();
+
+    await tarjetaDe(page, 'DEVOTO').locator('[data-prueba="preparar"]').click();
+    await expect(page.locator('[data-prueba="resultado-ok"]').first()).toBeVisible();
+    await page.goto('/stock-erp/aperturas');
+    await tarjetaDe(page, 'DEVOTO').locator('[data-prueba="abrir-apertura"]').click();
+
+    /* Puede contar; no puede confirmar. */
+    await expect(page.locator('[data-prueba="confirmar"]')).toHaveCount(0);
   });
 });
 
