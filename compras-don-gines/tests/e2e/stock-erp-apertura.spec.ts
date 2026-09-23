@@ -207,7 +207,7 @@ test.describe('la confirmación', () => {
         if ((await linea.count()) === 0) break;
         await linea.locator('[data-prueba="no-se-maneja"]').click();
         await linea.locator('[data-prueba="motivo-no-se-maneja"]').fill('Homologación: no se maneja.');
-        await linea.getByRole('button', { name: 'Guardar' }).click();
+        await linea.locator('[data-prueba="guardar-no-se-maneja"]').click();
         await expect(page.locator('[data-prueba="resultado-ok"]')).toBeVisible();
       }
     }

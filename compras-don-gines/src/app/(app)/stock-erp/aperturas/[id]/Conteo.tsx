@@ -157,7 +157,12 @@ function Linea({
               ¿Por qué no se maneja acá?
             </label>
             <input id={`m-${linea.plu}`} name="motivo" data-prueba="motivo-no-se-maneja" />
-            <button type="submit" className="boton-secundario" disabled={enviando}>
+            <button
+              type="submit"
+              className="boton-secundario"
+              disabled={enviando}
+              data-prueba="guardar-no-se-maneja"
+            >
               Guardar
             </button>
           </form>
