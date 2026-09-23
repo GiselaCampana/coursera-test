@@ -10,35 +10,63 @@ import { ingresar, sinScrollHorizontal } from './ayudas';
  * propio, que confirmar pida dos veces y que nada de esto se lea como
  * existencias operativas.
  *
- * De paso deja las capturas para revisión visual: se guardan en
- * `test-results/capturas/`, con nombre por escenario y por tamaño.
+ * CADA PROYECTO TRABAJA SOBRE SU PROPIA SUCURSAL, y no es un detalle de
+ * comodidad. HALLAZGO de la primera versión: escritorio e iPhone corren contra
+ * la MISMA base, uno después del otro. La corrida de iPhone confirmaba la
+ * apertura de Devoto y, cuando llegaba escritorio, la sucursal ya no tenía
+ * borrador: nueve pruebas en rojo por interferencia, no por un defecto. Una
+ * apertura es irreversible por diseño —ésa es su gracia— así que no alcanza con
+ * «limpiar antes»: hace falta que cada proyecto tenga una sucursal propia.
+ *
+ * Devoto no se toca nunca: es la que prueba «sucursal sin apertura».
+ *
+ * De paso deja las capturas para revisión visual, en `test-results/capturas/`.
  */
 
 const MINUTOS = 60_000;
-test.describe.configure({ timeout: 5 * MINUTOS });
+test.describe.configure({ mode: 'serial', timeout: 5 * MINUTOS });
 
-/** Guarda una captura con el nombre del proyecto adentro. */
-async function captura(page: Page, nombre: string, proyecto: string) {
-  await page.screenshot({
-    path: `test-results/capturas/${nombre}-${proyecto}.png`,
-    fullPage: true,
-  });
+/** La sucursal de este proyecto. Devoto queda libre para el caso «sin apertura». */
+function sucursalDe(proyecto: string): string {
+  return proyecto === 'iphone' ? 'PUEYRREDON' : 'SAN_MARTIN';
 }
 
+function tarjetaDe(page: Page, codigo: string) {
+  return page.locator(`[data-prueba="sucursal"][data-sucursal="${codigo}"]`);
+}
+
+async function captura(page: Page, nombre: string, proyecto: string) {
+  await page.screenshot({ path: `test-results/capturas/${nombre}-${proyecto}.png`, fullPage: true });
+}
+
+/** Abre el borrador de la sucursal del proyecto, preparándolo si hace falta. */
+async function abrirBorrador(page: Page, proyecto: string) {
+  await page.goto('/stock-erp/aperturas');
+  const tarjeta = tarjetaDe(page, sucursalDe(proyecto));
+  const preparar = tarjeta.locator('[data-prueba="preparar"]');
+  if (await preparar.isVisible().catch(() => false)) {
+    await preparar.click();
+    await expect(tarjeta.locator('[data-prueba="resultado-ok"]')).toBeVisible();
+    await page.goto('/stock-erp/aperturas');
+  }
+  await tarjetaDe(page, sucursalDe(proyecto)).locator('[data-prueba="abrir-apertura"]').click();
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('Apertura de');
+}
+
+/* ========================================================================== */
+
 test.describe('una sucursal sin apertura lo dice', () => {
-  test('el aviso está, y no hay ningún saldo', async ({ page }, info) => {
+  test('el aviso está, y explica por qué eso no es cero', async ({ page }, info) => {
     await ingresar(page, 'admin');
     await page.goto('/stock-erp/aperturas');
 
     await expect(page.locator('[data-prueba="stock-erp-en-preparacion"]')).toContainText(
       'todavía no incluye ventas',
     );
-    const sinApertura = page.locator('[data-prueba="sin-apertura"]').first();
-    await expect(sinApertura).toBeVisible();
-    await expect(sinApertura).toContainText('Sucursal sin apertura de Stock ERP');
-    await expect(sinApertura, 'y dice por qué eso no es cero').toContainText(
-      'no es lo mismo que tener cero',
-    );
+    const devoto = tarjetaDe(page, 'DEVOTO').locator('[data-prueba="sin-apertura"]');
+    await expect(devoto).toBeVisible();
+    await expect(devoto).toContainText('Sucursal sin apertura de Stock ERP');
+    await expect(devoto).toContainText('no es lo mismo que tener cero');
 
     await captura(page, 'sucursal-sin-apertura', info.project.name);
     await sinScrollHorizontal(page);
@@ -51,88 +79,8 @@ test.describe('una sucursal sin apertura lo dice', () => {
     await expect(i).toContainText('deshabilitadas');
     await expect(i).toContainText('base de pruebas');
   });
-});
 
-test.describe('preparar, contar y confirmar', () => {
-  test('el borrador nace con todo pendiente y lo bloqueado se ve', async ({ page }, info) => {
-    await ingresar(page, 'configurador');
-    await page.goto('/stock-erp/aperturas');
-
-    await page.locator('[data-prueba="preparar"]').first().click();
-    await expect(page.locator('[data-prueba="resultado-ok"]').first()).toBeVisible();
-
-    await page.goto('/stock-erp/aperturas');
-    await page.locator('[data-prueba="abrir-apertura"]').first().click();
-    await expect(page.getByRole('heading', { level: 1 })).toContainText('Apertura de');
-
-    /* Sin contar: pendiente, y el texto lo explica. */
-    const primera = page.locator('[data-prueba="linea"]').first();
-    await expect(primera).toBeVisible();
-    await expect(page.locator('[data-prueba="impedimentos"]')).toBeVisible();
-
-    await captura(page, 'borrador-con-estados', info.project.name);
-    await sinScrollHorizontal(page);
-  });
-
-  test('un artículo sin unidad aprobada aparece bloqueado y explica cómo se resuelve', async ({
-    page,
-  }, info) => {
-    await ingresar(page, 'configurador');
-    await page.goto('/stock-erp/aperturas');
-    const preparar = page.locator('[data-prueba="preparar"]').first();
-    if (await preparar.isVisible().catch(() => false)) await preparar.click();
-    await page.goto('/stock-erp/aperturas');
-    await page.locator('[data-prueba="abrir-apertura"]').first().click();
-
-    await page.locator('[data-prueba="filtro-BLOQUEADO_UNIDAD"]').click();
-    const bloqueada = page.locator('[data-prueba="linea"]').first();
-    await expect(bloqueada).toBeVisible();
-    await expect(bloqueada.locator('[data-prueba="estado-linea"]')).toHaveText('BLOQUEADO_UNIDAD');
-    await expect(bloqueada.locator('[data-prueba="bloqueado-unidad"]')).toContainText(
-      'no se sabría en qué',
-    );
-    /* Y no le ofrece contar, porque no se puede. */
-    await expect(bloqueada.locator('[data-prueba="guardar-conteo"]')).toHaveCount(0);
-
-    await captura(page, 'bloqueado-por-unidad', info.project.name);
-  });
-
-  test('«contado en cero» es su propio gesto, distinto de escribir un número', async ({ page }) => {
-    await ingresar(page, 'configurador');
-    await page.goto('/stock-erp/aperturas');
-    const preparar = page.locator('[data-prueba="preparar"]').first();
-    if (await preparar.isVisible().catch(() => false)) await preparar.click();
-    await page.goto('/stock-erp/aperturas');
-    await page.locator('[data-prueba="abrir-apertura"]').first().click();
-
-    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
-    const linea = page.locator('[data-prueba="linea"]').first();
-    await expect(linea.locator('[data-prueba="contar-en-cero"]')).toBeVisible();
-
-    /* Escribir un 0 en el campo NO es lo mismo, y el servidor lo dice. */
-    await linea.locator('[data-prueba="entrada-cantidad"]').fill('0');
-    await linea.locator('[data-prueba="guardar-conteo"]').click();
-    await expect(page.locator('[data-prueba="resultado-error"]')).toContainText('Contado en cero');
-  });
-
-  test('un cuarto decimal se rechaza en castellano', async ({ page }) => {
-    await ingresar(page, 'configurador');
-    await page.goto('/stock-erp/aperturas');
-    const preparar = page.locator('[data-prueba="preparar"]').first();
-    if (await preparar.isVisible().catch(() => false)) await preparar.click();
-    await page.goto('/stock-erp/aperturas');
-    await page.locator('[data-prueba="abrir-apertura"]').first().click();
-    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
-
-    const linea = page.locator('[data-prueba="linea"]').first();
-    await linea.locator('[data-prueba="entrada-cantidad"]').fill('4.2401');
-    await linea.locator('[data-prueba="guardar-conteo"]').click();
-    await expect(page.locator('[data-prueba="resultado-error"]')).toContainText('tres decimales');
-  });
-});
-
-test.describe('quién puede qué', () => {
-  test('el administrador de fábrica no puede preparar ni confirmar', async ({ page }) => {
+  test('el administrador de fábrica no puede preparar', async ({ page }) => {
     /*
      * Ni «preparar» ni «confirmar» vienen en el rol administrador. El de
      * preparar no es sensible —contar es trabajo de todos los días— pero
@@ -144,32 +92,101 @@ test.describe('quién puede qué', () => {
   });
 });
 
+test.describe('preparar y contar', () => {
+  test('el borrador nace con todo sin contar, y los impedimentos se ven', async ({ page }, info) => {
+    await ingresar(page, 'configurador');
+    await abrirBorrador(page, info.project.name);
+
+    await expect(page.locator('[data-prueba="linea"]').first()).toBeVisible();
+    await expect(page.locator('[data-prueba="impedimentos"]')).toBeVisible();
+    await expect(page.locator('[data-prueba="impedimento"]').first()).toContainText(
+      /sin contar|unidad|corte/i,
+    );
+
+    await captura(page, 'borrador-con-estados', info.project.name);
+    await sinScrollHorizontal(page);
+  });
+
+  test('un artículo sin unidad aprobada aparece bloqueado y no ofrece contar', async ({ page }, info) => {
+    await ingresar(page, 'configurador');
+    await abrirBorrador(page, info.project.name);
+
+    await page.locator('[data-prueba="filtro-BLOQUEADO_UNIDAD"]').click();
+    const bloqueada = page.locator('[data-prueba="linea"]').first();
+    await expect(bloqueada).toBeVisible();
+    await expect(bloqueada.locator('[data-prueba="estado-linea"]')).toHaveText('BLOQUEADO_UNIDAD');
+    await expect(bloqueada.locator('[data-prueba="bloqueado-unidad"]')).toContainText(
+      'no se sabría en qué',
+    );
+    await expect(bloqueada.locator('[data-prueba="guardar-conteo"]')).toHaveCount(0);
+
+    await captura(page, 'bloqueado-por-unidad', info.project.name);
+  });
+
+  test('«contado en cero» es su propio gesto: escribir 0 no alcanza', async ({ page }, info) => {
+    await ingresar(page, 'configurador');
+    await abrirBorrador(page, info.project.name);
+    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
+
+    const linea = page.locator('[data-prueba="linea"]').first();
+    await expect(linea.locator('[data-prueba="contar-en-cero"]')).toBeVisible();
+
+    await linea.locator('[data-prueba="entrada-cantidad"]').fill('0');
+    await linea.locator('[data-prueba="guardar-conteo"]').click();
+    await expect(page.locator('[data-prueba="resultado-error"]')).toContainText('Contado en cero');
+  });
+
+  test('un cuarto decimal se rechaza en castellano', async ({ page }, info) => {
+    await ingresar(page, 'configurador');
+    await abrirBorrador(page, info.project.name);
+    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
+
+    const linea = page.locator('[data-prueba="linea"]').first();
+    await linea.locator('[data-prueba="entrada-cantidad"]').fill('4.2401');
+    await linea.locator('[data-prueba="guardar-conteo"]').click();
+    await expect(page.locator('[data-prueba="resultado-error"]')).toContainText('tres decimales');
+  });
+});
+
 test.describe('la confirmación', () => {
   test('pide dos veces, muestra el resumen y deja la apertura confirmada', async ({ page }, info) => {
     await ingresar(page, 'configurador');
-    await page.goto('/stock-erp/aperturas');
-    const preparar = page.locator('[data-prueba="preparar"]').first();
-    if (await preparar.isVisible().catch(() => false)) await preparar.click();
-    await page.goto('/stock-erp/aperturas');
-    await page.locator('[data-prueba="abrir-apertura"]').first().click();
+    await abrirBorrador(page, info.project.name);
 
-    /* Todo lo pendiente y lo bloqueado se resuelve como «no se maneja». */
+    /*
+     * Se resuelve todo lo que bloquea. Se cuenta uno de verdad y otro en cero
+     * —para que la apertura tenga las dos clases de movimiento— y el resto se
+     * marca como no manejado, que es lo que haría alguien que inaugura un local
+     * con un catálogo más grande que su góndola.
+     */
+    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
+    const primera = page.locator('[data-prueba="linea"]').first();
+    await primera.locator('[data-prueba="entrada-cantidad"]').fill('12.5');
+    await primera.locator('[data-prueba="guardar-conteo"]').click();
+    await expect(page.locator('[data-prueba="resultado-ok"]')).toBeVisible();
+
+    await page.reload();
+    await page.locator('[data-prueba="filtro-PENDIENTE"]').click();
+    const segunda = page.locator('[data-prueba="linea"]').first();
+    await segunda.locator('[data-prueba="contar-en-cero"]').click();
+    await expect(page.locator('[data-prueba="resultado-ok"]')).toBeVisible();
+
+    /* Lo que quede pendiente o bloqueado: no se maneja. */
     for (const filtro of ['PENDIENTE', 'BLOQUEADO_UNIDAD']) {
-      await page.locator(`[data-prueba="filtro-${filtro}"]`).click();
-      // eslint-disable-next-line no-constant-condition
-      while (true) {
+      for (let vuelta = 0; vuelta < 40; vuelta += 1) {
+        await page.reload();
+        await page.locator(`[data-prueba="filtro-${filtro}"]`).click();
         const linea = page.locator('[data-prueba="linea"]').first();
         if ((await linea.count()) === 0) break;
         await linea.locator('[data-prueba="no-se-maneja"]').click();
         await linea.locator('[data-prueba="motivo-no-se-maneja"]').fill('Homologación: no se maneja.');
         await linea.getByRole('button', { name: 'Guardar' }).click();
         await expect(page.locator('[data-prueba="resultado-ok"]')).toBeVisible();
-        await page.reload();
-        await page.locator(`[data-prueba="filtro-${filtro}"]`).click();
       }
     }
 
     /* El corte, en hora argentina. */
+    await page.reload();
     await page.locator('[data-prueba="corte-fecha"]').fill('2026-09-23');
     await page.locator('[data-prueba="corte-hora"]').fill('20:30');
     await page.locator('[data-prueba="fijar-corte"]').click();
@@ -194,6 +211,9 @@ test.describe('la confirmación', () => {
 
     await page.reload();
     await expect(page.locator('[data-prueba="apertura-confirmada"]')).toBeVisible();
+    /* Y ya no se puede contar: la apertura es irreversible. */
+    await expect(page.locator('[data-prueba="guardar-conteo"]')).toHaveCount(0);
+
     await captura(page, 'apertura-confirmada', info.project.name);
     await sinScrollHorizontal(page);
   });
