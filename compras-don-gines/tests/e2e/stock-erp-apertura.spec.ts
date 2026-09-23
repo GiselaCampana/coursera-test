@@ -48,8 +48,15 @@ async function abrirBorrador(page: Page, proyecto: string) {
   const preparar = tarjeta.locator('[data-prueba="preparar"]');
   if (await preparar.isVisible().catch(() => false)) {
     await preparar.click();
-    await expect(tarjeta.locator('[data-prueba="resultado-ok"]')).toBeVisible();
-    await page.goto('/stock-erp/aperturas');
+    /*
+     * Se espera el ENLACE a la apertura, no el mensaje de «listo».
+     *
+     * La acción revalida la ruta, así que apenas termina el servidor vuelve a
+     * dibujar la tarjeta por la otra rama —la de una sucursal que YA tiene
+     * sesión— y el aviso de resultado desaparece con el formulario que lo
+     * mostraba. Esperarlo era esperar algo que el éxito mismo borra.
+     */
+    await expect(tarjeta.locator('[data-prueba="abrir-apertura"]')).toBeVisible();
   }
   await tarjetaDe(page, sucursalDe(proyecto)).locator('[data-prueba="abrir-apertura"]').click();
   await expect(page.getByRole('heading', { level: 1 })).toContainText('Apertura de');
