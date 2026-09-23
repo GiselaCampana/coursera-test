@@ -126,6 +126,10 @@ async function sembrarCon(prisma: PrismaClient) {
         permissions: [
           ...ADMIN_PERMISSIONS,
           PERMISSIONS.STOCKERP_UNIDADES_CONFIGURAR,
+          /* Fase 3: preparar, contar, decidir qué se maneja y confirmar. */
+          PERMISSIONS.STOCKERP_APERTURA_PREPARAR,
+          PERMISSIONS.STOCKERP_ACTIVACION_HABILITAR,
+          PERMISSIONS.STOCKERP_APERTURA_CONFIRMAR,
         ],
         scopeAllBranches: true,
       },

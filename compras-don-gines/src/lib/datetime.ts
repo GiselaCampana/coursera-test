@@ -178,3 +178,68 @@ export function startOfMonthAr(now: Date = new Date()): Date {
   const iso = arTodayISO(now);
   return dateOnlyFromISO(`${iso.slice(0, 7)}-01`);
 }
+
+/**
+ * Convierte una fecha y hora **argentinas** en el instante que representan.
+ *
+ * Existe para el corte de la apertura de Stock ERP, y la precisión importa: la
+ * persona escribe «23/09/2026 20:30» mirando el reloj del local, y lo que hay
+ * que guardar es el INSTANTE, no el texto. Sin esta conversión, un servidor en
+ * otro huso entendería otra cosa y el corte dejaría dentro o fuera del conteo
+ * lo que no corresponde.
+ *
+ * El desfase no se escribe a mano: se deriva preguntándole a `Intl` qué hora
+ * argentina corresponde a un instante candidato y corrigiendo la diferencia.
+ * Así sigue siendo correcto si Argentina volviera a tener horario de verano,
+ * en vez de quedar clavado en −03:00 como una suposición que nadie revisa.
+ */
+export function instanteDesdeHoraArgentina(fecha: string, hora: string): Date {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fecha)) {
+    throw new Error(`La fecha tiene que ser "YYYY-MM-DD"; se leyó «${fecha}».`);
+  }
+  if (!/^\d{2}:\d{2}$/.test(hora)) {
+    throw new Error(`La hora tiene que ser "HH:MM"; se leyó «${hora}».`);
+  }
+  const [y, m, d] = fecha.split('-').map(Number);
+  const [hh, mm] = hora.split(':').map(Number);
+  if (hh > 23 || mm > 59) throw new Error(`«${hora}» no es una hora válida.`);
+
+  /*
+   * Primer intento: leer los números como si fueran UTC. Después se pregunta
+   * qué hora argentina es ese instante y se corrige por la diferencia. Dos
+   * pasadas alcanzan siempre, incluso en un cambio de huso: la segunda usa el
+   * desfase vigente EN esa fecha, no el de hoy.
+   */
+  let instante = Date.UTC(y, m - 1, d, hh, mm, 0, 0);
+  for (let i = 0; i < 2; i += 1) {
+    const partes = new Intl.DateTimeFormat('en-CA', {
+      timeZone: AR_TIMEZONE,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(instante));
+    const leido = Object.fromEntries(partes.map((p) => [p.type, p.value]));
+    const comoUtc = Date.UTC(
+      Number(leido.year),
+      Number(leido.month) - 1,
+      Number(leido.day),
+      Number(leido.hour) % 24,
+      Number(leido.minute),
+    );
+    const deseado = Date.UTC(y, m - 1, d, hh, mm);
+    if (comoUtc === deseado) break;
+    instante += deseado - comoUtc;
+  }
+  return new Date(instante);
+}
+
+/** El corte, escrito como lo lee una persona: fecha, hora y zona. */
+export function formatCorteAr(fecha: Date | string | null | undefined): string {
+  if (!fecha) return '—';
+  const d = typeof fecha === 'string' ? new Date(fecha) : fecha;
+  if (Number.isNaN(d.getTime())) return '—';
+  return `${formatDateTimeAr(d)} (hora de Argentina)`;
+}

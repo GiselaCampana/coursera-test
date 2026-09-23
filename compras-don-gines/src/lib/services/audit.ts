@@ -76,6 +76,19 @@ export const AUDIT_ACTIONS = {
    * después: dice quién quiso tocar la unidad de existencia de un artículo.
    */
   STOCKERP_INTENTO_RECHAZADO: 'stockerp.intento_rechazado',
+
+  /* --- Stock ERP, fase 3: la apertura --------------------------------- */
+  STOCKERP_APERTURA_PREPARADA: 'stockerp.apertura_preparada',
+  STOCKERP_APERTURA_SNAPSHOT: 'stockerp.apertura_snapshot_actualizado',
+  STOCKERP_CONTEO_GUARDADO: 'stockerp.conteo_guardado',
+  STOCKERP_CERO_CONFIRMADO: 'stockerp.cero_confirmado',
+  STOCKERP_NO_SE_MANEJA: 'stockerp.no_se_maneja',
+  STOCKERP_APERTURA_CONFIRMADA: 'stockerp.apertura_confirmada',
+  STOCKERP_APERTURA_SIMULTANEA: 'stockerp.apertura_simultanea',
+  STOCKERP_CONFLICTO_DE_HUELLA: 'stockerp.conflicto_de_huella',
+  STOCKERP_BLOQUEADO_INTERRUPTOR: 'stockerp.bloqueado_por_interruptor',
+  STOCKERP_BLOQUEADO_UNIDAD: 'stockerp.bloqueado_por_unidad',
+  STOCKERP_INTERRUPTOR_CAMBIADO: 'stockerp.interruptor_cambiado',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -105,6 +118,17 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'stockerp.presentacion_guardada': 'Stock ERP: presentación de compra guardada',
   'stockerp.discrepancia_reconocida': 'Stock ERP: discrepancia de unidad reconocida',
   'stockerp.intento_rechazado': 'Stock ERP: intento rechazado por falta de permiso',
+  'stockerp.apertura_preparada': 'Stock ERP: apertura preparada',
+  'stockerp.apertura_snapshot_actualizado': 'Stock ERP: catálogo del borrador actualizado',
+  'stockerp.conteo_guardado': 'Stock ERP: conteo guardado',
+  'stockerp.cero_confirmado': 'Stock ERP: artículo contado en cero',
+  'stockerp.no_se_maneja': 'Stock ERP: artículo marcado como no manejado en la sucursal',
+  'stockerp.apertura_confirmada': 'Stock ERP: apertura confirmada',
+  'stockerp.apertura_simultanea': 'Stock ERP: confirmación simultánea resuelta',
+  'stockerp.conflicto_de_huella': 'Stock ERP: conflicto de huella en la apertura',
+  'stockerp.bloqueado_por_interruptor': 'Stock ERP: apertura bloqueada por el interruptor',
+  'stockerp.bloqueado_por_unidad': 'Stock ERP: intento bloqueado por falta de unidad',
+  'stockerp.interruptor_cambiado': 'Stock ERP: interruptor de aperturas reales cambiado',
   'rol.modificado': 'Rol modificado',
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',

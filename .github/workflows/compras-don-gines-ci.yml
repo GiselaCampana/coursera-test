@@ -16,6 +16,7 @@ on:
       # así que lo que hay que verificar no es sólo lo nuevo: es que Compras
       # siga entera con el módulo nuevo adentro.
       - stock-erp-fase-2
+      - stock-erp-fase-3
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -129,4 +130,5 @@ jobs:
             tests/e2e/marcajes-modalidad.spec.ts \
             tests/e2e/stock-sync.spec.ts \
             tests/e2e/carga-manual.spec.ts \
-            tests/e2e/stock-erp-unidades.spec.ts
+            tests/e2e/stock-erp-unidades.spec.ts \
+            tests/e2e/stock-erp-apertura.spec.ts

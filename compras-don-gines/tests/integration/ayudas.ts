@@ -47,6 +47,20 @@ export async function limpiarBase() {
     prisma.$executeRawUnsafe(
       `ALTER TABLE "stock_ledger" ENABLE TRIGGER "stock_ledger_sin_truncate"`,
     ),
+    /*
+     * Repone el interruptor de Stock ERP, apagado.
+     *
+     * El TRUNCATE de arriba llega a `stock_module_setting` por CASCADE —tiene
+     * una clave foránea a `users`— y se lleva la fila que creó la migración.
+     * Sin reponerla, cada prueba empezaría con la tabla vacía, que no es el
+     * estado de una base recién migrada, y las afirmaciones sobre la defensa
+     * de la base no probarían nada: no hay fila que rechazar.
+     */
+    prisma.$executeRawUnsafe(`
+      INSERT INTO "stock_module_setting" ("id","unica","realOpeningEnabled","createdAt","updatedAt")
+      VALUES ('stock-module-setting', true, false, now(), now())
+      ON CONFLICT ("unica") DO NOTHING
+    `),
   ]);
 }
 

@@ -53,17 +53,46 @@ export const PERMISSIONS = {
   /** Ver el historial y la auditoría del módulo. */
   STOCKERP_AUDITORIA_VER: 'stockerp.auditoria.ver',
 
-  /*
-   * Los cuatro de abajo nombran capacidades que TODAVÍA NO EXISTEN: no hay
-   * aperturas, ni ajustes, ni reversiones. Se declaran ahora por una sola
-   * razón, y es la que importa: la lista de permisos sensibles que NO entran
-   * en el rol administrador tiene que poder nombrarlos, y una prueba tiene que
-   * poder comprobar que no entran. Un permiso que no existe no se puede dejar
-   * afuera, y el día que la capacidad llegue nadie se acordaría de excluirlo.
+  /**
+   * Preparar una apertura y cargar conteos.
+   *
+   * Separado de confirmarla a propósito: contar es el trabajo de recorrer la
+   * góndola con el teléfono, y lo hace quien está ahí. Confirmar es el acto que
+   * escribe el libro, y ése lo firma otra persona. Que sean el mismo permiso
+   * haría que cualquiera que cuenta pueda también inaugurar el inventario.
    */
-  /** Confirmar la apertura de existencias de un artículo en una sucursal. */
+  STOCKERP_APERTURA_PREPARAR: 'stockerp.apertura.preparar',
+
+  /**
+   * Encender o apagar el interruptor de aperturas reales.
+   *
+   * Es el permiso más sensible del módulo: gobierna si una apertura con datos
+   * de verdad puede asentarse en el libro.
+   */
+  STOCKERP_MODULO_CONFIGURAR: 'stockerp.modulo.configurar',
+
+  /**
+   * Confirmar la apertura de existencias de una sucursal.
+   *
+   * En la fase 2 era una capacidad declarada y vacía; la fase 3 la implementa.
+   * Escribe el libro, fija el corte y deja la sucursal operativa, así que se
+   * otorga a dedo y nunca por ser administrador.
+   */
   STOCKERP_APERTURA_CONFIRMAR: 'stockerp.apertura.confirmar',
-  /** Registrar un movimiento con fecha anterior a la apertura. */
+
+  /** Marcar que una sucursal no maneja un artículo, o habilitarlo. */
+  STOCKERP_ACTIVACION_HABILITAR: 'stockerp.activacion.habilitar',
+
+  /*
+   * Los tres de abajo siguen nombrando capacidades que TODAVÍA NO EXISTEN: no
+   * hay movimientos anteriores al corte, ni ajustes, ni reversiones. Se
+   * declaran por una sola razón, y es la que importa: la lista de permisos
+   * sensibles que NO entran en el rol administrador tiene que poder nombrarlos,
+   * y una prueba tiene que poder comprobar que no entran. Un permiso que no
+   * existe no se puede dejar afuera, y el día que la capacidad llegue nadie se
+   * acordaría de excluirlo.
+   */
+  /** Registrar un movimiento con fecha efectiva anterior al corte. */
   STOCKERP_EXCEPCION_HISTORICA: 'stockerp.excepcion.historica',
   /** Ajustar existencias sin un comprobante que lo respalde. */
   STOCKERP_AJUSTE: 'stockerp.ajuste',
@@ -97,7 +126,10 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'stockerp.ver': 'Ver el módulo Stock ERP',
   'stockerp.unidades.configurar': 'Aprobar unidades de existencia y presentaciones de compra',
   'stockerp.auditoria.ver': 'Ver el historial y la auditoría de Stock ERP',
-  'stockerp.apertura.confirmar': 'Confirmar aperturas de existencias (todavía no implementado)',
+  'stockerp.apertura.preparar': 'Preparar aperturas de Stock ERP y cargar conteos',
+  'stockerp.apertura.confirmar': 'Confirmar la apertura de existencias de una sucursal',
+  'stockerp.activacion.habilitar': 'Decidir qué artículos maneja cada sucursal',
+  'stockerp.modulo.configurar': 'Encender o apagar las aperturas reales de Stock ERP',
   'stockerp.excepcion.historica': 'Registrar movimientos anteriores a la apertura (todavía no implementado)',
   'stockerp.ajuste': 'Ajustar existencias sin comprobante (todavía no implementado)',
   'stockerp.reversar': 'Reversar movimientos del libro (todavía no implementado)',
@@ -121,6 +153,8 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
 export const PERMISOS_SENSIBLES_DE_STOCK_ERP: Permission[] = [
   PERMISSIONS.STOCKERP_UNIDADES_CONFIGURAR,
   PERMISSIONS.STOCKERP_APERTURA_CONFIRMAR,
+  PERMISSIONS.STOCKERP_ACTIVACION_HABILITAR,
+  PERMISSIONS.STOCKERP_MODULO_CONFIGURAR,
   PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
   PERMISSIONS.STOCKERP_AJUSTE,
   PERMISSIONS.STOCKERP_REVERSAR,

@@ -84,6 +84,10 @@ model User {
   @@index([roleId])
   @@index([branchId])
   @@map("users")
+  /* Stock ERP, fase 3 */
+  aperturasConfirmadas StockCountSession[]      @relation("AperturaConfirmadaPor")
+  conteosDeApertura    ProductStockActivation[] @relation("ConteoDeApertura")
+  interruptoresDeStock StockModuleSetting[]
 }
 
 model Session {
@@ -1250,8 +1254,13 @@ enum StockOperationKind {
 }
 
 enum StockCountSessionStatus {
+  /// Recuentos periódicos. Todavía no se usan.
   ABIERTA
   CERRADA
+  /// La apertura, en preparación: se puede contar y se puede corregir.
+  BORRADOR
+  /// La apertura ya asentó su movimiento en el libro. No vuelve atrás.
+  CONFIRMADA
 }
 
 enum StockTransferStatus {
@@ -1369,6 +1378,34 @@ model StockCountSession {
   name   String
   status StockCountSessionStatus @default(ABIERTA)
 
+  /// **El instante en que terminó el conteo físico.**
+  ///
+  /// Con zona horaria a propósito: la persona elige una hora argentina y lo que
+  /// se guarda es el instante, no el texto. Nunca se infiere de la fecha fiscal
+  /// de una factura, que es otra cosa y suele no coincidir.
+  ///
+  /// Una vez confirmada la apertura queda inmutable, y lo hace cumplir un
+  /// disparador: mover el corte reinterpretaría qué quedó dentro del conteo sin
+  /// tocar una sola fila del libro.
+  cutoffAt DateTime? @db.Timestamptz(3)
+
+  /// Cuándo se sacó la foto del catálogo obligatorio. Si entraron artículos
+  /// activos después, la confirmación se frena hasta actualizar el borrador.
+  catalogSnapshotAt DateTime?
+
+  /// Datos inventados. Una apertura ficticia sólo se confirma contra una base
+  /// de pruebas; una real exige el interruptor encendido. Lo comprueba un
+  /// disparador, no sólo el servicio.
+  ficticia Boolean @default(false)
+
+  confirmedById String?
+  confirmedBy   User?   @relation("AperturaConfirmadaPor", fields: [confirmedById], references: [id], onDelete: SetNull)
+  confirmedAt   DateTime?
+
+  /// La operación idempotente que escribió la apertura.
+  operationId String?
+  operation   StockOperation? @relation(fields: [operationId], references: [id], onDelete: SetNull)
+
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id], onDelete: SetNull)
   createdAt   DateTime @default(now())
@@ -1378,6 +1415,32 @@ model StockCountSession {
 
   @@index([branchId, status])
   @@map("stock_count_session")
+}
+
+/// **El interruptor del módulo.** Una sola fila, persistente y auditada.
+///
+/// No es una variable de entorno a propósito: una variable se cambia en un
+/// panel sin dejar rastro y sin que nadie la apruebe. Encender éste exige un
+/// permiso sensible, un motivo escrito y queda en la auditoría.
+model StockModuleSetting {
+  id String @id @default(cuid())
+  /// Siempre `true`. Con su índice único, impide una segunda fila.
+  unica Boolean @default(true)
+
+  /// Mientras esté en `false`, una apertura con datos REALES no se confirma.
+  /// Nace apagado y el seed no lo nombra, así que resembrar no puede encenderlo.
+  realOpeningEnabled Boolean @default(false)
+
+  changedById String?
+  changedBy   User?   @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt   DateTime?
+  reason      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([unica])
+  @@map("stock_module_setting")
 }
 
 /// El estado de un artículo **en una sucursal**. El corazón de la activación
@@ -1403,6 +1466,18 @@ model ProductStockActivation {
 
   /// Obligatorio cuando el estado es NO_SE_MANEJA.
   reason String?
+
+  /// **Lo contado en la apertura. Nula no es cero.**
+  ///
+  /// Nula significa «nadie lo contó todavía»; cero significa «se contó y no
+  /// había». La diferencia es la razón de ser de esta columna: una fila omitida
+  /// jamás puede leerse como un cero.
+  countedQuantity Decimal? @db.Decimal
+  countedUnit     StockUnit?
+  /// Quién contó, que no es necesariamente quien confirma la apertura.
+  countedById String?
+  countedBy   User?   @relation("ConteoDeApertura", fields: [countedById], references: [id], onDelete: SetNull)
+  countedAt   DateTime?
 
   activatedById String?
   activatedBy   User?   @relation(fields: [activatedById], references: [id], onDelete: SetNull)
@@ -1457,7 +1532,8 @@ model StockOperation {
   reversesOperation   StockOperation? @relation("ReversionDeOperacion", fields: [reversesOperationId], references: [id], onDelete: SetNull)
   reversedBy          StockOperation? @relation("ReversionDeOperacion")
 
-  ledger    StockLedger[]
+  ledger        StockLedger[]
+  countSessions StockCountSession[]
   transfers StockTransfer[]
 
   @@index([kind, appliedAt])
