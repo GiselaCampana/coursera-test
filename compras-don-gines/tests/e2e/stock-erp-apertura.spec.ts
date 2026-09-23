@@ -121,6 +121,13 @@ test.describe('preparar y contar', () => {
     await abrirBorrador(page, info.project.name);
     const url = page.url();
 
+    /*
+     * Se limpia la sesión antes de entrar como otro usuario. Sin esto,
+     * `/ingresar` redirige a quien ya tiene sesión y el campo «Correo» no
+     * aparece nunca: la prueba se quedaba esperando cinco minutos un formulario
+     * que la aplicación tenía razón en no mostrar.
+     */
+    await page.context().clearCookies();
     await ingresar(page, 'admin');
     await page.goto(url);
     await expect(page.locator('[data-prueba="guardar-conteo"]').first()).toBeVisible();
