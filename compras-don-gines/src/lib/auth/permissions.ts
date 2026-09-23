@@ -33,6 +33,42 @@ export const PERMISSIONS = {
    * stock del local, y quien lo toca tiene que estar nombrado.
    */
   STOCK_SINCRONIZAR: 'stock.sincronizar',
+
+  /* ---------------------------------------------------------------------- *
+   * Stock ERP. Módulo propio de Compras, con sus propias tablas. Nada de
+   * esto habla con Control de Stock, que sigue siendo otra aplicación.
+   * ---------------------------------------------------------------------- */
+
+  /** Entrar al módulo y mirar. No aprueba ni cambia nada. */
+  STOCKERP_VER: 'stockerp.ver',
+  /**
+   * Aprobar la unidad de existencia de un artículo, y administrar sus
+   * presentaciones de compra.
+   *
+   * Es la decisión que fija qué significa «uno» para ese artículo en el libro
+   * de existencias. Una vez que haya movimientos, cambiarla reinterpretaría el
+   * pasado, así que no cuelga de «administrar productos»: se otorga a dedo.
+   */
+  STOCKERP_UNIDADES_CONFIGURAR: 'stockerp.unidades.configurar',
+  /** Ver el historial y la auditoría del módulo. */
+  STOCKERP_AUDITORIA_VER: 'stockerp.auditoria.ver',
+
+  /*
+   * Los cuatro de abajo nombran capacidades que TODAVÍA NO EXISTEN: no hay
+   * aperturas, ni ajustes, ni reversiones. Se declaran ahora por una sola
+   * razón, y es la que importa: la lista de permisos sensibles que NO entran
+   * en el rol administrador tiene que poder nombrarlos, y una prueba tiene que
+   * poder comprobar que no entran. Un permiso que no existe no se puede dejar
+   * afuera, y el día que la capacidad llegue nadie se acordaría de excluirlo.
+   */
+  /** Confirmar la apertura de existencias de un artículo en una sucursal. */
+  STOCKERP_APERTURA_CONFIRMAR: 'stockerp.apertura.confirmar',
+  /** Registrar un movimiento con fecha anterior a la apertura. */
+  STOCKERP_EXCEPCION_HISTORICA: 'stockerp.excepcion.historica',
+  /** Ajustar existencias sin un comprobante que lo respalde. */
+  STOCKERP_AJUSTE: 'stockerp.ajuste',
+  /** Reversar un movimiento ya asentado en el libro. */
+  STOCKERP_REVERSAR: 'stockerp.reversar',
 } as const;
 
 export type Permission = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
@@ -58,10 +94,49 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'auditoria.ver': 'Consultar la auditoría',
   'almacenamiento.gestionar': 'Archivar comprobantes y liberar espacio',
   'stock.sincronizar': 'Enviar movimientos de mercadería a Control de Stock',
+  'stockerp.ver': 'Ver el módulo Stock ERP',
+  'stockerp.unidades.configurar': 'Aprobar unidades de existencia y presentaciones de compra',
+  'stockerp.auditoria.ver': 'Ver el historial y la auditoría de Stock ERP',
+  'stockerp.apertura.confirmar': 'Confirmar aperturas de existencias (todavía no implementado)',
+  'stockerp.excepcion.historica': 'Registrar movimientos anteriores a la apertura (todavía no implementado)',
+  'stockerp.ajuste': 'Ajustar existencias sin comprobante (todavía no implementado)',
+  'stockerp.reversar': 'Reversar movimientos del libro (todavía no implementado)',
 };
 
-/** Permisos de los dos roles iniciales. Se siembran; después se editan en la app. */
-export const ADMIN_PERMISSIONS: Permission[] = [...ALL_PERMISSIONS];
+/**
+ * Los permisos que NO entran solos en el rol administrador.
+ *
+ * HALLAZGO que obligó a escribir esto: `ADMIN_PERMISSIONS` era
+ * `[...ALL_PERMISSIONS]`, así que **todo permiso nuevo caía en el rol
+ * administrador por el solo hecho de existir**. Para Compras eso era discutible
+ * pero inofensivo; para Stock ERP no lo es. Aprobar la unidad de existencia de
+ * un artículo fija qué significa «uno» en el libro, y un ajuste o una reversión
+ * cambian existencias sin un papel detrás. Capacidades así se otorgan a una
+ * persona por su nombre, no se heredan por ser administrador.
+ *
+ * Quien las necesite las recibe desde Configuración → Roles, que es una
+ * decisión con autor y fecha. Lo que se pierde es comodidad; lo que se gana es
+ * que nadie pueda reinterpretar un inventario sin que alguien lo haya decidido.
+ */
+export const PERMISOS_SENSIBLES_DE_STOCK_ERP: Permission[] = [
+  PERMISSIONS.STOCKERP_UNIDADES_CONFIGURAR,
+  PERMISSIONS.STOCKERP_APERTURA_CONFIRMAR,
+  PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
+  PERMISSIONS.STOCKERP_AJUSTE,
+  PERMISSIONS.STOCKERP_REVERSAR,
+];
+
+/**
+ * Permisos de los dos roles iniciales. Se siembran; después se editan en la app.
+ *
+ * `stock.sincronizar` sigue acá y no se toca: pertenece al transporte externo
+ * retirado y queda congelado hasta que ese código se elimine en otra etapa.
+ * Sacarlo ahora cambiaría el significado de un permiso que alguien pudo haber
+ * asignado, y eso no es asunto de esta ronda.
+ */
+export const ADMIN_PERMISSIONS: Permission[] = ALL_PERMISSIONS.filter(
+  (p) => !PERMISOS_SENSIBLES_DE_STOCK_ERP.includes(p),
+);
 
 export const OPERADOR_PERMISSIONS: Permission[] = [
   PERMISSIONS.COMPROBANTES_CARGAR,

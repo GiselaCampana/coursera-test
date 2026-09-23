@@ -8,7 +8,11 @@
  */
 import { PrismaClient } from '@prisma/client';
 import { hashPassword } from '../../src/lib/auth/password';
-import { ADMIN_PERMISSIONS, OPERADOR_PERMISSIONS } from '../../src/lib/auth/permissions';
+import {
+  ADMIN_PERMISSIONS,
+  OPERADOR_PERMISSIONS,
+  PERMISSIONS,
+} from '../../src/lib/auth/permissions';
 import { normalizeText } from '../../src/lib/domain/matching';
 import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
@@ -21,6 +25,19 @@ const EPOCH = new Date(Date.UTC(2020, 0, 1));
 export const CREDENCIALES = {
   admin: { email: 'admin@e2e.local', password: 'PruebasDonGines1' },
   operador: { email: 'devoto@e2e.local', password: 'PruebasDonGines1' },
+  /*
+   * Quien puede aprobar unidades de existencia en Stock ERP.
+   *
+   * Es un usuario aparte del administrador a propósito, y no por comodidad de
+   * las pruebas: `stockerp.unidades.configurar` NO viene en el rol
+   * administrador de fábrica, así que en la vida real alguien tiene que
+   * otorgarlo a una persona nombrada. El sembrado refleja eso.
+   *
+   * (Esta lista está duplicada en `ayudas.ts`. La duplicación es previa a esta
+   * ronda y no la resuelvo acá, pero si se agrega un usuario hay que tocar las
+   * dos: descubrirlo cuesta una corrida de Playwright.)
+   */
+  configurador: { email: 'stockerp@e2e.local', password: 'PruebasDonGines1' },
 };
 
 export async function sembrar() {
@@ -76,7 +93,7 @@ async function sembrarCon(prisma: PrismaClient) {
     ),
   ]);
 
-  const [rolAdmin, rolOperador] = await Promise.all([
+  const [rolAdmin, rolOperador, rolConfigurador] = await Promise.all([
     prisma.role.create({
       data: {
         code: 'ADMIN',
@@ -93,6 +110,24 @@ async function sembrarCon(prisma: PrismaClient) {
         permissions: OPERADOR_PERMISSIONS,
         scopeAllBranches: false,
         isSystem: true,
+      },
+    }),
+    /*
+     * El rol que SÍ puede configurar unidades de Stock ERP.
+     *
+     * Existe porque el permiso no viene en el administrador: para aprobar una
+     * unidad de existencia hay que habérselo dado a alguien con nombre. Este
+     * rol es esa concesión, hecha a mano, igual que en producción.
+     */
+    prisma.role.create({
+      data: {
+        code: 'STOCKERP_CONFIG',
+        name: 'Configurador de Stock ERP',
+        permissions: [
+          ...ADMIN_PERMISSIONS,
+          PERMISSIONS.STOCKERP_UNIDADES_CONFIGURAR,
+        ],
+        scopeAllBranches: true,
       },
     }),
   ]);
@@ -130,6 +165,14 @@ async function sembrarCon(prisma: PrismaClient) {
       name: 'Ana Administradora',
       passwordHash: hash,
       roleId: rolAdmin.id,
+    },
+  });
+  await prisma.user.create({
+    data: {
+      email: CREDENCIALES.configurador.email,
+      name: 'Carla Configuradora',
+      passwordHash: hash,
+      roleId: rolConfigurador.id,
     },
   });
   await prisma.user.create({

@@ -54,6 +54,28 @@ export const AUDIT_ACTIONS = {
   STOCK_SYNCED: 'catalogo.sincronizado_con_stock',
   IMAGENES_ARCHIVADAS: 'imagenes.archivadas',
   STOCK_DESPACHADO: 'stock.movimientos_despachados',
+
+  /* --- Stock ERP, fase 2: unidades y presentaciones --------------------- */
+  STOCKERP_CONFIG_CREADA: 'stockerp.configuracion_creada',
+  STOCKERP_UNIDAD_APROBADA: 'stockerp.unidad_aprobada',
+  STOCKERP_UNIDAD_MODIFICADA: 'stockerp.unidad_modificada',
+  STOCKERP_PRESENTACION_GUARDADA: 'stockerp.presentacion_guardada',
+  /**
+   * Alguien miró una diferencia entre el catálogo y la unidad aprobada y dijo
+   * «ya sé, está bien así».
+   *
+   * Se audita porque es una decisión, no un descarte: la advertencia deja de
+   * mostrarse y queda constancia de quién se hizo cargo de que las dos
+   * unidades no coincidan.
+   */
+  STOCKERP_DISCREPANCIA_RECONOCIDA: 'stockerp.discrepancia_reconocida',
+  /**
+   * Un intento que el permiso frenó.
+   *
+   * Un rechazo por falta de permiso es justamente lo que hay que poder mirar
+   * después: dice quién quiso tocar la unidad de existencia de un artículo.
+   */
+  STOCKERP_INTENTO_RECHAZADO: 'stockerp.intento_rechazado',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -77,6 +99,12 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'usuario.contrasena_cambiada': 'Contraseña cambiada por el propio usuario',
   'usuario.contrasena_cambio_fallido': 'Intento fallido de cambio de contraseña',
   'usuario.contrasena_restablecida_seed': 'Contraseña administrativa restablecida por recuperación',
+  'stockerp.configuracion_creada': 'Stock ERP: configuración de unidad creada',
+  'stockerp.unidad_aprobada': 'Stock ERP: unidad de existencia aprobada',
+  'stockerp.unidad_modificada': 'Stock ERP: unidad de existencia modificada',
+  'stockerp.presentacion_guardada': 'Stock ERP: presentación de compra guardada',
+  'stockerp.discrepancia_reconocida': 'Stock ERP: discrepancia de unidad reconocida',
+  'stockerp.intento_rechazado': 'Stock ERP: intento rechazado por falta de permiso',
   'rol.modificado': 'Rol modificado',
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',

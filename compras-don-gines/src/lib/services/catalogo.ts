@@ -508,7 +508,10 @@ export async function importarCatalogo(
       ...(proveedor ? { defaultSupplierId: proveedor.id } : {}),
       ...(fila.categoria ? { category: fila.categoria } : {}),
       ...(fila.subtipo ? { subtype: fila.subtipo } : {}),
-      ...(fila.unidad ? { purchaseUnit: fila.unidad } : {}),
+      // A las dos columnas, por lo mismo que en `stock-sync.ts`: `purchaseUnit`
+      // conserva su comportamiento y `catalogUnit` guarda el dato externo sin
+      // interpretar. Si el catálogo no trae unidad, no se inventa ninguna.
+      ...(fila.unidad ? { purchaseUnit: fila.unidad, catalogUnit: fila.unidad } : {}),
       ...(fila.activo !== null ? { active: fila.activo } : {}),
     };
 

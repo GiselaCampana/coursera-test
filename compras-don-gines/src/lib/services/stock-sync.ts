@@ -513,7 +513,23 @@ export async function aplicarSincronizacionDeStock(
         ...(proveedorId ? { defaultSupplierId: proveedorId } : {}),
         ...(articulo.tipo ? { category: articulo.tipo } : {}),
         ...(articulo.subtipo ? { subtype: articulo.subtipo } : {}),
-        ...(articulo.unidad ? { purchaseUnit: articulo.unidad } : {}),
+        /*
+         * La unidad va a DOS columnas, y no es una duplicación por descuido.
+         *
+         * `purchaseUnit` conserva su comportamiento de siempre: la usan
+         * precios, costeo y la vista previa, y cambiarla acá rompería todo eso
+         * sin necesidad.
+         *
+         * `catalogUnit` es la misma unidad guardada como lo que es —dato
+         * externo, sin interpretar—, para que la pantalla de Stock ERP pueda
+         * mostrar «el catálogo dice UNIT, la existencia aprobada es KG» sin
+         * tener que adivinar de dónde salió cada número.
+         *
+         * Las dos sólo se escriben cuando el catálogo TRAE la unidad. Si no la
+         * trae, no se inventa: `catalogUnit` se queda como estaba, que puede
+         * ser nula, y eso es información y no un agujero.
+         */
+        ...(articulo.unidad ? { purchaseUnit: articulo.unidad, catalogUnit: articulo.unidad } : {}),
         ...(articulo.imagen ? { imageUrl: articulo.imagen } : {}),
         ...(articulo.activo !== null ? { active: articulo.activo } : {}),
       };

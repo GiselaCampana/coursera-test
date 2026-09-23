@@ -3,9 +3,18 @@ import { expect, type Page } from '@playwright/test';
 export const CREDENCIALES = {
   admin: { email: 'admin@e2e.local', password: 'PruebasDonGines1' },
   operador: { email: 'devoto@e2e.local', password: 'PruebasDonGines1' },
+  /*
+   * Quien puede aprobar unidades de existencia en Stock ERP.
+   *
+   * Es un usuario aparte del administrador a propósito, y no por comodidad de
+   * las pruebas: `stockerp.unidades.configurar` NO viene en el rol
+   * administrador de fábrica, así que en la vida real alguien tiene que
+   * otorgarlo a una persona nombrada. El sembrado refleja eso.
+   */
+  configurador: { email: 'stockerp@e2e.local', password: 'PruebasDonGines1' },
 };
 
-export async function ingresar(page: Page, quien: 'admin' | 'operador' = 'admin') {
+export async function ingresar(page: Page, quien: keyof typeof CREDENCIALES = 'admin') {
   const { email, password } = CREDENCIALES[quien];
   await page.goto('/ingresar');
   await page.getByLabel('Correo').fill(email);

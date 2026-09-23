@@ -326,6 +326,25 @@ model Product {
   /// tener dos que se separan en cuanto alguien cambia una.
   imageUrl                     String?
   purchaseUnit                 PurchaseUnit   @default(KG)
+  /// La unidad **tal como la informa el catálogo de Control de Stock**, sin
+  /// interpretar. Es dato externo y nada más que eso.
+  ///
+  /// Existe aparte de `purchaseUnit` porque `purchaseUnit` es una columna de
+  /// procedencia mezclada: la escribe la sincronización cuando el catálogo trae
+  /// unidad, pero también la escribe una persona desde el formulario de precios
+  /// o de asociaciones —donde además tiene `?? 'KG'` como valor por omisión— y
+  /// el backfill de productos. Nada en la fila dice cuál de esos caminos la
+  /// puso. Mientras eso siga así, `purchaseUnit` no puede presentarse como
+  /// «lo que dice el catálogo».
+  ///
+  /// Nula hasta la próxima sincronización, a propósito: un nulo se lee como «no
+  /// lo sé todavía», y un valor copiado de `purchaseUnit` se leería como un
+  /// dato externo que nadie puede demostrar. Ver la migración para el
+  /// razonamiento completo.
+  ///
+  /// NO gobierna existencias. La unidad del libro es
+  /// `ProductStockConfig.stockUnit`, y sólo la aprueba una persona.
+  catalogUnit                  PurchaseUnit?
   saleMode                     SaleMode       @default(FETEABLE)
   /// Peso habitual de la pieza u horma, en kg.
   avgPieceWeightKg             Decimal?       @db.Decimal(14, 4)
@@ -1310,7 +1329,12 @@ model ProductPurchasePresentation {
 
   purchaseUnit StockUnit
   /// Cuántas unidades de existencia entran en una unidad de compra.
-  conversionFactor Decimal @db.Decimal
+  ///
+  /// Decimal exacto y estrictamente positivo. La positividad y la escala las
+  /// garantiza `presentacion_factor_positivo`, un CHECK que viene de la fase 1:
+  /// exige `> 0` y `= round(…, 6)`. Está en la base y no sólo en el servicio
+  /// porque el servicio se puede saltear y la base no.
+  conversionFactor Decimal @db.Decimal(18, 6)
   description      String?
 
   status       StockConfigStatus @default(PENDIENTE)
@@ -1322,6 +1346,14 @@ model ProductPurchasePresentation {
   updatedAt DateTime @updatedAt
 
   @@index([productId])
+  /// Una presentación por artículo, proveedor y código del proveedor.
+  ///
+  /// Sin esto, dos filas para el mismo (artículo, proveedor, código) dejarían
+  /// la conversión ambigua, y elegir entre dos factores distintos no es algo
+  /// que un programa deba hacer solo. En PostgreSQL dos NULL no chocan entre
+  /// sí, así que la presentación genérica —sin proveedor— sigue conviviendo con
+  /// las específicas; eso es deliberado y está probado.
+  @@unique([productId, supplierId, supplierCode], name: "presentacion_por_proveedor_y_codigo", map: "product_purchase_presentation_producto_proveedor_codigo_key")
   @@map("product_purchase_presentation")
 }
 

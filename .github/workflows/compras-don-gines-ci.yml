@@ -12,6 +12,10 @@ on:
       # La rama del cierre operativo, por la misma razón: lo que va a quedar
       # como Compras terminada se verifica con lo que gobierna producción.
       - compras-cierre-operativo
+      # La rama de Stock ERP fase 2. Trae la fase 1 integrada sobre producción,
+      # así que lo que hay que verificar no es sólo lo nuevo: es que Compras
+      # siga entera con el módulo nuevo adentro.
+      - stock-erp-fase-2
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -124,4 +128,5 @@ jobs:
             tests/e2e/marcajes-familia.spec.ts \
             tests/e2e/marcajes-modalidad.spec.ts \
             tests/e2e/stock-sync.spec.ts \
-            tests/e2e/carga-manual.spec.ts
+            tests/e2e/carga-manual.spec.ts \
+            tests/e2e/stock-erp-unidades.spec.ts
