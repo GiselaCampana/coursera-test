@@ -82,25 +82,6 @@ test.describe('una sucursal sin apertura lo dice', () => {
     await expect(i).toContainText('base de pruebas');
   });
 
-  test('el administrador puede preparar, pero no confirmar', async ({ page }) => {
-    /*
-     * La línea exacta, que me equivoqué al escribir la primera vez: «preparar»
-     * NO es un permiso sensible y sí viene en el rol administrador, porque
-     * contar es el trabajo de todos los días. El que no viene —ni se hereda—
-     * es «confirmar», que es el acto que escribe el libro.
-     */
-    await ingresar(page, 'admin');
-    await page.goto('/stock-erp/aperturas');
-    await expect(page.locator('[data-prueba="preparar"]').first()).toBeVisible();
-
-    await tarjetaDe(page, 'DEVOTO').locator('[data-prueba="preparar"]').click();
-    await expect(page.locator('[data-prueba="resultado-ok"]').first()).toBeVisible();
-    await page.goto('/stock-erp/aperturas');
-    await tarjetaDe(page, 'DEVOTO').locator('[data-prueba="abrir-apertura"]').click();
-
-    /* Puede contar; no puede confirmar. */
-    await expect(page.locator('[data-prueba="confirmar"]')).toHaveCount(0);
-  });
 });
 
 test.describe('preparar y contar', () => {
@@ -116,6 +97,27 @@ test.describe('preparar y contar', () => {
 
     await captura(page, 'borrador-con-estados', info.project.name);
     await sinScrollHorizontal(page);
+  });
+
+  test('el administrador puede contar, pero no confirmar', async ({ page }, info) => {
+    /*
+     * La línea exacta, que me equivoqué al escribir la primera vez: «preparar»
+     * NO es un permiso sensible y sí viene en el rol administrador, porque
+     * contar es el trabajo de todos los días. El que no viene —ni se hereda—
+     * es «confirmar», que es el acto que escribe el libro.
+     *
+     * Y la prueba no prepara nada de Devoto: la primera versión lo hacía y
+     * rompía el caso «sucursal sin apertura» del OTRO proyecto, que necesita
+     * una sucursal que nadie haya tocado. Acá se mira el borrador que ya existe.
+     */
+    await ingresar(page, 'configurador');
+    await abrirBorrador(page, info.project.name);
+    const url = page.url();
+
+    await ingresar(page, 'admin');
+    await page.goto(url);
+    await expect(page.locator('[data-prueba="guardar-conteo"]').first()).toBeVisible();
+    await expect(page.locator('[data-prueba="confirmar"]')).toHaveCount(0);
   });
 
   test('un artículo sin unidad aprobada aparece bloqueado y no ofrece contar', async ({ page }, info) => {
