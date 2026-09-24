@@ -58,6 +58,9 @@ export default async function Page() {
         Esta pantalla registra el inventario físico que inaugura cada sucursal.
       </EnPreparacion>
 
+      <p className="chico">
+        <Link href="/stock-erp/recepciones">Recepciones de compras →</Link>
+      </p>
       <h1>Aperturas de existencias</h1>
       <p className="chico">
         Control de Stock Don Ginés sigue siendo una aplicación aparte. La apertura se cuenta a mano

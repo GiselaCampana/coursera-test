@@ -34,6 +34,28 @@ import { convertirAUnidadDeExistencia } from '@/lib/services/stock-erp-unidades'
  *
  * EL RECEPTOR ES EL LIBRO LOCAL. Nunca `StockOutbox`, nunca HTTP. Control de
  * Stock sigue siendo otra aplicación y esta fase no le manda nada.
+ *
+ *
+ * QUÉ HACE FALTA PARA HABILITAR ESTO CON MERCADERÍA REAL
+ *
+ * Nada de acá se activa solo, y ninguno de los pasos se puede automatizar sin
+ * perder lo que los hace útiles. Queda escrito porque el día que se haga, quien
+ * lo haga no va a tener a mano esta conversación:
+ *
+ *   1. **Las ventas tienen que descontar.** Es la condición de fondo, no un
+ *      requisito administrativo: mientras el saldo sólo suba, un inventario que
+ *      crece solo es peor que no tener inventario, porque parece un dato.
+ *   2. **Asignar los permisos sensibles a mano**, desde Configuración → Roles, a
+ *      personas nombradas. `stockerp.recepcion.confirmar`,
+ *      `stockerp.modulo.configurar` y `stockerp.excepcion.historica` NO vienen
+ *      en el rol administrador y no van a venir: un permiso que se hereda por
+ *      ser administrador no dice quién se hizo cargo.
+ *   3. **Encender el interruptor** con `cambiarInterruptorDeRecepciones`,
+ *      escribiendo el motivo. No hay variable de entorno que lo haga, a
+ *      propósito: una variable copiada de otro servicio no es una decisión.
+ *   4. **Cada sucursal necesita su apertura confirmada antes de recibir.** Sin
+ *      apertura no hay saldo sobre el cual sumar, y sus artículos no están en
+ *      cero: están sin contar.
  */
 
 export const VERSION_DE_LA_HUELLA_DE_RECEPCION = 1;

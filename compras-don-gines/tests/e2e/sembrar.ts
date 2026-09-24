@@ -171,6 +171,24 @@ async function sembrarCon(prisma: PrismaClient) {
     prisma.branch.create({ data: { code: 'DEVOTO', name: 'Devoto', stockKey: 'devoto' } }),
     prisma.branch.create({ data: { code: 'PUEYRREDON', name: 'Pueyrredón', stockKey: 'pueyrredon' } }),
     prisma.branch.create({ data: { code: 'SAN_MARTIN', name: 'San Martín', stockKey: 'san_martin' } }),
+    /*
+     * Dos sucursales sólo para las recepciones, una por proyecto de Playwright.
+     *
+     * HALLAZGO heredado de la fase 3: escritorio e iPhone corren contra la
+     * MISMA base, uno después del otro, y una recepción es irreversible por
+     * diseño. Sin una sucursal por proyecto, el segundo encontraría el
+     * comprobante ya recibido y fallaría por interferencia, no por un defecto.
+     *
+     * Los nombres empiezan con «Recepciones» para que Devoto siga siendo la
+     * primera opción de los selectores de sucursal, que es de donde la sacan
+     * otras pruebas.
+     */
+    prisma.branch.create({
+      data: { code: 'RECEP_IPHONE', name: 'Recepciones (teléfono)', stockKey: 'recep_iphone' },
+    }),
+    prisma.branch.create({
+      data: { code: 'RECEP_ESCRITORIO', name: 'Recepciones (escritorio)', stockKey: 'recep_escritorio' },
+    }),
   ]);
 
   const hash = await hashPassword(CREDENCIALES.admin.password);
@@ -708,7 +726,272 @@ async function sembrarCon(prisma: PrismaClient) {
     });
   }
 
+  await sembrarLasRecepciones(prisma, admin.id, proveedor.id);
+
   console.log('Datos de prueba listos.');
+}
+
+/* ========================================================================== *
+ * Stock ERP, fase 4: lo que hace falta para poder recibir en el navegador
+ * ========================================================================== */
+
+/**
+ * Deja las dos sucursales de recepción inauguradas y con comprobantes que
+ * cubren los cuatro casos que la pantalla tiene que saber separar.
+ *
+ * La apertura se escribe con los SERVICIOS de la fase 3, no a mano: así el
+ * estado sembrado es exactamente el que produce el camino real —con su
+ * operación, su libro y sus saldos— y no una imitación que algún disparador
+ * aceptaría pero que no se parece a lo que ve un local.
+ *
+ * Todas las aperturas son ficticias. El interruptor de aperturas reales sigue
+ * apagado, y el de recepciones reales también: lo que se prueba en el navegador
+ * es la pantalla, no si se puede mover un inventario de verdad.
+ */
+async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, proveedorId: string) {
+  /*
+   * La apertura se escribe acá directamente, igual que las unidades aprobadas
+   * unas líneas más arriba y por la misma razón: esto es SEMBRADO. El camino
+   * con permisos, conteo y doble confirmación lo ejercitan las pruebas de la
+   * fase 3, que es donde ese camino significa algo.
+   *
+   * (Además no habría alternativa: los servicios importan `server-only`, que
+   * revienta fuera de Next. El sembrador corre con tsx.)
+   *
+   * Lo que sí se respeta al pie de la letra son las reglas de la base: el
+   * movimiento lleva el `txId` de ESTA transacción porque el disparador del
+   * saldo lo exige, la sesión queda completa porque el CHECK lo exige, y la
+   * apertura es ficticia porque el interruptor de aperturas reales está
+   * apagado y así se queda.
+   */
+  /*
+   * 20:30 hora argentina del 5 de septiembre.
+   *
+   * Va ANTES del día que fija `APP_FAKE_TODAY` (2026-09-10) a propósito: la
+   * pantalla propone «ahora» como fecha de recepción, y si el corte fuera
+   * posterior TODA recepción caería en «ya estaba contada en la apertura» y el
+   * caso normal no se podría ver nunca. Una sucursal se inaugura y después
+   * recibe; el sembrado tiene que reflejar ese orden.
+   */
+  const CORTE = new Date('2026-09-05T23:30:00.000Z');
+
+  /* Los tres con unidad aprobada, que son los únicos que se pueden contar. */
+  const contables = await prisma.product.findMany({
+    where: { stockConfig: { status: 'APROBADA' } },
+    orderBy: { internalCode: 'asc' },
+  });
+  /* Uno sin unidad aprobada: es el que deja una recepción bloqueada. */
+  const sinUnidad = await prisma.product.findFirstOrThrow({
+    where: { active: true, stockConfig: null },
+    orderBy: { internalCode: 'asc' },
+  });
+
+  for (const codigo of ['RECEP_IPHONE', 'RECEP_ESCRITORIO']) {
+    const sucursal = await prisma.branch.findFirstOrThrow({ where: { code: codigo } });
+
+    await prisma.$transaction(async (tx) => {
+      const operacion = await tx.stockOperation.create({
+        data: {
+          operationKey: `apertura:${sucursal.id}`,
+          kind: 'ACTIVACION',
+          contentHash: `sembrado:${sucursal.code}`,
+          branchId: sucursal.id,
+          requestedById: adminId,
+          movementCount: contables.length,
+        },
+      });
+
+      const sesion = await tx.stockCountSession.create({
+        data: {
+          branchId: sucursal.id,
+          name: `Apertura de ${sucursal.name}`,
+          status: 'BORRADOR',
+          cutoffAt: CORTE,
+          catalogSnapshotAt: CORTE,
+          ficticia: true,
+          createdById: adminId,
+        },
+      });
+
+      for (const p of contables) {
+        const cfg = await tx.productStockConfig.findUniqueOrThrow({ where: { productId: p.id } });
+        const unidad = cfg.stockUnit!;
+        /* El último de los tres queda contado en cero: mezcla realista. */
+        const cantidad = p.id === contables[contables.length - 1].id ? '0' : '10';
+
+        const activacion = await tx.productStockActivation.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            state: 'LISTO_PARA_CONTAR',
+            sessionId: sesion.id,
+            countedQuantity: cantidad,
+            countedUnit: unidad,
+            countedById: adminId,
+            countedAt: CORTE,
+          },
+        });
+
+        const movId = `${operacion.id}-${p.id}`;
+        await tx.$executeRaw`
+          INSERT INTO "stock_ledger"
+            ("id","txId","productId","pluHistorico","branchId","type","direction",
+             "quantity","unit","effectiveAt","operationId","userId","idempotencyKey",
+             "balanceAfterSeq","reason","createdAt")
+          VALUES (${movId}, txid_current(), ${p.id}, ${p.internalCode}, ${sucursal.id},
+                  'OPENING_BALANCE'::"StockMovementType", 'IN'::"StockDirection",
+                  ${cantidad}::numeric, ${unidad}::"StockUnit", ${CORTE}, ${operacion.id},
+                  ${adminId}, ${`apertura:${sucursal.id}:${p.id}`},
+                  ${cantidad}::numeric, 'Apertura de existencias', now())`;
+
+        await tx.stockBalance.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            quantity: cantidad,
+            unit: unidad,
+            lastLedgerId: movId,
+            lastOperationId: operacion.id,
+            openingSource: 'APERTURA',
+          },
+        });
+
+        await tx.productStockActivation.update({
+          where: { id: activacion.id },
+          data: {
+            state: 'ACTIVO',
+            cutoffAt: CORTE,
+            openingLedgerId: movId,
+            activatedById: adminId,
+            activatedAt: CORTE,
+          },
+        });
+      }
+
+      /*
+       * El resto del catálogo queda «no se maneja acá», con su motivo. No es
+       * relleno: una sucursal que no trabaja un artículo es un estado real, y
+       * sin él la apertura quedaría incompleta y el CHECK la rechazaría.
+       */
+      const resto = await tx.product.findMany({
+        where: { active: true, id: { notIn: contables.map((c) => c.id) } },
+        select: { id: true },
+      });
+      for (const p of resto) {
+        await tx.productStockActivation.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            state: 'NO_SE_MANEJA',
+            sessionId: sesion.id,
+            reason: 'Esta sucursal no trabaja este artículo.',
+            activatedById: adminId,
+            activatedAt: CORTE,
+          },
+        });
+      }
+
+      await tx.stockCountSession.update({
+        where: { id: sesion.id },
+        data: {
+          status: 'CONFIRMADA',
+          confirmedById: adminId,
+          confirmedAt: CORTE,
+          operationId: operacion.id,
+          closedAt: CORTE,
+        },
+      });
+    });
+
+    const sufijo = codigo === 'RECEP_IPHONE' ? '1' : '2';
+    const comprobante = async (
+      numero: string,
+      issueDate: string,
+      renglones: {
+        productId?: string | null;
+        descripcion: string;
+        cantidad: string;
+        gasto?: 'EMBALAJE' | 'FLETE' | null;
+        supplierCode?: string | null;
+        unidad?: 'KG' | 'UNIT';
+      }[],
+    ) =>
+      prisma.document.create({
+        data: {
+          branchId: sucursal.id,
+          supplierId: proveedorId,
+          docType: 'FACTURA',
+          letter: 'A',
+          pointOfSale: '0001',
+          number: numero,
+          fullNumber: `A 0001-${numero}`,
+          issueDate: new Date(`${issueDate}T12:00:00.000Z`),
+          status: 'VALIDADO',
+          netTotal: '1000.00',
+          ivaTotal: '210.00',
+          total: '1210.00',
+          createdById: adminId,
+          validatedById: adminId,
+          validatedAt: new Date('2026-09-09T12:00:00Z'),
+          items: {
+            create: renglones.map((r, i) => ({
+              lineNumber: i + 1,
+              supplierCode: r.supplierCode ?? null,
+              description: r.descripcion,
+              quantity: r.cantidad,
+              unit: r.unidad ?? 'KG',
+              unitNetPrice: '100',
+              grossSubtotal: '100',
+              netAmount: '100',
+              ivaRate: '0.21',
+              ivaAmount: '21',
+              totalCost: '121',
+              unitCost: '121',
+              productId: r.gasto ? null : (r.productId ?? null),
+              expenseKind: r.gasto ?? null,
+              matchMethod: 'MANUAL',
+            })),
+          },
+        },
+      });
+
+    /* 1. El caso normal: mercadería y un gasto, posterior al corte. */
+    await comprobante(`900${sufijo}1`, '2026-09-08', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '2.5' },
+      { productId: contables[1].id, descripcion: contables[1].normalizedName, cantidad: '1.25' },
+      { descripcion: 'FLETE DEL CAMIÓN', cantidad: '1', gasto: 'FLETE' },
+    ]);
+
+    /* 2. Bloqueada: el artículo no tiene unidad de existencia aprobada. */
+    await comprobante(`900${sufijo}2`, '2026-09-08', [
+      { productId: sinUnidad.id, descripcion: sinUnidad.normalizedName, cantidad: '3' },
+    ]);
+
+    /* 3. Anterior al corte: su mercadería ya está contada en la apertura. */
+    await comprobante(`900${sufijo}3`, '2026-09-02', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '4' },
+    ]);
+
+    /* 4. Sólo gastos: no tiene mercadería con impacto. */
+    await comprobante(`900${sufijo}4`, '2026-09-08', [
+      { descripcion: 'BOLSA GRANDE', cantidad: '3.000', unidad: 'UNIT', gasto: 'EMBALAJE', supplierCode: '4249' },
+    ]);
+
+    /*
+     * 5 y 6. Dos comprobantes más, para las dos respuestas que sólo aparecen
+     * cuando alguien confirma dos veces: la idempotente y el conflicto.
+     *
+     * Hacen falta dos y no uno porque cada uno se recibe una sola vez: la
+     * segunda confirmación llega desde una pestaña vieja, y esa pestaña tiene
+     * que existir antes de la primera.
+     */
+    await comprobante(`900${sufijo}5`, '2026-09-08', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '1' },
+    ]);
+    await comprobante(`900${sufijo}6`, '2026-09-08', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '2' },
+    ]);
+  }
 }
 
 // Al invocarlo como script (npm run e2e:seed) se ejecuta directamente.

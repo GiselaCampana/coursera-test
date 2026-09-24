@@ -271,8 +271,12 @@ function Decididas({
               {d.reason}
             </p>
           )}
-          <Link href={`/stock-erp/recepciones/${d.documentId}`} className="boton-secundario chico">
-            Ver
+          <Link
+            href={`/stock-erp/recepciones/${d.documentId}`}
+            className="boton-secundario chico"
+            data-prueba="abrir-recepcion"
+          >
+            Ver la decisión
           </Link>
         </article>
       ))}

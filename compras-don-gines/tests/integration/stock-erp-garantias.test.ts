@@ -32,7 +32,51 @@ beforeEach(async () => {
   otroProductoId = Object.values(escenario.productos)[1]!;
   sucursalId = escenario.sucursales.devoto;
   otraSucursalId = escenario.sucursales.pueyrredon;
+  await aperturaDeLasDosSucursales();
 });
+
+/**
+ * Las dos sucursales, con una apertura confirmada y un corte viejo.
+ *
+ * HALLAZGO de la fase 4. Este archivo inserta `PURCHASE_IN` a mano para
+ * comprobar CHECK de la base —cantidad negativa, dirección equivocada,
+ * reversión incoherente— y la fase 4 agregó un disparador que rechaza un
+ * ingreso de compra en una sucursal sin apertura confirmada. Con eso, esos
+ * insertos empezaron a fallar por el motivo nuevo y ya no podían llegar hasta
+ * la restricción que estaban probando.
+ *
+ * No se tocó ninguna afirmación: se le da a las sucursales el estado que ahora
+ * hace falta para que una compra sea admisible, que es exactamente el que van a
+ * tener en la vida real. Una sucursal sin apertura no recibe mercadería, y eso
+ * es una garantía nueva, no un obstáculo de las pruebas.
+ *
+ * El corte va muy antes de la fecha efectiva que usa `movimiento()`: lo que se
+ * prueba acá no es el corte.
+ */
+async function aperturaDeLasDosSucursales() {
+  for (const branchId of [escenario.sucursales.devoto, escenario.sucursales.pueyrredon]) {
+    const opId = `apertura-${branchId}`;
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "stock_operation" ("id","operationKey","kind","contentHash","branchId","requestedById")
+       VALUES ($1,$2,'ACTIVACION'::"StockOperationKind",$3,$4,$5)`,
+      opId,
+      `clave-${opId}`,
+      `huella-${opId}`,
+      branchId,
+      escenario.admin.id,
+    );
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "stock_count_session"
+         ("id","branchId","name","status","cutoffAt","ficticia","confirmedById","confirmedAt","operationId","createdAt")
+       VALUES ($1,$2,'Apertura de prueba','CONFIRMADA'::"StockCountSessionStatus",
+               '2026-01-01T03:00:00Z', true, $3, now(), $4, now())`,
+      `sesion-${branchId}`,
+      branchId,
+      escenario.admin.id,
+      opId,
+    );
+  }
+}
 
 /* -------------------------------------------------------------------------- */
 /*  Ayudas: SQL crudo, sin pasar por ningún servicio                           */

@@ -541,6 +541,23 @@ describe('las barreras que frenan una recepción', () => {
   it('4a. la base rechaza la recepción real aunque se escriba a mano', async () => {
     /* El servicio se puede saltear. El disparador no. */
     const { doc, sucursal } = await aperturaRealCon('9001');
+
+    /*
+     * La operación va aunque la fila nunca llegue a existir. Sin ella, la CHECK
+     * `recepcion_aplicada_con_operacion` rechaza antes y la prueba pasaría por
+     * la razón equivocada: diría que la base se negó, pero no por el
+     * interruptor. Las dos defensas están, y cada una tiene que poder
+     * comprobarse por separado.
+     */
+    const op = await prisma.stockOperation.create({
+      data: {
+        operationKey: 'a-mano',
+        kind: 'RECEPCION_COMPRA',
+        contentHash: 'x',
+        branchId: sucursal,
+      },
+    });
+
     await expect(
       prisma.stockReceipt.create({
         data: {
@@ -548,10 +565,28 @@ describe('las barreras que frenan una recepción', () => {
           branchId: sucursal,
           receivedAt: new Date(),
           resolution: 'APLICADA',
+          operationId: op.id,
           decidedById: escenario.admin.id,
         },
       }),
     ).rejects.toThrow(/interruptor de recepciones reales/i);
+    expect(await prisma.stockReceipt.count()).toBe(0);
+  });
+
+  it('4e. y la CHECK de la operación es una defensa aparte, que también está', async () => {
+    const { doc, sucursal } = await aperturaRealCon('9001');
+    await expect(
+      prisma.stockReceipt.create({
+        data: {
+          documentId: doc.id,
+          branchId: sucursal,
+          receivedAt: new Date(),
+          resolution: 'APLICADA',
+          /* Sin operación: una recepción aplicada sin el asiento que la prueba. */
+          decidedById: escenario.admin.id,
+        },
+      }),
+    ).rejects.toThrow(/recepcion_aplicada_con_operacion/);
   });
 
   it('4b. el interruptor nace apagado y el seed no lo puede encender', async () => {

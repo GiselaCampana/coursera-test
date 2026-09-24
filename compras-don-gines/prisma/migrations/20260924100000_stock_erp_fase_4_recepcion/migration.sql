@@ -155,8 +155,16 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- AFTER y no BEFORE, y no es un detalle de estilo.
+--
+-- Un disparador BEFORE corre ANTES de que PostgreSQL evalúe las CHECK y las
+-- claves foráneas de la fila, así que se comería sus mensajes: intentar una
+-- recepción APLICADA sin operación contestaría «falta el interruptor» en vez de
+-- «una recepción aplicada tiene que tener su operación». El rechazo es el mismo
+-- —la transacción se cae igual— pero el que lo lee tarda el doble en entender
+-- qué hizo mal.
 CREATE TRIGGER "stock_recepcion_permitida"
-  BEFORE INSERT OR UPDATE ON "stock_receipt"
+  AFTER INSERT OR UPDATE ON "stock_receipt"
   FOR EACH ROW EXECUTE FUNCTION stock_recepcion_permitida();
 
 -- ---------------------------------------------------------------------------
@@ -200,8 +208,15 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- AFTER, por el mismo motivo, y acá el HALLAZGO fue concreto: con BEFORE, este
+-- disparador tapó siete pruebas de la fase 1. Todas insertaban un PURCHASE_IN a
+-- mano para comprobar una CHECK de la base —cantidad negativa, cantidad cero,
+-- dirección equivocada, reversión incoherente— y todas empezaron a contestar
+-- «no se puede ingresar mercadería en una sucursal sin apertura confirmada».
+-- Ninguna garantía se había perdido; lo que se había perdido era la capacidad
+-- de nombrar cuál se violó, que es la mitad del valor de tenerlas en la base.
 CREATE TRIGGER "stock_ingreso_posterior_al_corte"
-  BEFORE INSERT ON "stock_ledger"
+  AFTER INSERT ON "stock_ledger"
   FOR EACH ROW EXECUTE FUNCTION stock_ingreso_posterior_al_corte();
 
 -- ---------------------------------------------------------------------------
