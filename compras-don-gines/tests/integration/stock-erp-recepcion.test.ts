@@ -1299,11 +1299,50 @@ describe('el receptor es el libro local, y nada más', () => {
     expect(await contar()).toEqual(antes);
   });
 
-  it('30. aplicar una recepción deja StockOutbox en cero', async () => {
-    const { doc } = await escenarioSimple();
-    expect(await prisma.stockOutbox.count()).toBe(0);
-    await recibir(doc.id);
-    expect(await prisma.stockOutbox.count(), 'la recepción no usa la bandeja').toBe(0);
+  it('30. ni validar ni recibir escriben una fila de StockOutbox', async () => {
+    /*
+     * HALLAZGO de una rotura deliberada. La primera versión de esta prueba
+     * armaba el comprobante con Prisma y sólo miraba la recepción, así que
+     * volver a encender la anotación en la bandeja —`confirmDocument` llamando
+     * a `anotarIngresos`— no ponía NADA en rojo acá. El camino que hay que
+     * recorrer es el completo: validar de verdad y después recibir.
+     */
+    const p = await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const borrador = await createDocument(escenario.admin, escenario.sucursales.devoto);
+    const validado = await confirmDocument(escenario.admin, {
+      documentId: borrador.id,
+      supplierId: escenario.proveedorId,
+      docType: 'FACTURA',
+      letter: 'A',
+      pointOfSale: '0001',
+      number: '77701',
+      issueDate: '2026-09-24',
+      printed: { netTotal: '1000.00', ivaTotal: '210.00', total: '1210.00' },
+      items: [
+        {
+          lineNumber: 1,
+          supplierCode: 'X1',
+          description: 'ARTICULO FICTICIO 9001',
+          quantity: '5',
+          unit: 'KG' as const,
+          unitNetPrice: '100',
+          discountPct: '0',
+          ivaRate: '0.21',
+          productId: p.id,
+          matchMethod: 'MANUAL',
+          clasificacion: 'MERCADERIA' as const,
+          expenseKind: null,
+        },
+      ],
+      payment: { dueDate: '2026-10-24', paymentMethod: 'TRANSFERENCIA', notes: null },
+    });
+
+    expect(await prisma.stockOutbox.count(), 'validar no anota la bandeja').toBe(0);
+    await recibir(validado.documentId);
+    expect(await prisma.stockOutbox.count(), 'recibir tampoco').toBe(0);
+    /* Y la mercadería sí entró: el cero de la bandeja no es porque no pasó nada. */
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(1);
   });
 
   it('31. el servicio no hace una sola llamada HTTP', async () => {
