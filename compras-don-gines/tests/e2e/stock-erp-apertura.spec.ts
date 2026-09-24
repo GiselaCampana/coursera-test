@@ -70,7 +70,7 @@ test.describe('una sucursal sin apertura lo dice', () => {
     await page.goto('/stock-erp/aperturas');
 
     await expect(page.locator('[data-prueba="stock-erp-en-preparacion"]')).toContainText(
-      'todavía no incluye ventas',
+      'los saldos todavía no incluyen ventas',
     );
     const devoto = tarjetaDe(page, 'DEVOTO').locator('[data-prueba="sin-apertura"]');
     await expect(devoto).toBeVisible();

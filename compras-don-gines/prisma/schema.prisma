@@ -88,6 +88,9 @@ model User {
   aperturasConfirmadas StockCountSession[]      @relation("AperturaConfirmadaPor")
   conteosDeApertura    ProductStockActivation[] @relation("ConteoDeApertura")
   interruptoresDeStock StockModuleSetting[]
+  /* Stock ERP, fase 4 */
+  recepcionesDecididas StockReceipt[]       @relation("RecepcionDecididaPor")
+  recepcionesHabilitadas StockModuleSetting[] @relation("RecepcionesRealesCambiadasPor")
 }
 
 model Session {
@@ -147,6 +150,7 @@ model Branch {
   stockTransfersTo   StockTransfer[]      @relation("TrasladoDestino")
 
   @@map("branches")
+  stockReceipts StockReceipt[]
 }
 
 // ---------------------------------------------------------------------------
@@ -613,6 +617,8 @@ model Document {
   @@index([status])
   @@index([relatedDocumentId])
   @@map("documents")
+  /// La decisión de recepción de Stock ERP, si ya se tomó.
+  stockReceipt StockReceipt?
 }
 
 model DocumentFile {
@@ -759,6 +765,8 @@ model DocumentItem {
   @@unique([documentId, lineNumber])
   @@index([productId])
   @@map("document_items")
+  /// Los movimientos de Stock ERP que salieron de este renglón.
+  stockLedger StockLedger[]
 }
 
 /// Las clases de gasto que un comprobante puede traer además de mercadería.
@@ -1272,7 +1280,13 @@ enum StockTransferStatus {
 enum StockOpeningSource {
   /// Nació de un conteo inicial confirmado.
   APERTURA
-  /// El artículo se incorporó al catálogo después: nunca tuvo apertura.
+  /// El saldo NO salió de un conteo: nació de un movimiento posterior al corte.
+  ///
+  /// Pasa con un artículo que se incorporó al catálogo después de la apertura,
+  /// y también con uno que la sucursal había marcado como «no se maneja acá» y
+  /// que después recibió mercadería. En los dos casos lo que importa es lo
+  /// mismo: nadie lo contó, así que su saldo no tiene un punto de partida
+  /// verificado contra la góndola.
   POSTERIOR_AL_CORTE
 }
 
@@ -1417,6 +1431,56 @@ model StockCountSession {
   @@map("stock_count_session")
 }
 
+/// Qué se decidió con la mercadería de un comprobante validado.
+///
+/// NO es una bandeja de pendientes: los pendientes se calculan —comprobantes
+/// VALIDADO, con mercadería, sin fila acá—. Lo que la base guarda es la
+/// DECISIÓN, que es lo único que no se puede recalcular.
+model StockReceipt {
+  id         String   @id @default(cuid())
+  /// Una decisión por comprobante. Esta fase recibe el comprobante entero.
+  documentId String   @unique
+  document   Document @relation(fields: [documentId], references: [id])
+  branchId   String
+  branch     Branch   @relation(fields: [branchId], references: [id])
+
+  /// **Cuándo llegó físicamente la mercadería.** La carga una persona.
+  ///
+  /// Nunca se copia de `Document.issueDate` ni se infiere de la fecha fiscal:
+  /// son dos cosas distintas, y confundirlas hace que una factura de agosto
+  /// recibida en septiembre entre en el mes equivocado.
+  receivedAt DateTime @db.Timestamptz(3)
+
+  resolution  StockReceiptResolution
+  /// Única: una operación escribe una sola recepción. Lo hace cumplir la base.
+  operationId String?         @unique
+  operation   StockOperation? @relation(fields: [operationId], references: [id], onDelete: SetNull)
+
+  decidedById String?
+  decidedBy   User?    @relation("RecepcionDecididaPor", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt   DateTime @default(now())
+  reason      String?
+  manualOverride Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([branchId, receivedAt])
+  @@index([resolution])
+  @@map("stock_receipt")
+}
+
+enum StockReceiptResolution {
+  /// Generó movimientos de mercadería en el libro.
+  APLICADA
+  /// Ya estaba comprendida en el conteo inicial: llegó en la fecha del corte o
+  /// antes. No genera movimientos, y registrarlo es lo que impide que alguien
+  /// la reciba después «por las dudas» y la duplique.
+  INCLUIDA_EN_APERTURA
+  /// El comprobante no tiene mercadería con impacto: sólo gastos, por ejemplo.
+  EXCLUIDA
+}
+
 /// **El interruptor del módulo.** Una sola fila, persistente y auditada.
 ///
 /// No es una variable de entorno a propósito: una variable se cambia en un
@@ -1435,6 +1499,20 @@ model StockModuleSetting {
   changedBy   User?   @relation(fields: [changedById], references: [id], onDelete: SetNull)
   changedAt   DateTime?
   reason      String?
+
+  /// **Recepciones de compra con datos reales.**
+  ///
+  /// Aparte del de las aperturas, y por una razón concreta: esta fase hace
+  /// ingresar mercadería al libro, pero las VENTAS todavía no la descuentan. Un
+  /// saldo que sólo sube no es un inventario, es una cuenta que crece sola.
+  ///
+  /// Dos interruptores y no uno porque son dos decisiones: se puede querer
+  /// inaugurar sucursales mucho antes de empezar a mover el saldo con compras.
+  realPurchaseReceiptsEnabled Boolean @default(false)
+  receiptsChangedById String?
+  receiptsChangedBy   User?   @relation("RecepcionesRealesCambiadasPor", fields: [receiptsChangedById], references: [id], onDelete: SetNull)
+  receiptsChangedAt   DateTime?
+  receiptsReason      String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1458,7 +1536,12 @@ model ProductStockActivation {
   ///
   /// Todo lo que pasó físicamente antes queda absorbido por el conteo; sólo lo
   /// posterior mueve el saldo.
-  cutoffAt DateTime?
+  ///
+  /// Con zona horaria, igual que el de la sesión. Eran dos representaciones
+  /// distintas del tiempo y la fase 4 compara la fecha de recepción contra el
+  /// corte: esa comparación no puede apoyarse en dos tipos que no significan
+  /// lo mismo.
+  cutoffAt DateTime? @db.Timestamptz(3)
 
   /// La apertura que activó esta combinación. Única: no hay una segunda.
   openingLedgerId String?      @unique
@@ -1535,6 +1618,7 @@ model StockOperation {
   ledger        StockLedger[]
   countSessions StockCountSession[]
   transfers StockTransfer[]
+  receipt       StockReceipt?
 
   @@index([kind, appliedAt])
   @@index([documentId])
@@ -1574,7 +1658,15 @@ model StockLedger {
 
   documentId     String?
   document       Document? @relation(fields: [documentId], references: [id], onDelete: SetNull)
+  /// El renglón exacto del que salió este movimiento.
+  ///
+  /// Con clave foránea desde la fase 4: es lo que permite contestar «este
+  /// movimiento de stock, ¿de qué renglón de qué factura salió?» sin adivinar.
+  /// `SetNull` y no `Cascade` a propósito: el libro es inmutable, así que si
+  /// alguna vez se borrara un renglón el movimiento tiene que quedar —con el
+  /// vínculo en nulo— y no desaparecer con él.
   documentItemId String?
+  documentItem   DocumentItem? @relation(fields: [documentItemId], references: [id], onDelete: SetNull)
 
   operationId String
   operation   StockOperation @relation(fields: [operationId], references: [id])
@@ -1608,6 +1700,7 @@ model StockLedger {
   @@index([branchId, effectiveAt])
   @@index([operationId])
   @@index([documentId])
+  @@index([documentItemId])
   @@map("stock_ledger")
 }
 

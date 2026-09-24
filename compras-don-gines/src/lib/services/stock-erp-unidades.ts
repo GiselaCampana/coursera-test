@@ -526,9 +526,10 @@ export type Conversion =
 /**
  * Cuánta existencia representa una cantidad facturada.
  *
- * Todavía no la usa ninguna recepción, porque no hay recepciones. Se escribe
- * ahora porque es la regla que decide si un renglón se puede aplicar, y quiero
- * que exista con sus pruebas antes de que alguien la necesite con apuro.
+ * La usa la recepción de compras de la fase 4, que es para lo que se escribió.
+ * Nació una fase antes, sin nadie que la llamara, porque es la regla que decide
+ * si un renglón se puede aplicar y era mejor que existiera con sus pruebas
+ * antes de que alguien la necesitara con apuro.
  *
  * NO INVENTA EQUIVALENCIAS. Si la unidad del papel no es la de existencia y
  * nadie aprobó un factor, contesta que no y dice por qué. Suponer que «una

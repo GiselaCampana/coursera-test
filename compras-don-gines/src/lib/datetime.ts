@@ -84,6 +84,30 @@ export function arTodayISO(now: Date = ahora()): string {
   return arDateParts.format(now);
 }
 
+/**
+ * Hora argentina de este instante como "HH:MM", para proponerla en un campo.
+ *
+ * La usa la recepción para ofrecer «ahora», que es lo que suele ser verdad
+ * cuando alguien está descargando el camión. Es una PROPUESTA: la persona la
+ * corrige si la mercadería llegó a otra hora, y nada la toma del comprobante.
+ *
+ * Se calcula en el servidor y no en el navegador, por dos razones: el reloj del
+ * teléfono puede estar en otro huso o directamente mal, y así el valor propuesto
+ * respeta el mismo `APP_FAKE_TODAY` que el resto de la aplicación.
+ */
+export function horaArgentinaISO(now: Date = ahora()): string {
+  const partes = new Intl.DateTimeFormat('en-GB', {
+    timeZone: AR_TIMEZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const leido = Object.fromEntries(partes.map((p) => [p.type, p.value]));
+  /* `en-GB` devuelve «24» para la medianoche en algunos entornos. */
+  const hh = String(Number(leido.hour) % 24).padStart(2, '0');
+  return `${hh}:${leido.minute}`;
+}
+
 /** Medianoche UTC del día argentino de hoy. */
 export function arToday(now: Date = ahora()): Date {
   return dateOnlyFromISO(arTodayISO(now));

@@ -25,8 +25,8 @@ test.describe('la pantalla dice lo que es, y lo que todavía no es', () => {
     const aviso = page.locator('[data-prueba="stock-erp-en-preparacion"]');
     await expect(aviso).toBeVisible();
     await expect(aviso).toContainText('en preparación');
-    await expect(aviso).toContainText('todavía no incluye ventas');
-    await expect(aviso).toContainText('ni representa existencias operativas');
+    await expect(aviso).toContainText('los saldos todavía no incluyen ventas');
+    await expect(aviso).toContainText('no representan existencias operativas completas');
 
     /*
      * Ningún saldo en la pantalla.

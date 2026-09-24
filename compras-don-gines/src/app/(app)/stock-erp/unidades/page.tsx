@@ -4,6 +4,7 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { listarUnidades } from '@/lib/services/stock-erp-unidades';
 import { ListaDeUnidades } from './ListaDeUnidades';
+import { EnPreparacion } from '../EnPreparacion';
 
 export const metadata: Metadata = { title: 'Stock ERP · Unidades' };
 export const dynamic = 'force-dynamic';
@@ -34,11 +35,9 @@ export default async function Page() {
 
   return (
     <main className="contenido">
-      <p className="mensaje mensaje-aviso" data-prueba="stock-erp-en-preparacion">
-        <strong>Stock ERP en preparación</strong> — todavía no incluye ventas ni representa
-        existencias operativas. Acá sólo se decide en qué unidad se va a contar cada artículo el día
-        que el módulo empiece a moverlas. No hay saldos.
-      </p>
+      <EnPreparacion>
+        Acá sólo se decide en qué unidad se va a contar cada artículo. No hay saldos.
+      </EnPreparacion>
 
       <h1>Configuración de unidades</h1>
       <p className="chico">

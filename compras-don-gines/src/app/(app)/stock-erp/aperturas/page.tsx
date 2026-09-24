@@ -4,8 +4,13 @@ import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import { formatCorteAr } from '@/lib/datetime';
-import { interruptorDeAperturasReales, estadoDeLinea } from '@/lib/services/stock-erp-apertura';
+import {
+  interruptorDeAperturasReales,
+  estadoDeLinea,
+  laBaseAdmiteHomologacion,
+} from '@/lib/services/stock-erp-apertura';
 import { PrepararApertura } from './PrepararApertura';
+import { EnPreparacion } from '../EnPreparacion';
 
 export const metadata: Metadata = { title: 'Stock ERP · Aperturas' };
 export const dynamic = 'force-dynamic';
@@ -42,15 +47,16 @@ export default async function Page() {
     orderBy: { createdAt: 'desc' },
   });
   const interruptor = await interruptorDeAperturasReales();
+  /* Lo decide el servidor mirando el nombre de la base, no la pantalla. */
+  const admiteHomologacion = laBaseAdmiteHomologacion();
 
   const porSucursal = new Map(sesiones.map((s) => [s.branchId, s]));
 
   return (
     <main className="contenido">
-      <p className="mensaje mensaje-aviso" data-prueba="stock-erp-en-preparacion">
-        <strong>Stock ERP en preparación</strong> — todavía no incluye ventas. Esta pantalla registra
-        el inventario físico que inaugura cada sucursal; no hay recepciones, traslados ni ajustes.
-      </p>
+      <EnPreparacion>
+        Esta pantalla registra el inventario físico que inaugura cada sucursal.
+      </EnPreparacion>
 
       <h1>Aperturas de existencias</h1>
       <p className="chico">
@@ -135,7 +141,11 @@ export default async function Page() {
             )}
 
             {!sesion && hasPermission(user, PERMISSIONS.STOCKERP_APERTURA_PREPARAR) && (
-              <PrepararApertura branchId={s.id} sucursal={s.name} />
+              <PrepararApertura
+                branchId={s.id}
+                sucursal={s.name}
+                admiteHomologacion={admiteHomologacion}
+              />
             )}
           </article>
         );

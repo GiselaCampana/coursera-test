@@ -83,17 +83,52 @@ export const PERMISSIONS = {
   /** Marcar que una sucursal no maneja un artículo, o habilitarlo. */
   STOCKERP_ACTIVACION_HABILITAR: 'stockerp.activacion.habilitar',
 
-  /*
-   * Los tres de abajo siguen nombrando capacidades que TODAVÍA NO EXISTEN: no
-   * hay movimientos anteriores al corte, ni ajustes, ni reversiones. Se
-   * declaran por una sola razón, y es la que importa: la lista de permisos
-   * sensibles que NO entran en el rol administrador tiene que poder nombrarlos,
-   * y una prueba tiene que poder comprobar que no entran. Un permiso que no
-   * existe no se puede dejar afuera, y el día que la capacidad llegue nadie se
-   * acordaría de excluirlo.
+  /**
+   * Preparar la recepción de una compra: abrir la vista previa, ver qué
+   * renglones impactarían y con qué conversiones, cargar la fecha y hora en que
+   * llegó la mercadería.
+   *
+   * NO es sensible, y la razón es la misma que en la apertura: mirar y preparar
+   * no escribe el libro. Quien recibe el camión tiene que poder ver qué va a
+   * entrar antes de que entre; si eso exigiera el permiso sensible, en la
+   * práctica nadie revisaría nada y se confirmaría a ciegas.
    */
-  /** Registrar un movimiento con fecha efectiva anterior al corte. */
+  STOCKERP_RECEPCION_PREPARAR: 'stockerp.recepcion.preparar',
+
+  /**
+   * Confirmar la recepción: el acto que asienta los movimientos de mercadería,
+   * o que registra que el comprobante ya estaba comprendido en la apertura.
+   *
+   * Sensible. Es la única puerta por la que entra mercadería al libro, y una
+   * recepción de más no se ve hasta el siguiente recuento.
+   */
+  STOCKERP_RECEPCION_CONFIRMAR: 'stockerp.recepcion.confirmar',
+
+  /**
+   * Documentar una decisión sobre mercadería anterior o igual al corte.
+   *
+   * ES LO QUE **NO** HABILITA lo que su nombre sugiere. No deja registrar un
+   * movimiento con fecha efectiva anterior al corte: eso sumaría historia vieja
+   * sobre un saldo de apertura que ya la contiene, y duplicaría existencias. El
+   * disparador `stock_ingreso_posterior_al_corte` lo frena en la base y no
+   * tiene puerta de escape, ni para quien tenga este permiso.
+   *
+   * Lo único que habilita es dejar constancia auditada de la decisión —con
+   * motivo, sin movimientos— sobre un comprobante que llegó antes del corte.
+   * Si alguien sostiene que esa mercadería no se contó, la recepción se bloquea
+   * y se resuelve con un `INVENTORY_CORRECTION` en una fase futura, que todavía
+   * no existe.
+   */
   STOCKERP_EXCEPCION_HISTORICA: 'stockerp.excepcion.historica',
+
+  /*
+   * Los dos de abajo siguen nombrando capacidades que TODAVÍA NO EXISTEN: no
+   * hay ajustes ni reversiones. Se declaran por una sola razón, y es la que
+   * importa: la lista de permisos sensibles que NO entran en el rol
+   * administrador tiene que poder nombrarlos, y una prueba tiene que poder
+   * comprobar que no entran. Un permiso que no existe no se puede dejar afuera,
+   * y el día que la capacidad llegue nadie se acordaría de excluirlo.
+   */
   /** Ajustar existencias sin un comprobante que lo respalde. */
   STOCKERP_AJUSTE: 'stockerp.ajuste',
   /** Reversar un movimiento ya asentado en el libro. */
@@ -129,8 +164,12 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'stockerp.apertura.preparar': 'Preparar aperturas de Stock ERP y cargar conteos',
   'stockerp.apertura.confirmar': 'Confirmar la apertura de existencias de una sucursal',
   'stockerp.activacion.habilitar': 'Decidir qué artículos maneja cada sucursal',
-  'stockerp.modulo.configurar': 'Encender o apagar las aperturas reales de Stock ERP',
-  'stockerp.excepcion.historica': 'Registrar movimientos anteriores a la apertura (todavía no implementado)',
+  'stockerp.modulo.configurar':
+    'Encender o apagar las aperturas y recepciones reales de Stock ERP',
+  'stockerp.recepcion.preparar': 'Preparar recepciones de compras y ver su vista previa',
+  'stockerp.recepcion.confirmar': 'Confirmar la recepción de mercadería de una compra',
+  'stockerp.excepcion.historica':
+    'Documentar una decisión sobre mercadería anterior al corte (sin movimientos)',
   'stockerp.ajuste': 'Ajustar existencias sin comprobante (todavía no implementado)',
   'stockerp.reversar': 'Reversar movimientos del libro (todavía no implementado)',
 };
@@ -155,6 +194,7 @@ export const PERMISOS_SENSIBLES_DE_STOCK_ERP: Permission[] = [
   PERMISSIONS.STOCKERP_APERTURA_CONFIRMAR,
   PERMISSIONS.STOCKERP_ACTIVACION_HABILITAR,
   PERMISSIONS.STOCKERP_MODULO_CONFIGURAR,
+  PERMISSIONS.STOCKERP_RECEPCION_CONFIRMAR,
   PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
   PERMISSIONS.STOCKERP_AJUSTE,
   PERMISSIONS.STOCKERP_REVERSAR,

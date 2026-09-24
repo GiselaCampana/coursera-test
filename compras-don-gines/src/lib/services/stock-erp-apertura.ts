@@ -9,6 +9,7 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { ForbiddenError, NotFoundError, ValidationError, ConflictError } from '@/lib/errors';
 import { AUDIT_ACTIONS, recordAudit } from '@/lib/services/audit';
 import { instanteDesdeHoraArgentina } from '@/lib/datetime';
+import { esUnaBaseDePruebas } from '@/lib/base-de-pruebas';
 
 /**
  * **Stock ERP, fase 3: la apertura que inaugura una sucursal.**
@@ -87,6 +88,19 @@ async function exigirPermiso(
 /* ========================================================================== *
  * El interruptor
  * ========================================================================== */
+
+/**
+ * ¿Esta base admite datos de homologación?
+ *
+ * Lo decide el SERVIDOR mirando el nombre de la base, con la misma guarda que
+ * ya usa el sembrador. La pantalla pregunta y obedece; no lo adivina ni lo
+ * asume. Ocultar el control en React sería suficiente para que nadie lo pulse
+ * sin querer y completamente insuficiente para todo lo demás: un pedido armado
+ * a mano no pasa por React.
+ */
+export function laBaseAdmiteHomologacion(): boolean {
+  return esUnaBaseDePruebas(process.env.DATABASE_URL);
+}
 
 export async function interruptorDeAperturasReales(): Promise<{
   encendido: boolean;
@@ -202,6 +216,20 @@ export async function prepararApertura(
     entityId: input.branchId,
     detalle: 'preparar apertura',
   });
+
+  /*
+   * Una apertura ficticia sólo tiene sentido en una base de homologación, y el
+   * servidor lo comprueba: la pantalla no ofrece la opción fuera de ellas, pero
+   * un pedido armado a mano no pasa por la pantalla. La base lo vuelve a
+   * rechazar al confirmar; esto es para que el «no» llegue temprano y con un
+   * motivo legible en vez de como un error de disparador.
+   */
+  if (input.ficticia && !laBaseAdmiteHomologacion()) {
+    throw new ForbiddenError(
+      'Esta base no admite datos de homologación: su nombre no contiene «test», «e2e» ni «demo». ' +
+        'Una apertura ficticia acá sería un inventario inventado sobre datos de verdad.',
+    );
+  }
 
   const sucursal = await prisma.branch.findUnique({ where: { id: input.branchId } });
   if (!sucursal) throw new NotFoundError('No existe esa sucursal.');

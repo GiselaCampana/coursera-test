@@ -4,6 +4,7 @@ import { requireUserOrRedirect, hasPermission } from '@/lib/auth/session';
 import { PERMISSIONS } from '@/lib/auth/permissions';
 import { verApertura } from '@/lib/services/stock-erp-apertura';
 import { Conteo } from './Conteo';
+import { EnPreparacion } from '../../EnPreparacion';
 
 export const metadata: Metadata = { title: 'Stock ERP · Apertura' };
 export const dynamic = 'force-dynamic';
@@ -22,10 +23,9 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
 
   return (
     <main className="contenido">
-      <p className="mensaje mensaje-aviso" data-prueba="stock-erp-en-preparacion">
-        <strong>Stock ERP en preparación</strong> — todavía no incluye ventas ni representa
-        existencias operativas fuera de esta apertura.
-      </p>
+      <EnPreparacion>
+        Esta pantalla inaugura el inventario de una sucursal contándolo a mano.
+      </EnPreparacion>
 
       <p className="chico">
         <Link href="/stock-erp/aperturas">← Aperturas</Link>

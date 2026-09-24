@@ -89,6 +89,28 @@ export const AUDIT_ACTIONS = {
   STOCKERP_BLOQUEADO_INTERRUPTOR: 'stockerp.bloqueado_por_interruptor',
   STOCKERP_BLOQUEADO_UNIDAD: 'stockerp.bloqueado_por_unidad',
   STOCKERP_INTERRUPTOR_CAMBIADO: 'stockerp.interruptor_cambiado',
+
+  /* --- Stock ERP, fase 4: la recepción de una compra ------------------- */
+  /**
+   * Se decidió qué pasa con la mercadería de un comprobante.
+   *
+   * Cubre las tres resoluciones, incluidas las dos que NO escriben libro:
+   * «ya estaba en la apertura» y «no tiene mercadería con impacto». Auditar una
+   * decisión sin movimiento es justamente lo que hace falta, porque después
+   * nadie puede deducirla mirando el libro: ahí no hay nada que mirar.
+   */
+  STOCKERP_RECEPCION_DECIDIDA: 'stockerp.recepcion_decidida',
+  /** La recepción asentó movimientos de mercadería en el libro. */
+  STOCKERP_RECEPCION_APLICADA: 'stockerp.recepcion_aplicada',
+  /**
+   * Dos confirmaciones de la misma recepción al mismo tiempo.
+   *
+   * Una aplicó y la otra no. Se audita después del rollback, en una transacción
+   * nueva, porque la que aborta no puede dejar rastro dentro de la suya.
+   */
+  STOCKERP_RECEPCION_SIMULTANEA: 'stockerp.recepcion_simultanea',
+  /** El interruptor de recepciones reales se encendió o apagó. */
+  STOCKERP_RECEPCIONES_INTERRUPTOR: 'stockerp.recepciones_interruptor_cambiado',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -129,6 +151,11 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'stockerp.bloqueado_por_interruptor': 'Stock ERP: apertura bloqueada por el interruptor',
   'stockerp.bloqueado_por_unidad': 'Stock ERP: intento bloqueado por falta de unidad',
   'stockerp.interruptor_cambiado': 'Stock ERP: interruptor de aperturas reales cambiado',
+  'stockerp.recepcion_decidida': 'Stock ERP: recepción de una compra decidida',
+  'stockerp.recepcion_aplicada': 'Stock ERP: recepción aplicada al libro de existencias',
+  'stockerp.recepcion_simultanea': 'Stock ERP: recepción simultánea resuelta',
+  'stockerp.recepciones_interruptor_cambiado':
+    'Stock ERP: interruptor de recepciones reales cambiado',
   'rol.modificado': 'Rol modificado',
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',

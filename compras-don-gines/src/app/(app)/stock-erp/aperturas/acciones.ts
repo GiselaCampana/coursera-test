@@ -43,13 +43,16 @@ export async function prepararLaApertura(_p: Resultado | null, f: FormData): Pro
     const ap = await prepararApertura(user, {
       branchId: String(f.get('branchId') ?? ''),
       /*
-       * Ficticia por omisión, y a propósito.
+       * La casilla dice «ficticia» y significa ficticia. La primera versión la
+       * llamaba `real` con valor `no`, y con eso TODA apertura salía ficticia,
+       * tildada o no: el campo ausente también daba ficticia. Un control que
+       * hace lo mismo en sus dos posiciones no es un control.
        *
-       * Una apertura real exige destildarlo Y el interruptor encendido. El
-       * valor por omisión de una casilla decide lo que pasa cuando nadie mira,
-       * así que por omisión pasa lo inofensivo.
+       * Sin marcar = real, que es el caso normal y el que el interruptor frena
+       * mientras esté apagado. Marcarla sólo es posible donde la base admite
+       * homologación, y el servidor lo vuelve a comprobar.
        */
-      ficticia: f.get('real') !== 'si',
+      ficticia: f.get('ficticia') === 'si',
     });
     refrescar(ap.sessionId);
     return { ok: true, mensaje: `Borrador preparado con ${ap.lineas.length} artículos.` };

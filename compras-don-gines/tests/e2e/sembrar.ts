@@ -130,6 +130,17 @@ async function sembrarCon(prisma: PrismaClient) {
           PERMISSIONS.STOCKERP_APERTURA_PREPARAR,
           PERMISSIONS.STOCKERP_ACTIVACION_HABILITAR,
           PERMISSIONS.STOCKERP_APERTURA_CONFIRMAR,
+          /*
+           * Fase 4: confirmar recepciones.
+           *
+           * Sólo `recepcion.confirmar`, porque es el sensible y por eso no viene
+           * en `ADMIN_PERMISSIONS`: acá se otorga a mano, que es exactamente lo
+           * que habrá que hacer en producción el día que se habiliten.
+           * `recepcion.preparar` no hace falta nombrarlo —no es sensible y ya
+           * viene arriba—, y el administrador sigue SIN el de confirmar, que es
+           * lo que permite comprobar que la puerta está cerrada.
+           */
+          PERMISSIONS.STOCKERP_RECEPCION_CONFIRMAR,
         ],
         scopeAllBranches: true,
       },
