@@ -155,6 +155,18 @@ export default async function Page({
         }
       />
 
+      <Pendientes
+        titulo="Sin mercadería con impacto"
+        grupo="sin-mercaderia"
+        filas={listado.sinMercaderia}
+        vacio="Ninguno."
+        nota={
+          'Comprobantes de puros gastos —flete, embalaje— sin un solo renglón de mercadería. ' +
+          'No son pendientes: no hay nada que recibir. Se pueden abrir igual para dejar ' +
+          'constancia, con nombre y fecha, de que alguien lo miró y comprobó que no traía nada.'
+        }
+      />
+
       {listado.mirados >= listado.tope && (
         <p className="chico" data-prueba="hay-mas">
           Se miraron los {listado.tope} comprobantes más recientes. Si esperabas uno más viejo,

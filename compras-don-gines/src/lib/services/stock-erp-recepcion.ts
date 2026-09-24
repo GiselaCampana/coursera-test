@@ -469,6 +469,66 @@ export async function recepcionesPendientes(
   }));
 }
 
+/**
+ * Comprobantes validados **sin un solo renglón de mercadería**: puros gastos.
+ *
+ * NO son pendientes, y por eso van aparte: no hay nada que recibir en una
+ * factura de flete. Pero tienen que poder verse y decidirse igual, y el motivo
+ * es concreto: si no aparecieran en ninguna parte, `EXCLUIDA` sería una
+ * resolución que el código sabe escribir y nadie puede alcanzar, y el grupo de
+ * excluidas de la pantalla estaría siempre vacío. Una función que no se puede
+ * ejercer es una función que no está.
+ *
+ * Decidirlas sirve para algo concreto: deja dicho, con nombre y fecha, que
+ * alguien miró ese comprobante y comprobó que no traía mercadería. Sin eso, la
+ * pregunta «¿y esta factura?» no tiene respuesta guardada en ningún lado.
+ */
+export async function recepcionesSinMercaderia(
+  user: AuthUser,
+  filtro: { texto?: string; branchId?: string; limite?: number } = {},
+): Promise<RecepcionPendiente[]> {
+  await exigirPermiso(user, PERMISSIONS.STOCKERP_VER, { entity: 'StockReceipt' });
+  const texto = filtro.texto?.trim();
+  const docs = await prisma.document.findMany({
+    where: {
+      status: 'VALIDADO',
+      stockReceipt: null,
+      /* Ni un renglón que no sea gasto, y al menos un renglón. */
+      items: { none: { expenseKind: null }, some: {} },
+      ...(filtro.branchId ? { branchId: filtro.branchId } : {}),
+      ...(texto
+        ? {
+            OR: [
+              { fullNumber: { contains: texto, mode: 'insensitive' } },
+              { number: { contains: texto, mode: 'insensitive' } },
+              { supplier: { tradeName: { contains: texto, mode: 'insensitive' } } },
+              { branch: { name: { contains: texto, mode: 'insensitive' } } },
+              { items: { some: { description: { contains: texto, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+    },
+    include: {
+      supplier: { select: { tradeName: true } },
+      branch: { select: { name: true } },
+      items: { select: { id: true } },
+    },
+    orderBy: { issueDate: 'desc' },
+    take: filtro.limite ?? 40,
+  });
+
+  return docs.map((d) => ({
+    documentId: d.id,
+    numero: d.fullNumber ?? `${d.pointOfSale ?? ''}-${d.number ?? ''}`,
+    proveedor: d.supplier?.tradeName ?? '—',
+    sucursal: d.branch.name,
+    branchId: d.branchId,
+    issueDate: d.issueDate,
+    /* Cero, por definición: es lo que las pone en este grupo y no en otro. */
+    renglonesDeMercaderia: 0,
+  }));
+}
+
 /** Las decisiones ya tomadas, para el listado. */
 export async function recepcionesDecididas(user: AuthUser, limite = 100) {
   await exigirPermiso(user, PERMISSIONS.STOCKERP_VER, { entity: 'StockReceipt' });
@@ -501,6 +561,8 @@ export interface ListadoDeRecepciones {
   bloqueadas: FilaPendiente[];
   /** El comprobante es anterior o igual al corte de su sucursal. */
   anterioresAlCorte: FilaPendiente[];
+  /** Puros gastos: no hay nada que recibir, pero se puede dejar constancia. */
+  sinMercaderia: FilaPendiente[];
   decididas: Awaited<ReturnType<typeof recepcionesDecididas>>;
   /** Cuántos pendientes se miraron. Si se llegó al tope, hay más. */
   mirados: number;
@@ -551,6 +613,11 @@ export async function listadoDeRecepciones(
     pendientes: listas,
     bloqueadas,
     anterioresAlCorte: anteriores,
+    sinMercaderia: (await recepcionesSinMercaderia(user, { ...filtro, limite: tope })).map((p) => ({
+      ...p,
+      motivos: [],
+      cutoffAt: null,
+    })),
     decididas: await recepcionesDecididas(user, 100),
     mirados: pendientes.length,
     tope,

@@ -484,6 +484,36 @@ describe('la bandeja de pendientes no existe: se calcula', () => {
     expect(l.anterioresAlCorte.map((x) => x.documentId)).toEqual([vieja.id]);
     expect(l.bloqueadas[0].motivos.join(' ')).toMatch(/unidad de existencia aprobada/i);
   });
+
+  it('2f. un comprobante de puros gastos no es pendiente, pero se puede alcanzar', async () => {
+    /*
+     * HALLAZGO de la prueba de navegador. Una factura de sólo gastos no tiene
+     * ningún renglón de impacto potencial, así que —bien— no figura entre los
+     * pendientes: no hay nada que recibir. Pero con eso no figuraba en NINGUNA
+     * parte, y entonces `EXCLUIDA` era una resolución que el servicio sabe
+     * escribir y nadie podía alcanzar: el grupo de excluidas de la pantalla
+     * nunca se iba a llenar.
+     *
+     * Ahora tiene su propio grupo, dicho por lo que es y no como un pendiente.
+     */
+    await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto);
+    const gastos = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ cantidad: '1', gasto: 'FLETE', descripcion: 'FLETE' }],
+    });
+
+    const l = await listadoDeRecepciones(receptor);
+    expect(l.pendientes.map((x) => x.documentId)).not.toContain(gastos.id);
+    expect(l.bloqueadas.map((x) => x.documentId)).not.toContain(gastos.id);
+    expect(l.sinMercaderia.map((x) => x.documentId)).toEqual([gastos.id]);
+
+    /* Y decidirlo lo pasa al grupo de excluidas, que ahora sí se puede llenar. */
+    await recibir(gastos.id);
+    const despues = await listadoDeRecepciones(receptor);
+    expect(despues.sinMercaderia).toHaveLength(0);
+    expect(despues.decididas.filter((d) => d.resolution === 'EXCLUIDA')).toHaveLength(1);
+  });
 });
 
 /* ========================================================================== *

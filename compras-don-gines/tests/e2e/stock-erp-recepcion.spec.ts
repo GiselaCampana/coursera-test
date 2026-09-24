@@ -84,6 +84,12 @@ test.describe('el listado dice en qué estado está cada comprobante', () => {
     await expect(grupo(page, 'pendientes')).toContainText(numeroDe(info.project.name, 1));
     await expect(grupo(page, 'bloqueadas')).toContainText(numeroDe(info.project.name, 2));
     await expect(grupo(page, 'anteriores-al-corte')).toContainText(numeroDe(info.project.name, 3));
+    /*
+     * El de puros gastos NO es un pendiente —no hay nada que recibir— pero
+     * tiene que poder alcanzarse, o «excluida» sería una decisión que nadie
+     * puede tomar.
+     */
+    await expect(grupo(page, 'sin-mercaderia')).toContainText(numeroDe(info.project.name, 4));
 
     /* La bloqueada dice POR QUÉ, en la misma fila. */
     const bloqueada = grupo(page, 'bloqueadas').locator('[data-prueba="fila"]').first();
