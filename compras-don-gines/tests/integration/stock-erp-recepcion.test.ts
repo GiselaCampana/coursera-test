@@ -1218,6 +1218,52 @@ describe('idempotencia: la misma recepción dos veces no duplica', () => {
     expect(r.resolucion).toBe('APLICADA');
   });
 
+  it('26c. lo que cambia entre la vista previa y el bloqueo aborta la recepción', async () => {
+    /*
+     * La vista previa se calcula AFUERA de la transacción, porque es cara. Eso
+     * abre una ventana: entre que dijo «este renglón entra como 2,5 KG» y que
+     * la transacción toma el bloqueo, alguien puede desaprobar la unidad de
+     * existencia del artículo. Un movimiento escrito con la clasificación vieja
+     * no se distingue de uno bueno una semana después.
+     *
+     * El corte se simula desaprobando la unidad justo antes de confirmar.
+     */
+    const p = await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const doc = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ productId: p.id, cantidad: '2.5' }],
+    });
+
+    /* La vista previa, mirada y aceptada: el renglón entra. */
+    const previa = await vistaPreviaDeRecepcion(receptor, { documentId: doc.id });
+    expect(previa.renglones[0].clase).toBe('MERCADERIA');
+
+    /* Y entonces alguien desaprueba la unidad. */
+    await prisma.productStockConfig.update({
+      where: { productId: p.id },
+      data: { status: 'PENDIENTE' },
+    });
+
+    await expect(recibir(doc.id)).rejects.toThrow(/unidad de existencia/i);
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+    expect(await prisma.stockReceipt.count()).toBe(0);
+  });
+
+  it('26d. y un artículo dado de baja en el medio también la aborta', async () => {
+    const p = await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const doc = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ productId: p.id, cantidad: '2.5' }],
+    });
+    await vistaPreviaDeRecepcion(receptor, { documentId: doc.id });
+    await prisma.product.update({ where: { id: p.id }, data: { active: false } });
+
+    await expect(recibir(doc.id)).rejects.toThrow(/inactivo|se dio de baja/i);
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+  });
+
   it('27. la base impide dos recepciones del mismo comprobante', async () => {
     const { doc } = await escenarioSimple();
     await recibir(doc.id);

@@ -712,6 +712,86 @@ export interface RecibirInput {
 }
 
 /**
+ * Revalidar adentro de la transacción, después de tomar el bloqueo.
+ *
+ * La vista previa se calcula AFUERA —es cara y no tiene por qué ocupar la
+ * transacción— así que entre que se calculó y que se tomó el bloqueo alguien
+ * pudo haber cambiado lo que ella dio por cierto: desaprobar una unidad de
+ * existencia, dar de baja un artículo, apagar el interruptor. Un movimiento
+ * escrito con una clasificación vieja no se distingue de uno bueno la semana
+ * siguiente.
+ *
+ * Se revisa con `tx`, no con el cliente global, que es lo único que garantiza
+ * leer dentro del mismo bloqueo. Y no escribe nada: si algo cambió, aborta.
+ */
+async function revalidarDentroDeLaTransaccion(
+  tx: Prisma.TransactionClient,
+  previa: VistaPreviaDeRecepcion,
+  resolucion: Resolucion,
+): Promise<void> {
+  /* La apertura de la sucursal: su corte y si es ficticia. */
+  const apertura = await tx.stockCountSession.findFirst({
+    where: { branchId: previa.branchId, status: 'CONFIRMADA' },
+    select: { cutoffAt: true, ficticia: true },
+  });
+  if (!apertura) {
+    throw new ConflictError(
+      'La sucursal dejó de tener una apertura confirmada mientras se confirmaba la recepción. No se escribió nada.',
+    );
+  }
+  if (apertura.cutoffAt?.toISOString() !== previa.cutoffAt?.toISOString()) {
+    throw new ConflictError(
+      'El corte de la apertura cambió mientras se confirmaba la recepción. No se escribió nada: volvé a mirar la vista previa.',
+    );
+  }
+  if (apertura.ficticia !== previa.aperturaFicticia) {
+    throw new ConflictError(
+      'La apertura de la sucursal cambió de ficticia a real (o al revés) mientras se confirmaba. No se escribió nada.',
+    );
+  }
+
+  /* El interruptor, releído: apagarlo tiene que frenar lo que está en vuelo. */
+  if (resolucion === 'APLICADA' && !apertura.ficticia) {
+    const fila = await tx.stockModuleSetting.findFirst();
+    if (fila?.realPurchaseReceiptsEnabled !== true) {
+      throw new ConflictError(
+        'El interruptor de recepciones reales se apagó mientras se confirmaba. No se escribió nada.',
+      );
+    }
+  }
+
+  /* Cada renglón que iba a mover existencias, releído. */
+  for (const r of previa.renglones.filter((x) => x.clase === 'MERCADERIA')) {
+    const producto = await tx.product.findUnique({
+      where: { id: r.productId! },
+      select: { active: true, internalCode: true, stockConfig: { select: { status: true, stockUnit: true } } },
+    });
+    if (!producto?.active) {
+      throw new ConflictError(
+        `El artículo del renglón ${r.lineNumber} se dio de baja mientras se confirmaba. No se escribió nada.`,
+      );
+    }
+    if (producto.stockConfig?.status !== 'APROBADA') {
+      throw new ConflictError(
+        `La unidad de existencia del renglón ${r.lineNumber} dejó de estar aprobada mientras se confirmaba. No se escribió nada.`,
+      );
+    }
+    if (producto.stockConfig.stockUnit !== r.unidadDeExistencia) {
+      throw new ConflictError(
+        `La unidad de existencia del renglón ${r.lineNumber} cambió de ${r.unidadDeExistencia} a ` +
+          `${producto.stockConfig.stockUnit} mientras se confirmaba. No se escribió nada: la cantidad ` +
+          'convertida ya no significaría lo mismo.',
+      );
+    }
+    if (producto.internalCode !== (r.plu ?? '')) {
+      throw new ConflictError(
+        `El PLU del renglón ${r.lineNumber} cambió mientras se confirmaba. No se escribió nada.`,
+      );
+    }
+  }
+}
+
+/**
  * Un comprobante que ya tiene decisión: comparar y contestar.
  *
  * Una sola función para las dos veces que hace falta —antes de abrir la
@@ -937,7 +1017,16 @@ async function aplicar(
       return await compararConLoGuardado(tx, doc.id, huella, receivedAt);
     }
 
-    /* 3. La operación con la misma clave, si ya existe. */
+    /*
+     * 3. Revalidar TODO lo que la vista previa dio por cierto, con `tx`.
+     *
+     * Sucursal, apertura, corte, interruptor, artículos, unidades y la
+     * clasificación de cada renglón. La vista previa se calculó afuera del
+     * bloqueo y pudo quedar vieja.
+     */
+    await revalidarDentroDeLaTransaccion(tx, previa, resolucion);
+
+    /* 4. La operación con la misma clave, si ya existe. */
     const opPrevia = await tx.stockOperation.findUnique({ where: { operationKey: clave } });
     if (opPrevia) {
       if (
