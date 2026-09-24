@@ -54,6 +54,33 @@ export const PERMISSIONS = {
   STOCKERP_AUDITORIA_VER: 'stockerp.auditoria.ver',
 
   /**
+   * Consultar el libro de existencias: movimientos, saldos y su recorrido.
+   *
+   * Separado de `stockerp.ver` porque son dos cosas distintas. `stockerp.ver`
+   * deja entrar al módulo y mirar configuración; esto deja leer CUÁNTO hay y
+   * cuánto hubo, que en una fiambrería es información comercial: revela
+   * volúmenes de compra, qué se mueve y qué no.
+   *
+   * Es de LECTURA y no otorga ninguna capacidad de modificación. Eso no es una
+   * promesa del nombre: ninguna función que lo exige escribe una fila de
+   * existencias, y hay una prueba que lo comprueba.
+   */
+  STOCKERP_MOVIMIENTOS_VER: 'stockerp.movimientos.ver',
+
+  /**
+   * Ver el diagnóstico de integridad.
+   *
+   * Aparte de los movimientos porque contesta otra pregunta y la contesta de
+   * otra manera: compara la proyección contra el libro y expone divergencias.
+   * Una divergencia es información delicada —dice que algo no cierra— y
+   * conviene que quien la mire sepa qué está mirando.
+   *
+   * También de lectura. El diagnóstico DETECTA y jamás repara: no hay botón, no
+   * hay función y no hay camino.
+   */
+  STOCKERP_INTEGRIDAD_VER: 'stockerp.integridad.ver',
+
+  /**
    * Preparar una apertura y cargar conteos.
    *
    * Separado de confirmarla a propósito: contar es el trabajo de recorrer la
@@ -161,6 +188,8 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'stockerp.ver': 'Ver el módulo Stock ERP',
   'stockerp.unidades.configurar': 'Aprobar unidades de existencia y presentaciones de compra',
   'stockerp.auditoria.ver': 'Ver el historial y la auditoría de Stock ERP',
+  'stockerp.movimientos.ver': 'Consultar saldos y movimientos del libro de existencias',
+  'stockerp.integridad.ver': 'Ver el diagnóstico de integridad del libro (sólo lectura)',
   'stockerp.apertura.preparar': 'Preparar aperturas de Stock ERP y cargar conteos',
   'stockerp.apertura.confirmar': 'Confirmar la apertura de existencias de una sucursal',
   'stockerp.activacion.habilitar': 'Decidir qué artículos maneja cada sucursal',
