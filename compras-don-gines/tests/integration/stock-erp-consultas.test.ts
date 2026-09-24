@@ -449,6 +449,64 @@ describe('el libro, y qué significa cada fecha', () => {
     expect(renglones.size).toBe(2);
   });
 
+  it('8b. un movimiento de cantidad CERO se ve: es la prueba de que alguien contó', async () => {
+    /*
+     * HALLAZGO de una rotura deliberada. Filtrar `quantity != 0` en la consulta
+     * del libro no ponía nada en rojo, y es de las roturas que más caro salen:
+     * el movimiento de un «contado en cero» tiene cantidad cero, y es
+     * exactamente la evidencia de que alguien recorrió la góndola y no había.
+     * Esconderlo borra la diferencia entre «se contó y no había» y «nadie lo
+     * contó», que es la distinción que sostiene todo el módulo.
+     */
+    const enCero = await articulo('9002');
+    const conSaldo = await articulo('9001');
+    await aperturaDeDevoto([
+      { productId: enCero.id, cantidad: '0' },
+      { productId: conSaldo.id, cantidad: '5' },
+    ]);
+
+    const pagina = await movimientosDelLibro(mirón, { productId: enCero.id });
+    expect(pagina.movimientos, 'el movimiento de cero está en el libro').toHaveLength(1);
+    expect(pagina.movimientos[0].cantidad).toBe('0');
+    expect(pagina.movimientos[0].type).toBe('OPENING_BALANCE');
+  });
+
+  it('9b. el orden es por SECUENCIA, no por el momento de registración', async () => {
+    /*
+     * HALLAZGO de otra rotura. Ordenar por `createdAt` en vez de por `seq` no
+     * ponía nada en rojo, porque en las pruebas los dos órdenes coinciden casi
+     * siempre. Casi.
+     *
+     * Acá se los hace diferir a propósito. Los dos movimientos de una apertura
+     * se escriben en la MISMA transacción, así que comparten `createdAt` al
+     * milisegundo —`now()` es el instante de la transacción, no el de la fila—
+     * y ordenar por fecha deja el desempate en manos del `id`. Creando los
+     * artículos en orden inverso al de su PLU, el orden de los `id` queda al
+     * revés del de la secuencia, y las dos respuestas dejan de coincidir.
+     *
+     * La secuencia es la única que dice en qué orden se escribió el libro.
+     */
+    const segundo = await articulo('9002');
+    const primero = await articulo('9001');
+    await aperturaDeDevoto([
+      { productId: primero.id, cantidad: '1' },
+      { productId: segundo.id, cantidad: '2' },
+    ]);
+
+    const pagina = await movimientosDelLibro(mirón, { type: 'OPENING_BALANCE' });
+    expect(pagina.movimientos.length).toBeGreaterThanOrEqual(2);
+
+    /* Comparten el instante de registración: el desempate no puede ser la fecha. */
+    const momentos = new Set(pagina.movimientos.map((m) => m.createdAt.getTime()));
+    expect(momentos.size, 'misma transacción, mismo createdAt').toBe(1);
+
+    /* Y aun así el orden es estrictamente descendente por secuencia. */
+    const seqs = pagina.movimientos.map((m) => BigInt(m.seq));
+    for (let i = 1; i < seqs.length; i += 1) {
+      expect(seqs[i] < seqs[i - 1], `posición ${i}: ${seqs[i]} tiene que ser menor`).toBe(true);
+    }
+  });
+
   it('9. balanceAfterSeq sigue el orden de registración', async () => {
     const p = await articulo('9001');
     await aperturaDeDevoto([{ productId: p.id, cantidad: '10' }]);
