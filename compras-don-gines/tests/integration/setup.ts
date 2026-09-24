@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
+import { exigirBaseDescartable } from '../../src/lib/base-de-pruebas';
 
 /**
  * Preparación de la base de pruebas.
@@ -35,12 +36,21 @@ export async function setup() {
       'Las pruebas de integración necesitan DATABASE_URL. Copiá .env.example a .env.test.',
     );
   }
-  if (!/test/i.test(process.env.DATABASE_URL)) {
-    throw new Error(
-      `Por seguridad las pruebas sólo corren contra una base cuyo nombre contenga "test". ` +
-        `DATABASE_URL apunta a otra cosa.`,
-    );
-  }
+  /*
+   * La guarda mira el NOMBRE de la base, no la URL entera.
+   *
+   * HALLAZGO. Decía comprobar «una base cuyo nombre contenga test» y en
+   * realidad corría `/test/i` sobre la URL COMPLETA. Con eso,
+   * `postgresql://tester:...@db.example.com/compras_produccion` pasaba: la
+   * palabra está en el usuario. Lo mismo un host `test.example.com` o una
+   * contraseña con «test» adentro. El mensaje prometía una cosa y el código
+   * hacía otra, que es la peor clase de guarda: la que tranquiliza sin proteger.
+   *
+   * `base-de-pruebas.ts` ya miraba el nombre —para esto mismo— y este archivo
+   * no lo usaba. `exigirBaseDescartable` además excluye la demo, que está
+   * desplegada y no es descartable.
+   */
+  exigirBaseDescartable(process.env.DATABASE_URL);
 
   // Storage limpio en cada corrida.
   const storage = path.join(raiz, process.env.STORAGE_LOCAL_DIR ?? './.storage-test');

@@ -11,6 +11,11 @@ import {
 } from '@/lib/services/stock-erp-recepcion';
 import { AUDIT_ACTIONS } from '@/lib/services/audit';
 import { PERMISSIONS } from '@/lib/auth/permissions';
+import {
+  esUnaBaseDePruebas,
+  esUnaBaseDescartable,
+  exigirBaseDescartable,
+} from '@/lib/base-de-pruebas';
 
 /**
  * **Los dos interruptores de Stock ERP, y por qué siguen apagados.**
@@ -120,6 +125,24 @@ describe('ningún seed productivo puede encenderlos', () => {
    * textual y fallaría ésta, que es la que importa.
    */
   function correrElSeedProductivo(extra: Record<string, string> = {}) {
+    /*
+     * **La guarda, antes de tocar nada.**
+     *
+     * Esta función corre el sembrado PRODUCTIVO, que borra y reescribe tablas.
+     * Si `DATABASE_URL` estuviera mal —un `.env` heredado, una variable de CI
+     * copiada de otro servicio, una terminal donde quedó exportada la de la
+     * demo— esto la sembraría sin preguntar.
+     *
+     * `exigirBaseDescartable` mira el NOMBRE de la base y exige «test» o «e2e».
+     * La demo NO alcanza, aunque `esUnaBaseDePruebas` la acepte para otras
+     * cosas: la demo está desplegada y hay gente mirándola.
+     *
+     * Va acá adentro y no sólo en el `setup` global porque ESTA función es la
+     * que destruye. Una guarda lejos de lo que protege es una guarda que
+     * alguien mueve sin darse cuenta.
+     */
+    exigirBaseDescartable(process.env.DATABASE_URL);
+
     execFileSync('npx', ['tsx', 'prisma/seed.ts'], {
       cwd: RAIZ,
       stdio: 'pipe',
@@ -131,6 +154,97 @@ describe('ningún seed productivo puede encenderlos', () => {
       },
     });
   }
+
+  it('el sembrado se NIEGA a correr si DATABASE_URL apunta a la demo', () => {
+    /*
+     * HALLAZGO de una rotura deliberada. La primera versión sólo llamaba a la
+     * guarda; quitarla no ponía NADA en rojo, porque contra la base de pruebas
+     * la guarda no hace nada de todos modos. Una protección que sólo se ejerce
+     * en el caso bueno no está protegida por ninguna prueba.
+     *
+     * Acá se apunta a propósito a la demo y se comprueba que la función se
+     * plante ANTES de ejecutar el seed. Es el caso que importa: la demo es un
+     * entorno desplegado, y es al que se llega por una variable mal copiada.
+     */
+    const original = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgresql://u:p@host:5432/compras_demo';
+    try {
+      expect(() => correrElSeedProductivo()).toThrow(/DESCARTABLE/);
+    } finally {
+      process.env.DATABASE_URL = original;
+    }
+  });
+
+  it('y tampoco si apunta a producción con un usuario llamado «tester»', () => {
+    const original = process.env.DATABASE_URL;
+    process.env.DATABASE_URL = 'postgresql://tester:p@host:5432/compras_produccion';
+    try {
+      expect(() => correrElSeedProductivo()).toThrow(/DESCARTABLE/);
+    } finally {
+      process.env.DATABASE_URL = original;
+    }
+  });
+
+  it('la guarda se niega contra cualquier base que no sea descartable', () => {
+    const prohibidas = [
+      ['producción', 'postgresql://u:p@host:5432/compras_produccion?schema=public'],
+      ['demo, que está desplegada', 'postgresql://u:p@host:5432/compras_demo'],
+      ['usuario que dice test', 'postgresql://tester:p@host:5432/compras_produccion'],
+      ['host que dice test', 'postgresql://u:p@test.example.com:5432/compras_produccion'],
+      ['contraseña que dice test', 'postgresql://u:testing@host:5432/compras_produccion'],
+      ['sin base', 'postgresql://u:p@host:5432/'],
+      ['vacía', ''],
+    ] as const;
+
+    for (const [porque, url] of prohibidas) {
+      expect(() => exigirBaseDescartable(url), porque).toThrow(/DESCARTABLE/);
+      expect(esUnaBaseDescartable(url), porque).toBe(false);
+    }
+
+    /* Y sí acepta las dos que de verdad se pueden tirar. */
+    expect(esUnaBaseDescartable('postgresql://u:p@host:5432/compras_don_gines_test')).toBe(true);
+    expect(esUnaBaseDescartable('postgresql://u:p@host:5432/compras_e2e')).toBe(true);
+  });
+
+  it('sin DATABASE_URL definida, la guarda también se niega', () => {
+    /*
+     * Hay que SACAR la variable para probar esto. Pasarle `undefined` a mano no
+     * sirve: el parámetro tiene `= process.env.DATABASE_URL` por omisión, así
+     * que un `undefined` explícito cae en la base de pruebas y la guarda pasa
+     * —con razón—. Escribí esa versión primero y quedó en rojo diciendo
+     * exactamente eso.
+     */
+    const original = process.env.DATABASE_URL;
+    delete process.env.DATABASE_URL;
+    try {
+      expect(() => exigirBaseDescartable()).toThrow(/DATABASE_URL no está definida/);
+    } finally {
+      process.env.DATABASE_URL = original;
+    }
+  });
+
+  it('la demo es «de pruebas» pero NO es descartable: son dos preguntas distintas', () => {
+    const demo = 'postgresql://u:p@host:5432/compras_demo';
+    expect(esUnaBaseDePruebas(demo), 'admite homologación').toBe(true);
+    expect(esUnaBaseDescartable(demo), 'no se siembra ni se borra').toBe(false);
+  });
+
+  it('la base contra la que corren estas pruebas es descartable', () => {
+    expect(esUnaBaseDescartable(process.env.DATABASE_URL)).toBe(true);
+  });
+
+  it('el setup de integración usa la guarda por nombre, no un grep de la URL', () => {
+    /*
+     * HALLAZGO. `setup.ts` decía comprobar «una base cuyo nombre contenga test»
+     * y corría `/test/i` sobre la URL entera, así que una URL de producción con
+     * un usuario `tester` pasaba. Esta afirmación impide que vuelva.
+     */
+    const setup = readFileSync(path.join(RAIZ, 'tests/integration/setup.ts'), 'utf8');
+    expect(setup).toContain('exigirBaseDescartable');
+    expect(setup, 'nada de grepear la URL entera').not.toMatch(
+      /\/test\/i\.test\(process\.env\.DATABASE_URL\)/,
+    );
+  });
 
   it('correr el seed productivo deja los dos apagados', async () => {
     correrElSeedProductivo();
