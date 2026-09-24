@@ -1218,15 +1218,101 @@ describe('idempotencia: la misma recepción dos veces no duplica', () => {
     expect(r.resolucion).toBe('APLICADA');
   });
 
-  it('26c. lo que cambia entre la vista previa y el bloqueo aborta la recepción', async () => {
+  /**
+   * El hueco entre la vista previa y el bloqueo.
+   *
+   * HALLAZGO de una rotura deliberada, y de los buenos. La primera versión de
+   * estas dos pruebas cambiaba el estado ANTES de llamar a recibir, y pasaban
+   * igual —pero por la vista previa que se calcula al entrar, no por la
+   * revalidación de adentro de la transacción—. Quitar el paso 3 entero no
+   * ponía NADA en rojo: la garantía existía en el código y no estaba verificada.
+   *
+   * Para ejercitarla de verdad el cambio tiene que caer DESPUÉS de la vista
+   * previa y ANTES del cuerpo de la transacción. Ese momento existe una sola
+   * vez, y es cuando el servicio llama a `$transaction`: se lo envuelve, se
+   * cambia el estado ahí, y recién entonces se deja seguir.
+   */
+  async function recibirConUnCambioEnElHueco(documentId: string, cambiar: () => Promise<unknown>) {
+    const original = prisma.$transaction.bind(prisma);
+    let yaPaso = false;
+    const envoltura = (async (argumento: unknown) => {
+      if (!yaPaso) {
+        yaPaso = true;
+        await cambiar();
+      }
+      return (original as (a: unknown) => Promise<unknown>)(argumento);
+    }) as unknown as typeof prisma.$transaction;
+
+    /* Se repone a mano en el `finally`: un espía filtrado rompe todo lo que sigue. */
+    Object.defineProperty(prisma, '$transaction', { value: envoltura, configurable: true });
+    try {
+      return await recibir(documentId);
+    } finally {
+      Object.defineProperty(prisma, '$transaction', { value: original, configurable: true });
+    }
+  }
+
+  it('26c. desaprobar la unidad en el hueco aborta la recepción', async () => {
+    const p = await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const doc = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ productId: p.id, cantidad: '2.5' }],
+    });
+
+    await expect(
+      recibirConUnCambioEnElHueco(doc.id, () =>
+        prisma.productStockConfig.update({
+          where: { productId: p.id },
+          data: { status: 'PENDIENTE' },
+        }),
+      ),
+    ).rejects.toThrow(/unidad de existencia.*dejó de estar aprobada/i);
+
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+    expect(await prisma.stockReceipt.count()).toBe(0);
+    expect(await prisma.stockOperation.count({ where: { kind: 'RECEPCION_COMPRA' } })).toBe(0);
+  });
+
+  it('26d. dar de baja el artículo en el hueco también la aborta', async () => {
+    const p = await articulo('9001');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const doc = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ productId: p.id, cantidad: '2.5' }],
+    });
+
+    await expect(
+      recibirConUnCambioEnElHueco(doc.id, () =>
+        prisma.product.update({ where: { id: p.id }, data: { active: false } }),
+      ),
+    ).rejects.toThrow(/se dio de baja/i);
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+  });
+
+  it('26e. cambiar la unidad aprobada en el hueco la aborta: la cantidad ya no diría lo mismo', async () => {
+    const p = await articulo('9001', 'KG');
+    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
+    const doc = await comprobante({
+      branchId: escenario.sucursales.devoto,
+      renglones: [{ productId: p.id, cantidad: '2.5' }],
+    });
+
+    await expect(
+      recibirConUnCambioEnElHueco(doc.id, () =>
+        prisma.productStockConfig.update({
+          where: { productId: p.id },
+          data: { stockUnit: 'UNIT' },
+        }),
+      ),
+    ).rejects.toThrow(/cambió de KG a UNIT/i);
+    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+  });
+
+  it('26f. y el estado que NO cambió pasa: la revalidación no frena de más', async () => {
     /*
-     * La vista previa se calcula AFUERA de la transacción, porque es cara. Eso
-     * abre una ventana: entre que dijo «este renglón entra como 2,5 KG» y que
-     * la transacción toma el bloqueo, alguien puede desaprobar la unidad de
-     * existencia del artículo. Un movimiento escrito con la clasificación vieja
-     * no se distingue de uno bueno una semana después.
-     *
-     * El corte se simula desaprobando la unidad justo antes de confirmar.
+     * El control del control. Si la revalidación rechazara siempre, las tres
+     * pruebas de arriba pasarían sin probar nada.
      */
     const p = await articulo('9001');
     await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
@@ -1234,34 +1320,12 @@ describe('idempotencia: la misma recepción dos veces no duplica', () => {
       branchId: escenario.sucursales.devoto,
       renglones: [{ productId: p.id, cantidad: '2.5' }],
     });
-
-    /* La vista previa, mirada y aceptada: el renglón entra. */
-    const previa = await vistaPreviaDeRecepcion(receptor, { documentId: doc.id });
-    expect(previa.renglones[0].clase).toBe('MERCADERIA');
-
-    /* Y entonces alguien desaprueba la unidad. */
-    await prisma.productStockConfig.update({
-      where: { productId: p.id },
-      data: { status: 'PENDIENTE' },
-    });
-
-    await expect(recibir(doc.id)).rejects.toThrow(/unidad de existencia/i);
-    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
-    expect(await prisma.stockReceipt.count()).toBe(0);
-  });
-
-  it('26d. y un artículo dado de baja en el medio también la aborta', async () => {
-    const p = await articulo('9001');
-    await aperturaDe(escenario.sucursales.devoto, CORTE, [{ productId: p.id, cantidad: '10' }]);
-    const doc = await comprobante({
-      branchId: escenario.sucursales.devoto,
-      renglones: [{ productId: p.id, cantidad: '2.5' }],
-    });
-    await vistaPreviaDeRecepcion(receptor, { documentId: doc.id });
-    await prisma.product.update({ where: { id: p.id }, data: { active: false } });
-
-    await expect(recibir(doc.id)).rejects.toThrow(/inactivo|se dio de baja/i);
-    expect(await prisma.stockLedger.count({ where: { type: 'PURCHASE_IN' } })).toBe(0);
+    /* Un cambio en el hueco que no toca nada de lo que importa. */
+    const r = await recibirConUnCambioEnElHueco(doc.id, () =>
+      prisma.product.update({ where: { id: p.id }, data: { normalizedName: 'OTRO NOMBRE' } }),
+    );
+    expect(r.resolucion).toBe('APLICADA');
+    expect(r.movimientos).toBe(1);
   });
 
   it('27. la base impide dos recepciones del mismo comprobante', async () => {
