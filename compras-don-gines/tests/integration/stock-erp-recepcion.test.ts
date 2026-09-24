@@ -1324,7 +1324,8 @@ describe('el receptor es el libro local, y nada más', () => {
           lineNumber: 1,
           supplierCode: 'X1',
           description: 'ARTICULO FICTICIO 9001',
-          quantity: '5',
+          /* 10 × 100 = 1.000, que es el neto impreso: el comprobante cierra. */
+          quantity: '10',
           unit: 'KG' as const,
           unitNetPrice: '100',
           discountPct: '0',
