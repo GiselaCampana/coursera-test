@@ -47,6 +47,18 @@ async function abrirBorrador(page: Page, proyecto: string) {
   const tarjeta = tarjetaDe(page, sucursalDe(proyecto));
   const preparar = tarjeta.locator('[data-prueba="preparar"]');
   if (await preparar.isVisible().catch(() => false)) {
+    /*
+     * Se TILDA «ficticia», y antes no hacía falta. La casilla se llamaba `real`
+     * con valor `no`, y con eso toda apertura salía ficticia estuviera tildada
+     * o no: el campo ausente también daba ficticia. Un control que hace lo mismo
+     * en sus dos posiciones no es un control, y estas pruebas se apoyaban en esa
+     * falla sin saberlo.
+     *
+     * Arreglado el control, sin marcar significa REAL, y una apertura real no se
+     * confirma con el interruptor apagado —que es lo correcto y lo que pasó
+     * cuando el arreglo llegó—. Estas pruebas homologan, así que lo dicen.
+     */
+    await tarjeta.locator('[data-prueba="marcar-ficticia"]').check();
     await preparar.click();
     /*
      * Se espera el ENLACE a la apertura, no el mensaje de «listo».
