@@ -96,15 +96,35 @@ test.describe('comprobantes', () => {
 
   test('el filtro por estado acota la lista', async ({ page }) => {
     await ingresar(page, 'admin');
-    await page.goto('/comprobantes?estado=VALIDADO');
+    /*
+     * Se filtra TAMBIÉN por sucursal, y no es un rodeo para esquivar un
+     * problema: la cuenta «dos» sólo significa algo si está acotada a los
+     * comprobantes que esta prueba siembra. Sin la sucursal, la afirmación era
+     * «en toda la base hay exactamente dos validados», que es una propiedad del
+     * sembrado entero y no de este filtro; cualquier prueba que sembrara un
+     * comprobante más la rompía sin que el filtro hubiera cambiado. Las
+     * recepciones de Stock ERP siembran los suyos, en otras sucursales, y fue
+     * lo que la puso en rojo.
+     *
+     * Lo que la prueba dice sigue siendo lo mismo, y ahora se sostiene: el
+     * filtro acota, y no se cuela nada que no corresponda.
+     */
+    const devoto = await page.evaluate(async () => {
+      const r = await fetch('/comprobantes');
+      const html = await r.text();
+      const m = html.match(/value="([^"]+)"[^>]*>\s*Devoto\s*</);
+      return m ? m[1] : '';
+    });
+    expect(devoto, 'hace falta el id de Devoto para acotar la cuenta').not.toBe('');
+    await page.goto(`/comprobantes?estado=VALIDADO&sucursal=${devoto}`);
 
-    // Los dos comprobantes confirmados que siembran las pruebas.
+    // Los dos comprobantes confirmados que siembran las pruebas, en Devoto.
     const confirmados = page.locator('a.fila-dato');
     await expect(confirmados).toHaveCount(2);
     await expect(page.getByText('0010-00212356')).toBeVisible();
     await expect(page.getByText('0010-00212400')).toBeVisible();
 
-    // Al filtrar por anulados no queda ninguno.
+    // Al filtrar por anulados no queda ninguno, en ninguna sucursal.
     await page.goto('/comprobantes?estado=ANULADO');
     await expect(page.locator('a.fila-dato')).toHaveCount(0);
     await expect(page.getByText('No hay comprobantes con esos filtros')).toBeVisible();

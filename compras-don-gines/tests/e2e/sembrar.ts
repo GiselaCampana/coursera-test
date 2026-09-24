@@ -933,6 +933,19 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
           createdById: adminId,
           validatedById: adminId,
           validatedAt: new Date('2026-09-09T12:00:00Z'),
+          /*
+           * Cargados en el pasado, y no con el reloj del sembrado.
+           *
+           * El tablero muestra las OCHO últimas facturas cargadas, ordenadas
+           * por `createdAt`. Con la fecha de ahora, estos doce comprobantes de
+           * recepción ocupaban las ocho y empujaban afuera a las facturas que
+           * el resto de las pruebas espera ver: dos pruebas de pagos en rojo
+           * por el sembrado, no por un defecto de la pantalla.
+           *
+           * Además es lo que corresponde: son comprobantes viejos, ya
+           * validados, que esperan que alguien reciba su mercadería.
+           */
+          createdAt: new Date('2026-09-09T12:00:00Z'),
           items: {
             create: renglones.map((r, i) => ({
               lineNumber: i + 1,
