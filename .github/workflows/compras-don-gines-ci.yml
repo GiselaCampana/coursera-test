@@ -116,12 +116,20 @@ jobs:
       - name: Chromium
         run: npx playwright install --with-deps chromium
 
+      # Preparar el entorno va en su PROPIO paso, y no pegado a Playwright.
+      #
+      # Pegados, una caída del sembrado y una prueba en rojo se ven igual desde
+      # afuera: el mismo paso, el mismo «failure». Separados, el nombre del paso
+      # que falla ya dice dónde mirar, que es la mitad del trabajo cuando el log
+      # de CI no se puede descargar.
+      - name: Preparar el entorno end to end (migrar, compilar, sembrar)
+        run: node scripts/preparar-e2e.mjs
+
       # Las end to end que corren sobre comprobantes dibujados, que tardan
       # segundos. Las que leen las fotos reales quedan fuera de CI porque cada
       # una lleva minutos de OCR; se corren a mano antes de desplegar.
       - name: Playwright de catálogo, asociaciones y alta de comprobantes
         run: |
-          node scripts/preparar-e2e.mjs
           npx playwright test \
             tests/e2e/asociaciones.spec.ts \
             tests/e2e/catalogo.spec.ts \
