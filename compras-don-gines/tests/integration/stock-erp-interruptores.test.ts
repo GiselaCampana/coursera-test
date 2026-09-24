@@ -262,22 +262,84 @@ describe('ningún seed productivo puede encenderlos', () => {
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
   });
 
-  it('ni con variables de entorno que parezcan pedirlo', async () => {
+  it('ni con TODAS las variables que el seed llega a leer, puestas en verdadero', async () => {
     /*
-     * Las variables no existen, y ése es justamente el punto: si alguna vez
-     * alguien agregara una, esta prueba se pondría en rojo el día que la
-     * agregue, no el día que alguien la copie sin querer a producción.
+     * HALLAZGO de una rotura deliberada. La primera versión de esta prueba
+     * inventaba cinco nombres de variable —`STOCKERP_REAL_RECEIPTS` y
+     * parecidos— y los ponía en «1». La rotura usó un sexto nombre que no se me
+     * había ocurrido y pasó sin que nada se pusiera en rojo.
+     *
+     * Adivinar nombres es un juego que se pierde siempre. Lo que sí se puede
+     * acotar es la SUPERFICIE: el sembrado sólo puede dejarse influir por las
+     * variables que efectivamente lee. Así que se extraen del propio código las
+     * que nombra, se las pone todas en verdadero y se corre.
+     *
+     * Si mañana alguien agrega `process.env.LO_QUE_SEA` para encender un
+     * interruptor, esta prueba lo va a extraer, lo va a poner en «1» y se va a
+     * poner en rojo ese mismo día.
      */
-    correrElSeedProductivo({
-      STOCKERP_REAL_OPENINGS: '1',
-      STOCKERP_REAL_RECEIPTS: '1',
-      REAL_OPENING_ENABLED: 'true',
-      REAL_PURCHASE_RECEIPTS_ENABLED: 'true',
-      STOCK_ERP_HABILITAR: 'si',
-    });
-    const filas = await estadoCrudo();
-    expect(filas[0].realOpeningEnabled).toBe(false);
-    expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
+    const fuente = readFileSync(path.join(RAIZ, 'prisma/seed.ts'), 'utf8');
+
+    /*
+     * El acceso por corchetes no se puede analizar así, y por eso se prohíbe:
+     * `process.env[algo]` esconde el nombre detrás de una expresión.
+     */
+    expect(fuente, 'el seed no lee variables por corchetes').not.toMatch(/process\.env\s*\[/);
+
+    const nombres = [...new Set([...fuente.matchAll(/process\.env\.([A-Z0-9_]+)/g)].map((m) => m[1]))];
+    expect(nombres.length, 'algo lee el seed del entorno').toBeGreaterThan(0);
+
+    /*
+     * Se corre UNA VEZ POR VARIABLE, no todas juntas.
+     *
+     * Juntas se contradicen: el seed tiene sus propias validaciones cruzadas
+     * —`RESET_ADMIN_REQUEST_ID` exige `AUTH_PROVIDER=local`, por ejemplo— y
+     * aborta antes de llegar a ninguna conclusión. Una por una cada variable
+     * queda aislada, que además es el caso realista: la que alguien copia sin
+     * querer es una, no seis.
+     *
+     * Las contraseñas necesitan un valor válido o el seed se planta por
+     * fortaleza, que es otra protección y no la que se está probando acá.
+     */
+    const contrasenas = new Set(['SEED_ADMIN_PASSWORD', 'SEED_OPERATOR_PASSWORD']);
+    for (const nombre of nombres) {
+      /*
+       * Base limpia antes de cada corrida. El sembrado productivo es idempotente
+       * consigo mismo, no contra el escenario de pruebas: con
+       * `SEED_CATALOGO_DEMO=1` siembra un catálogo de demostración que choca con
+       * los alias que ya puso el escenario. Ese choque es de los fixtures y no
+       * del módulo, y correr el seed solo —que es como corre de verdad— lo
+       * evita sin tapar nada.
+       */
+      await limpiarBase();
+      const entorno: Record<string, string> = {
+        [nombre]: contrasenas.has(nombre) ? 'PruebasDonGines1' : '1',
+      };
+
+      /*
+       * Que el seed FALLE con una variable puesta también es una respuesta
+       * válida —un sembrado que no corre no enciende nada— y hay una que hoy
+       * falla: `SEED_CATALOGO_DEMO=1` revienta por una unicidad de alias, un
+       * defecto viejo del sembrado de Compras que esta barrida destapó y que no
+       * es de esta fase arreglar.
+       *
+       * Lo que NO se acepta es que el fallo tape la pregunta: corra o no corra,
+       * después se miran los dos interruptores igual.
+       */
+      let corrio = true;
+      try {
+        correrElSeedProductivo(entorno);
+      } catch {
+        corrio = false;
+      }
+
+      const filas = await estadoCrudo();
+      expect(filas[0].realOpeningEnabled, `con ${nombre}=1 (el seed ${corrio ? 'corrió' : 'falló'})`).toBe(false);
+      expect(
+        filas[0].realPurchaseReceiptsEnabled,
+        `con ${nombre}=1 (el seed ${corrio ? 'corrió' : 'falló'})`,
+      ).toBe(false);
+    }
   });
 
   it('y el sembrado de pruebas tampoco', async () => {
