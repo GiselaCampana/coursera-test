@@ -31,12 +31,29 @@ en producción y medir sobre datos inventados diría cualquier cosa.
 
 ## Qué revertir si hace falta volver atrás
 
-Sólo código. `git revert` de los commits de la fase, o mover la rama:
+Sólo código, y **sin reescribir la historia**. Dos caminos, los dos válidos:
+
+**1. Revertir los commits, del último al primero.** Queda constancia de que la
+fase existió y de que se volvió atrás, que es lo que hace falta cuando otro
+entorno ya tiene esos commits:
 
 ```
 git checkout stock-erp-fase-5
-git reset --hard 2c34bee5fb08dc31e3c73a59b275aff2b9c5d30b   # cabeza aprobada de la fase 4
+git revert --no-commit <commit-mas-nuevo> ... <commit-mas-viejo>
+git commit -m "Revertir la fase 5 de Stock ERP"
 ```
+
+El orden inverso importa: revertir primero el más viejo deja conflictos que el
+segundo revert no sabe resolver.
+
+**2. Desplegar el SHA anterior.** Si lo que hace falta es que el servicio deje de
+correr la fase 5 ya, se despliega `2c34bee5fb08dc31e3c73a59b275aff2b9c5d30b`
+—cabeza aprobada de la fase 4— sin tocar la rama. Nada que revertir, nada que
+reescribir, y volver a la fase 5 es desplegar su SHA otra vez.
+
+Lo que **no** hay que hacer es mover la rama con `git reset --hard`: descarta
+commits que otros clones ya tienen, obliga a un push forzado y deja sin rastro
+que la fase se revirtió. Esta nota recomendaba eso; queda corregido.
 
 No hay que tocar la base. Las cuatro pantallas nuevas y el servicio de consultas
 **sólo leen**: no crean filas, no las modifican y no las borran. Quitarlos deja el
