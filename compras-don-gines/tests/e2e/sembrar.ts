@@ -1004,7 +1004,184 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
     await comprobante(`900${sufijo}6`, '2026-09-08', [
       { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '2' },
     ]);
+
+    /*
+     * 7 y 8. Dos ingresos ya asentados, el segundo RETROACTIVO.
+     *
+     * Hacen falta para poder mirar en el navegador la pantalla que explica las
+     * dos líneas de tiempo: uno con fecha efectiva del 12 registrado primero, y
+     * otro del 8 registrado después. El segundo entró al libro fuera de orden
+     * cronológico, que es lo que pasa cuando alguien carga el lunes una
+     * mercadería que llegó el viernes.
+     *
+     * Se escriben con SQL por lo mismo que la apertura: esto es sembrado, y los
+     * servicios importan `server-only`. Las reglas de la base se respetan igual
+     * —las dos fechas son posteriores al corte, el saldo se actualiza una vez y
+     * apunta al último movimiento de la misma transacción—.
+     */
+    const doc7 = await comprobante(`900${sufijo}7`, '2026-09-08', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '1.5' },
+    ]);
+    const doc8 = await comprobante(`900${sufijo}8`, '2026-09-08', [
+      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '0.5' },
+    ]);
+    await sembrarIngresoRetroactivo(prisma, {
+      adminId,
+      sucursalId: sucursal.id,
+      producto: contables[0],
+      /* El que pasó después, registrado primero. */
+      primero: { documento: doc7, efectiva: new Date('2026-09-12T15:00:00.000Z'), cantidad: '1.5' },
+      /* El que pasó antes, registrado después: retroactivo. */
+      segundo: { documento: doc8, efectiva: new Date('2026-09-08T15:00:00.000Z'), cantidad: '0.5' },
+    });
   }
+
+  /*
+   * Unos asientos de auditoría de Stock ERP, para que la pantalla tenga qué
+   * mostrar.
+   *
+   * El sembrado escribe la apertura con SQL y no por el servicio, así que no
+   * deja auditoría. Estos asientos reproducen los que el camino real escribe,
+   * con los mismos nombres de acción, para poder mirar la pantalla sin depender
+   * de que otra prueba haya confirmado algo antes.
+   */
+  const sucursalDeAuditoria = await prisma.branch.findFirstOrThrow({
+    where: { code: 'RECEP_IPHONE' },
+  });
+  await prisma.auditLog.createMany({
+    data: [
+      {
+        userId: adminId,
+        action: 'stockerp.configuracion_creada',
+        entity: 'ProductStockConfig',
+        entityId: contables[0].id,
+        after: { stockUnit: 'KG', status: 'APROBADA', plu: contables[0].internalCode },
+        reason: 'Primera aprobación de la unidad de existencia.',
+      },
+      {
+        userId: adminId,
+        action: 'stockerp.apertura_confirmada',
+        entity: 'StockCountSession',
+        entityId: `sembrado-${sucursalDeAuditoria.id}`,
+        after: {
+          sucursal: sucursalDeAuditoria.name,
+          contados: 2,
+          ceros: 1,
+          ficticia: true,
+        },
+        reason: 'Apertura de homologación.',
+      },
+      {
+        userId: adminId,
+        action: 'stockerp.intento_rechazado',
+        entity: 'StockReceipt',
+        entityId: 'sembrado',
+        after: { permisoQueFaltaba: 'stockerp.recepcion.confirmar', detalle: 'confirmar recepción' },
+      },
+      {
+        userId: adminId,
+        action: 'stockerp.bloqueado_por_interruptor',
+        entity: 'StockReceipt',
+        entityId: 'sembrado',
+        after: { motivo: 'El interruptor de recepciones reales está apagado.' },
+      },
+    ],
+  });
+}
+
+/**
+ * Dos ingresos de compra ya asentados, el segundo con fecha efectiva anterior.
+ *
+ * Es la única forma de tener un movimiento retroactivo para mirar en el
+ * navegador: el camino real lo produciría recibiendo dos comprobantes en orden
+ * inverso, y eso ya lo cubren las pruebas de integración de la fase 4.
+ */
+async function sembrarIngresoRetroactivo(
+  prisma: PrismaClient,
+  datos: {
+    adminId: string;
+    sucursalId: string;
+    producto: { id: string; internalCode: string };
+    primero: { documento: { id: string }; efectiva: Date; cantidad: string };
+    segundo: { documento: { id: string }; efectiva: Date; cantidad: string };
+  },
+) {
+  const { adminId, sucursalId, producto } = datos;
+  const cfg = await prisma.productStockConfig.findUniqueOrThrow({
+    where: { productId: producto.id },
+  });
+  const unidad = cfg.stockUnit!;
+
+  await prisma.$transaction(async (tx) => {
+    const saldoPrevio = await tx.stockBalance.findUniqueOrThrow({
+      where: { productId_branchId: { productId: producto.id, branchId: sucursalId } },
+    });
+    let acumulado = saldoPrevio.quantity;
+
+    let ultimoId = saldoPrevio.lastLedgerId;
+    let ultimaOperacion = saldoPrevio.lastOperationId;
+
+    for (const [orden, paso] of [datos.primero, datos.segundo].entries()) {
+      const operacion = await tx.stockOperation.create({
+        data: {
+          operationKey: `recepcion:${paso.documento.id}`,
+          kind: 'RECEPCION_COMPRA',
+          contentHash: `sembrado:${paso.documento.id}`,
+          documentId: paso.documento.id,
+          branchId: sucursalId,
+          requestedById: adminId,
+          receivedAt: paso.efectiva,
+          movementCount: 1,
+        },
+      });
+      const renglon = await tx.documentItem.findFirstOrThrow({
+        where: { documentId: paso.documento.id },
+        select: { id: true },
+      });
+
+      /* El acumulado sigue el orden de REGISTRACIÓN, que es el de este bucle. */
+      acumulado = acumulado.plus(paso.cantidad);
+      const movId = `${operacion.id}-${renglon.id}`;
+
+      await tx.$executeRaw`
+        INSERT INTO "stock_ledger"
+          ("id","txId","productId","pluHistorico","branchId","type","direction",
+           "quantity","unit","effectiveAt","operationId","userId","idempotencyKey",
+           "balanceAfterSeq","documentId","documentItemId","invoicedQuantity",
+           "invoicedUnit","conversionFactorUsed","reason","createdAt")
+        VALUES (${movId}, txid_current(), ${producto.id}, ${producto.internalCode},
+                ${sucursalId}, 'PURCHASE_IN'::"StockMovementType", 'IN'::"StockDirection",
+                ${paso.cantidad}::numeric, ${unidad}::"StockUnit", ${paso.efectiva},
+                ${operacion.id}, ${adminId}, ${`recepcion:${paso.documento.id}:${renglon.id}`},
+                ${acumulado.toString()}::numeric, ${paso.documento.id}, ${renglon.id},
+                ${paso.cantidad}::numeric, ${unidad}::"StockUnit", 1::numeric,
+                'Recepción de compra', now() + (${orden} || ' milliseconds')::interval)`;
+
+      await tx.stockReceipt.create({
+        data: {
+          documentId: paso.documento.id,
+          branchId: sucursalId,
+          receivedAt: paso.efectiva,
+          resolution: 'APLICADA',
+          operationId: operacion.id,
+          decidedById: adminId,
+        },
+      });
+
+      ultimoId = movId;
+      ultimaOperacion = operacion.id;
+    }
+
+    await tx.stockBalance.update({
+      where: { id: saldoPrevio.id },
+      data: {
+        quantity: acumulado.toString(),
+        lastLedgerId: ultimoId,
+        lastOperationId: ultimaOperacion,
+        version: { increment: 1 },
+      },
+    });
+  });
 }
 
 // Al invocarlo como script (npm run e2e:seed) se ejecuta directamente.

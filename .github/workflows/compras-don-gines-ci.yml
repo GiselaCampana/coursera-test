@@ -20,6 +20,10 @@ on:
       # La rama de la fase 4: la recepción de compras. Lo que hay que verificar
       # no es sólo lo nuevo, es que Compras siga entera con la recepción adentro.
       - stock-erp-fase-4
+      # La rama de la fase 5: las consultas. Primordialmente de lectura, pero la
+      # verificación es la misma: lo que hay que comprobar no es sólo lo nuevo,
+      # es que Compras y las cuatro fases anteriores sigan enteras.
+      - stock-erp-fase-5
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -143,4 +147,5 @@ jobs:
             tests/e2e/carga-manual.spec.ts \
             tests/e2e/stock-erp-unidades.spec.ts \
             tests/e2e/stock-erp-apertura.spec.ts \
-            tests/e2e/stock-erp-recepcion.spec.ts
+            tests/e2e/stock-erp-recepcion.spec.ts \
+            tests/e2e/stock-erp-consultas.spec.ts
