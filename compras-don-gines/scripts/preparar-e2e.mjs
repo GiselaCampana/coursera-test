@@ -29,9 +29,36 @@ for (const linea of readFileSync(ruta, 'utf8').split('\n')) {
   process.env[clave] = valor;
 }
 
-if (!/e2e|test/i.test(process.env.DATABASE_URL ?? '')) {
+/*
+ * La guarda mira el NOMBRE de la base, no la URL entera.
+ *
+ * HALLAZGO de la fase 5, el mismo que apareció en el arranque de las pruebas de
+ * integración: acá decía `/e2e|test/i.test(DATABASE_URL)`, y eso aceptaba
+ * `postgresql://tester@host/compras_don_gines` —producción— porque la palabra
+ * estaba en el usuario. Lo que sigue aplica migraciones y corre un sembrado que
+ * empieza con TRUNCATE; una guarda que se saltea con un nombre de usuario no es
+ * una guarda.
+ *
+ * Se repite la expresión en vez de importar `src/lib/base-de-pruebas.ts` porque
+ * esto es un `.mjs` que corre con node a secas, antes de que exista cualquier
+ * compilación. El sembrado que viene después SÍ usa la guarda de verdad
+ * (`exigirBaseDescartable`), así que esto es el aviso temprano, no la
+ * protección última: por eso puede permitirse ser una copia.
+ */
+const nombreDeLaBase = (url) => {
+  try {
+    return new URL(url).pathname.replace(/^\//, '') || null;
+  } catch {
+    return null;
+  }
+};
+const nombre = nombreDeLaBase(process.env.DATABASE_URL ?? '');
+if (nombre === null || !/(^|[-_])(e2e|test)([-_]|$)/i.test(nombre)) {
   console.error(
-    'Por seguridad las pruebas end to end sólo corren contra una base cuyo nombre contenga "e2e" o "test".',
+    'Por seguridad las pruebas end to end sólo corren contra una base cuyo NOMBRE contenga\n' +
+      '"e2e" o "test". No alcanza con que la palabra esté en el usuario o en el host, y la\n' +
+      'demo no cuenta: está desplegada. No se aplicó ninguna migración.\n' +
+      `Base vista: ${nombre ?? '(ninguna: DATABASE_URL no está definida)'}`,
   );
   process.exit(1);
 }

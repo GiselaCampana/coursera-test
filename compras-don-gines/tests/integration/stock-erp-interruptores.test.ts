@@ -246,6 +246,60 @@ describe('ningún seed productivo puede encenderlos', () => {
     );
   });
 
+  it('el sembrado de end to end, que trunca, exige base descartable y no admite la demo', () => {
+    /*
+     * HALLAZGO de la fase 5, hermano del anterior. `tests/e2e/sembrar.ts`
+     * empieza con un TRUNCATE y pedía `exigirBaseDePruebas`, que acepta un
+     * nombre con «demo». La demo está desplegada: truncarla no es un accidente
+     * de laboratorio.
+     *
+     * Se afirma sobre el TEXTO del sembrado y no ejecutándolo porque ejecutarlo
+     * es justamente lo que no se puede hacer para comprobar esto: la única
+     * forma de ver la guarda actuar sería apuntarlo a una base no descartable.
+     */
+    const seed = readFileSync(path.join(RAIZ, 'tests/e2e/sembrar.ts'), 'utf8');
+    expect(seed, 'la guarda estrecha, la que excluye la demo').toContain('exigirBaseDescartable()');
+    expect(seed, 'la guarda ancha ya no alcanza para algo que trunca').not.toMatch(
+      /exigirBaseDePruebas\s*\(/,
+    );
+    expect(seed, 'y sigue truncando: si dejara de hacerlo, esta prueba habría que repensarla')
+      .toContain('TRUNCATE TABLE');
+  });
+
+  it('el preparador de end to end mira el nombre de la base, no la URL entera', () => {
+    /*
+     * HALLAZGO. `scripts/preparar-e2e.mjs` aplica migraciones y corre el
+     * sembrado, y comprobaba `/e2e|test/i` sobre la URL COMPLETA: una URL de
+     * producción con usuario `tester` pasaba.
+     *
+     * Es un `.mjs` que corre con node antes de compilar nada, así que no puede
+     * importar la guarda de TypeScript; lo que se exige acá es que compare
+     * contra el nombre extraído y no contra la cadena entera.
+     */
+    const preparador = readFileSync(path.join(RAIZ, 'scripts/preparar-e2e.mjs'), 'utf8');
+    expect(preparador, 'nada de grepear la URL entera').not.toMatch(
+      /test\(process\.env\.DATABASE_URL\s*\?\?\s*''\)/,
+    );
+    expect(preparador, 'se compara contra el nombre extraído').toMatch(
+      /test\(\s*nombre\s*\)/,
+    );
+
+    /*
+     * Y la expresión que usa tiene que rechazar lo mismo que rechaza la guarda
+     * de verdad. Se extrae del archivo y se la corre: copiar la regla es
+     * aceptable, copiarla MAL no.
+     */
+    const copiada = preparador.match(/\/\(\^\|\[-_\]\)\([^/]+\)\(\[-_\]\|\$\)\/i/);
+    expect(copiada, 'la expresión del preparador sigue estando donde se la busca').not.toBeNull();
+    const expresion = new RegExp(copiada![0].slice(1, -2), 'i');
+    for (const nombre of ['compras_produccion', 'compras_demo', 'compras_don_gines']) {
+      expect(expresion.test(nombre), `${nombre} no es descartable`).toBe(false);
+    }
+    for (const nombre of ['compras_test', 'compras_don_gines_e2e']) {
+      expect(expresion.test(nombre), `${nombre} sí lo es`).toBe(true);
+    }
+  });
+
   it('correr el seed productivo deja los dos apagados', async () => {
     correrElSeedProductivo();
     const filas = await estadoCrudo();

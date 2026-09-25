@@ -18,7 +18,7 @@ import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
 import { addDays, arToday } from '../../src/lib/datetime';
 import { sembrarLaCompraDeEzra } from '../fixtures/compra-de-ezra';
-import { exigirBaseDePruebas } from '../../src/lib/base-de-pruebas';
+import { exigirBaseDescartable } from '../../src/lib/base-de-pruebas';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 
@@ -44,12 +44,25 @@ export async function sembrar() {
   /*
    * Antes de tocar nada: esto empieza con un TRUNCATE.
    *
-   * La guarda no es ceremonia. Este sembrado ya no lo corre sólo una persona
-   * desde su máquina: la vista previa hospedada lo ejecuta en cada arranque,
-   * con la variable de entorno que tenga cargada el servicio. Si esa variable
-   * alguna vez apuntara a otro lado, esto vaciaría la base equivocada.
+   * La guarda no es ceremonia. Este sembrado no lo corre sólo una persona
+   * mirando contra qué base apunta: lo corre `npm run e2e:seed`, lo corre el
+   * preparador de las end to end y lo corre CI, siempre con la variable de
+   * entorno que tenga cargada. Si esa variable alguna vez apuntara a otro
+   * lado, esto vaciaría la base equivocada.
+   *
+   * HALLAZGO de la fase 5. Acá decía `exigirBaseDePruebas`, que acepta un
+   * nombre con «demo». La demo está DESPLEGADA: vaciarla no es un accidente de
+   * laboratorio, es dejar sin datos un entorno que alguien está mirando. Lo que
+   * corresponde para algo que trunca es la guarda estrecha, la misma que usan
+   * las pruebas de integración.
+   *
+   * (El comentario anterior decía además que «la vista previa hospedada lo
+   * ejecuta en cada arranque». No es cierto: la hospedada corre
+   * `npm run db:seed`, que es `prisma/seed.ts` y usa upserts. Se corrige porque
+   * era justamente el argumento por el que la guarda parecía tener que aceptar
+   * la demo.)
    */
-  exigirBaseDePruebas();
+  exigirBaseDescartable();
 
   // El cliente se construye acá adentro, no al importar el módulo: quien llama
   // necesita poder cargar antes las variables de entorno de las pruebas.
@@ -693,16 +706,27 @@ async function sembrarCon(prisma: PrismaClient) {
   await sembrarLaCompraDeEzra(prisma, { sucursalId: devoto.id, autorId: admin.id });
 
   /*
-   * Tres artículos con unidad de existencia aprobada, para Stock ERP.
+   * Cuatro artículos con unidad de existencia aprobada, para Stock ERP.
    *
    * Sin esto, TODAS las líneas de una apertura nacen bloqueadas por falta de
    * unidad y no hay nada que contar: las pruebas del conteo no tendrían sobre
    * qué correr, y las capturas mostrarían un tablero de un solo color.
    *
-   * Se aprueban tres y no todos a propósito. El tablero realista de una
+   * Se aprueban cuatro y no todos a propósito. El tablero realista de una
    * apertura tiene las dos cosas —artículos listos para contar y artículos
    * todavía sin unidad— y esa mezcla es justamente lo que la pantalla tiene
    * que saber mostrar.
+   *
+   * El CUARTO existe por una razón concreta, y conviene dejarla escrita porque
+   * ya costó dos pruebas en rojo: los ingresos retroactivos de la fase 5
+   * necesitan un artículo PROPIO. Cuando se asentaban sobre el primero, le
+   * movían el saldo de 10 a 12 y la vista previa de la fase 4 —que afirma 10 y
+   * 12,5— pasaba a fallar. Un sembrado nuevo no debe correrle el piso al
+   * escenario de otra fase; le agrega el suyo.
+   *
+   * Además es de unidad UNIT, mientras los tres primeros son KG: así el tablero
+   * tiene dos unidades incompatibles de verdad y la regla de no sumarlas juntas
+   * se ejercita sobre datos que la violarían si estuviera mal.
    *
    * La aprobación se escribe acá directamente, con `approvedById`, porque es
    * sembrado: el camino con permiso y doble confirmación lo ejercitan las
@@ -711,7 +735,7 @@ async function sembrarCon(prisma: PrismaClient) {
   const paraContar = await prisma.product.findMany({
     where: { active: true },
     orderBy: { internalCode: 'asc' },
-    take: 3,
+    take: 4,
   });
   for (const p of paraContar) {
     await prisma.productStockConfig.create({
@@ -775,11 +799,26 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
    */
   const CORTE = new Date('2026-09-05T23:30:00.000Z');
 
-  /* Los tres con unidad aprobada, que son los únicos que se pueden contar. */
+  /* Los que tienen unidad aprobada, que son los únicos que se pueden contar. */
   const contables = await prisma.product.findMany({
     where: { stockConfig: { status: 'APROBADA' } },
     orderBy: { internalCode: 'asc' },
   });
+  if (contables.length < 4) {
+    throw new Error(
+      `El sembrado de recepciones necesita cuatro artículos con unidad aprobada y encontró ${contables.length}. ` +
+        'Cada uno cumple un papel distinto y no son intercambiables: mirá los comentarios de abajo.',
+    );
+  }
+  /*
+   * Cada artículo tiene un papel, y se nombran para que se vea.
+   *
+   * Indexar `contables` en el lugar de uso ya hizo daño una vez: los ingresos
+   * retroactivos apuntaban a `contables[0]` y le movieron el saldo al escenario
+   * de la vista previa de la fase 4. Con nombres, pisar el artículo de otra fase
+   * deja de ser un descuido invisible.
+   */
+  const [conSaldo, elSegundo, contadoEnCero, paraLasDosLineasDeTiempo] = contables;
   /* Uno sin unidad aprobada: es el que deja una recepción bloqueada. */
   const sinUnidad = await prisma.product.findFirstOrThrow({
     where: { active: true, stockConfig: null },
@@ -816,8 +855,16 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
       for (const p of contables) {
         const cfg = await tx.productStockConfig.findUniqueOrThrow({ where: { productId: p.id } });
         const unidad = cfg.stockUnit!;
-        /* El último de los tres queda contado en cero: mezcla realista. */
-        const cantidad = p.id === contables[contables.length - 1].id ? '0' : '10';
+        /*
+         * Uno de los cuatro queda contado en cero: mezcla realista, y es el
+         * único CERO_CONFIRMADO del tablero.
+         *
+         * Se elige por nombre y no por posición («el último») a propósito: con
+         * la posición, agregar un artículo al final le cambiaba el papel sin
+         * que nadie lo notara, y la prueba que exige un cero confirmado se
+         * quedaba sin sujeto.
+         */
+        const cantidad = p.id === contadoEnCero.id ? '0' : '10';
 
         const activacion = await tx.productStockActivation.create({
           data: {
@@ -970,8 +1017,8 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
 
     /* 1. El caso normal: mercadería y un gasto, posterior al corte. */
     await comprobante(`900${sufijo}1`, '2026-09-08', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '2.5' },
-      { productId: contables[1].id, descripcion: contables[1].normalizedName, cantidad: '1.25' },
+      { productId: conSaldo.id, descripcion: conSaldo.normalizedName, cantidad: '2.5' },
+      { productId: elSegundo.id, descripcion: elSegundo.normalizedName, cantidad: '1.25' },
       { descripcion: 'FLETE DEL CAMIÓN', cantidad: '1', gasto: 'FLETE' },
     ]);
 
@@ -982,7 +1029,7 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
 
     /* 3. Anterior al corte: su mercadería ya está contada en la apertura. */
     await comprobante(`900${sufijo}3`, '2026-09-02', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '4' },
+      { productId: conSaldo.id, descripcion: conSaldo.normalizedName, cantidad: '4' },
     ]);
 
     /* 4. Sólo gastos: no tiene mercadería con impacto. */
@@ -999,10 +1046,10 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
      * que existir antes de la primera.
      */
     await comprobante(`900${sufijo}5`, '2026-09-08', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '1' },
+      { productId: conSaldo.id, descripcion: conSaldo.normalizedName, cantidad: '1' },
     ]);
     await comprobante(`900${sufijo}6`, '2026-09-08', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '2' },
+      { productId: conSaldo.id, descripcion: conSaldo.normalizedName, cantidad: '2' },
     ]);
 
     /*
@@ -1018,21 +1065,37 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
      * servicios importan `server-only`. Las reglas de la base se respetan igual
      * —las dos fechas son posteriores al corte, el saldo se actualiza una vez y
      * apunta al último movimiento de la misma transacción—.
+     *
+     * Van sobre el CUARTO artículo, que existe para esto y para nada más. Los
+     * tres primeros sostienen escenarios de otras fases: el primero es el de la
+     * vista previa, que afirma un saldo de 10 y uno previsto de 12,5; el tercero
+     * es el único contado en cero. Asentar acá encima de cualquiera de ellos es
+     * romperles la prueba, y ya pasó.
      */
     const doc7 = await comprobante(`900${sufijo}7`, '2026-09-08', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '1.5' },
+      {
+        productId: paraLasDosLineasDeTiempo.id,
+        descripcion: paraLasDosLineasDeTiempo.normalizedName,
+        cantidad: '3',
+        unidad: 'UNIT',
+      },
     ]);
     const doc8 = await comprobante(`900${sufijo}8`, '2026-09-08', [
-      { productId: contables[0].id, descripcion: contables[0].normalizedName, cantidad: '0.5' },
+      {
+        productId: paraLasDosLineasDeTiempo.id,
+        descripcion: paraLasDosLineasDeTiempo.normalizedName,
+        cantidad: '1',
+        unidad: 'UNIT',
+      },
     ]);
     await sembrarIngresoRetroactivo(prisma, {
       adminId,
       sucursalId: sucursal.id,
-      producto: contables[0],
+      producto: paraLasDosLineasDeTiempo,
       /* El que pasó después, registrado primero. */
-      primero: { documento: doc7, efectiva: new Date('2026-09-12T15:00:00.000Z'), cantidad: '1.5' },
+      primero: { documento: doc7, efectiva: new Date('2026-09-12T15:00:00.000Z'), cantidad: '3' },
       /* El que pasó antes, registrado después: retroactivo. */
-      segundo: { documento: doc8, efectiva: new Date('2026-09-08T15:00:00.000Z'), cantidad: '0.5' },
+      segundo: { documento: doc8, efectiva: new Date('2026-09-08T15:00:00.000Z'), cantidad: '1' },
     });
   }
 
@@ -1054,8 +1117,8 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
         userId: adminId,
         action: 'stockerp.configuracion_creada',
         entity: 'ProductStockConfig',
-        entityId: contables[0].id,
-        after: { stockUnit: 'KG', status: 'APROBADA', plu: contables[0].internalCode },
+        entityId: conSaldo.id,
+        after: { stockUnit: 'KG', status: 'APROBADA', plu: conSaldo.internalCode },
         reason: 'Primera aprobación de la unidad de existencia.',
       },
       {
@@ -1065,7 +1128,8 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
         entityId: `sembrado-${sucursalDeAuditoria.id}`,
         after: {
           sucursal: sucursalDeAuditoria.name,
-          contados: 2,
+          /* Lo que dejó la apertura de arriba: tres con saldo y uno en cero. */
+          contados: contables.length - 1,
           ceros: 1,
           ficticia: true,
         },
