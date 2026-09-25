@@ -371,28 +371,30 @@ describe('ningún seed productivo puede encenderlos', () => {
       };
 
       /*
-       * Que el seed FALLE con una variable puesta también es una respuesta
-       * válida —un sembrado que no corre no enciende nada— y hay una que hoy
-       * falla: `SEED_CATALOGO_DEMO=1` revienta por una unicidad de alias, un
-       * defecto viejo del sembrado de Compras que esta barrida destapó y que no
-       * es de esta fase arreglar.
+       * **El sembrado tiene que TERMINAR, y recién entonces se mira.**
        *
-       * Lo que NO se acepta es que el fallo tape la pregunta: corra o no corra,
-       * después se miran los dos interruptores igual.
+       * Antes esto toleraba que el seed fallara, con el argumento de que «un
+       * sembrado que no corre no enciende nada». Es cierto y es insuficiente: un
+       * aborto temprano no prueba nada sobre los interruptores, porque no llegó
+       * a tocarlos, y mientras `SEED_CATALOGO_DEMO=1` estaba roto la barrida
+       * pasaba en verde sin haber ejercitado ese camino ni una vez.
+       *
+       * Corregido el defecto del catálogo de demostración, la exigencia es la
+       * que corresponde: con cada variable puesta, el seed termina. Si alguna
+       * vuelve a abortar, esta prueba lo dice con el nombre de la variable en
+       * vez de esconderlo detrás de un `catch`.
        */
-      let corrio = true;
+      let fallo: string | null = null;
       try {
         correrElSeedProductivo(entorno);
-      } catch {
-        corrio = false;
+      } catch (error) {
+        fallo = error instanceof Error ? error.message : String(error);
       }
+      expect(fallo, `con ${nombre}=1 el sembrado tiene que terminar`).toBeNull();
 
       const filas = await estadoCrudo();
-      expect(filas[0].realOpeningEnabled, `con ${nombre}=1 (el seed ${corrio ? 'corrió' : 'falló'})`).toBe(false);
-      expect(
-        filas[0].realPurchaseReceiptsEnabled,
-        `con ${nombre}=1 (el seed ${corrio ? 'corrió' : 'falló'})`,
-      ).toBe(false);
+      expect(filas[0].realOpeningEnabled, `con ${nombre}=1`).toBe(false);
+      expect(filas[0].realPurchaseReceiptsEnabled, `con ${nombre}=1`).toBe(false);
     }
   });
 

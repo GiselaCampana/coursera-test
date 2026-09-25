@@ -378,6 +378,43 @@ async function main() {
     });
 
     const supplierId = p.category === 'Quesos' ? null : losCalvos.id;
+
+    /*
+     * UN SOLO alias lleva el código del proveedor.
+     *
+     * HALLAZGO. Acá se le ponía `p.supplierCode` a CADA alias del artículo, y
+     * `@@unique([supplierId, supplierCode])` —que está para que un código de un
+     * proveedor signifique un artículo y uno solo— rechazaba el segundo. Con
+     * `SEED_CATALOGO_DEMO=1` sobre una base recién migrada el sembrado moría en
+     * «JAMON COCIDO MONTBLANC», el primer artículo con dos alias que NO se
+     * normalizan igual, y dejaba la base a medio sembrar: siete artículos, sin
+     * reglas de precios y sin el resto del arranque.
+     *
+     * (Los pares que sólo difieren en la tilde —«SALAME CRESPON» y «SALAME
+     * CRESPÓN»— no chocaban por el código: chocaban antes por
+     * `@@unique([productId, supplierId, normalized])`, y la búsqueda de más
+     * abajo los saltea. Por eso el defecto no aparecía en el primer artículo
+     * con dos alias sino en el tercero.)
+     *
+     * El código identifica al ARTÍCULO, no a cada forma de escribirlo: alcanza
+     * con que lo lleve un registro. Los demás alias se conservan enteros y
+     * siguen sirviendo para reconocer el renglón por texto; lo único que no
+     * repiten es el código.
+     *
+     * El principal es el PRIMERO declarado: determinista, y además es el que el
+     * proveedor usa en su factura. Si ya hay un registro que lleva ese código
+     * —una corrida anterior, o una que quedó por la mitad— no se le saca, no se
+     * duplica y no se inventa otro código.
+     */
+    let codigoPendiente = false;
+    if (p.supplierCode != null) {
+      const yaEstaPuesto = await prisma.productAlias.findFirst({
+        where: { supplierId, supplierCode: p.supplierCode },
+        select: { id: true },
+      });
+      codigoPendiente = yaEstaPuesto === null;
+    }
+
     for (const alias of p.aliases) {
       const normalized = normalizeText(alias);
       const exists = await prisma.productAlias.findFirst({
@@ -388,12 +425,13 @@ async function main() {
         data: {
           productId: product.id,
           supplierId,
-          supplierCode: p.supplierCode ?? null,
+          supplierCode: codigoPendiente ? p.supplierCode : null,
           alias,
           normalized,
           origin: 'MANUAL',
         },
       });
+      codigoPendiente = false;
     }
   }
 
