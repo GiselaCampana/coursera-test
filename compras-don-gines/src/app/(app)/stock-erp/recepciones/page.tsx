@@ -180,7 +180,9 @@ export default async function Page({
       <Decididas titulo="Excluidas" grupo="excluidas" filas={excluidas} />
 
       <p className="chico">
-        <Link href="/stock-erp/aperturas">Aperturas de existencias →</Link>
+        <Link href="/stock-erp/aperturas">Aperturas →</Link>{' '}
+        <Link href="/stock-erp/existencias">Existencias →</Link>{' '}
+        <Link href="/stock-erp/movimientos">Movimientos →</Link>
       </p>
     </main>
   );

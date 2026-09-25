@@ -713,23 +713,41 @@ describe('la paginación es estable', () => {
   });
 
   it('13b. la fecha efectiva y la de registración son filtros DISTINTOS', async () => {
+    /*
+     * HALLAZGO del calendario. La primera versión filtraba por registración
+     * «del 25» y afirmaba que no había nada, porque el movimiento se había
+     * registrado el 24. Al día siguiente la prueba se puso en rojo sola: el 25
+     * pasó a ser hoy y la registración cayó justo ahí.
+     *
+     * Una prueba que depende de qué día se corre no prueba lo que dice. Ahora la
+     * ventana de registración está en 2020: el movimiento se registra cuando se
+     * corra la prueba, y eso nunca va a ser 2020. La fecha efectiva, en cambio,
+     * la elige la prueba y es la que tiene que aparecer.
+     */
     const p = await articulo('9001');
     await aperturaDeDevoto([{ productId: p.id, cantidad: '10' }]);
     const doc = await comprobanteValidado([{ productId: p.id, cantidad: '2' }]);
-    await recibir(doc.id, { fecha: '2026-09-25', hora: '10:00' });
+    await recibir(doc.id, { fecha: '2026-09-30', hora: '10:00' });
 
-    /* Por fecha efectiva del 25 aparece; por registración de ese día, no. */
+    /* Por fecha efectiva del 30 aparece. */
     const efectiva = await movimientosDelLibro(mirón, {
-      efectivaDesde: new Date('2026-09-25T00:00:00Z'),
-      efectivaHasta: new Date('2026-09-25T23:59:59Z'),
+      efectivaDesde: new Date('2026-09-30T00:00:00Z'),
+      efectivaHasta: new Date('2026-09-30T23:59:59Z'),
     });
-    expect(efectiva.movimientos).toHaveLength(1);
+    expect(efectiva.movimientos, 'su fecha efectiva es el 30').toHaveLength(1);
 
+    /* Por una ventana de registración imposible, no. */
     const registrada = await movimientosDelLibro(mirón, {
-      registradaDesde: new Date('2026-09-25T00:00:00Z'),
-      registradaHasta: new Date('2026-09-25T23:59:59Z'),
+      registradaDesde: new Date('2020-01-01T00:00:00Z'),
+      registradaHasta: new Date('2020-12-31T23:59:59Z'),
     });
-    expect(registrada.movimientos, 'se registró hoy, no el 25').toHaveLength(0);
+    expect(registrada.movimientos, 'no se registró en 2020').toHaveLength(0);
+
+    /* Y por una ventana de registración que sí lo abarca, aparece. */
+    const abarcada = await movimientosDelLibro(mirón, {
+      registradaDesde: new Date('2020-01-01T00:00:00Z'),
+    });
+    expect(abarcada.movimientos.length, 'se registró alguna vez después de 2020').toBeGreaterThan(0);
   });
 
   it('14. los enlaces al comprobante y a la operación apuntan al origen correcto', async () => {
@@ -994,6 +1012,39 @@ describe('las consultas no despiertan nada', () => {
         confirmado: false,
       }),
     ).rejects.toThrow(/segunda confirmación/i);
+  });
+
+  it('las cuatro pantallas de consulta no tienen NINGÚN camino de escritura', async () => {
+    /*
+     * La garantía puesta en la forma del código, no en la disciplina de quien lo
+     * lea después. Las cuatro pantallas son componentes de servidor con
+     * formularios `GET`: sin `'use server'`, sin acciones, sin `action={...}`,
+     * sin `method="post"`. Una pantalla que no tiene acciones no puede escribir
+     * aunque alguien se distraiga más adelante, y de paso los filtros quedan en
+     * un enlace que se puede compartir.
+     */
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const raiz = path.resolve(__dirname, '../..');
+    const pantallas = ['existencias', 'movimientos', 'auditoria', 'integridad'];
+
+    for (const pantalla of pantallas) {
+      const dir = path.join(raiz, 'src/app/(app)/stock-erp', pantalla);
+      const archivos = fs.readdirSync(dir).filter((n) => /\.tsx?$/.test(n));
+      expect(archivos.length, `${pantalla} tiene archivos`).toBeGreaterThan(0);
+
+      for (const nombre of archivos) {
+        const fuente = fs.readFileSync(path.join(dir, nombre), 'utf8');
+        const donde = `${pantalla}/${nombre}`;
+        expect(fuente, `${donde}: sin acciones de servidor`).not.toMatch(/['"]use server['"]/);
+        expect(fuente, `${donde}: sin formularios POST`).not.toMatch(/method=["']post["']/i);
+        expect(fuente, `${donde}: sin action={} de React`).not.toMatch(/\saction=\{/);
+        /* Ni una escritura de Prisma, ni siquiera importada de paso. */
+        expect(fuente, `${donde}: sin escrituras de Prisma`).not.toMatch(
+          /\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\s*\(/,
+        );
+      }
+    }
   });
 
   it('todas las consultas juntas no escriben una sola fila de existencias', async () => {
