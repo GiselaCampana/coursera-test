@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { limpiarBase, sembrarEscenario, type Escenario } from './ayudas';
 import { ADMIN_PERMISSIONS } from '@/lib/auth/permissions';
@@ -593,17 +594,31 @@ describe('tipo, dirección y reversión', () => {
   });
 });
 
-describe('los traslados llegan enteros o no llegan', () => {
-  async function traslado() {
-    const op = await crearOperacion('TRASLADO');
+describe('los traslados llegan enteros o no llegan, y ahora eso se juzga por ESTADO', () => {
+  /*
+   * ESTE BLOQUE CAMBIÓ EN LA FASE 6, con autorización expresa.
+   *
+   * La regla de la fase 1 exigía, al COMMIT de cada inserción en el libro, la
+   * salida Y la entrada de cada renglón. Servía para un traslado instantáneo y
+   * hacía IMPOSIBLE la mercadería en tránsito: el despacho escribe sólo la
+   * salida, y la entrada llega al día siguiente, en otra transacción.
+   *
+   * La promesa no se abandonó: se movió. «Llega entero o no llega» dejó de ser
+   * «dentro de una transacción» y pasó a ser «antes de poder cerrarse». Lo que
+   * sigue comprueba las dos caras: que el tránsito ahora es posible, y que un
+   * traslado no se cierra con una mitad faltante.
+   */
+
+  /** Un borrador con dos renglones, como lo deja la pantalla de preparación. */
+  async function borrador() {
     const id = proximo();
     await prisma.$executeRawUnsafe(
-      `INSERT INTO "stock_transfer" ("id","fromBranchId","toBranchId","operationId")
-       VALUES ($1,$2,$3,$4)`,
+      `INSERT INTO "stock_transfer" ("id","fromBranchId","toBranchId","status","preparedById")
+       VALUES ($1,$2,$3,'BORRADOR'::"StockTransferStatus",$4)`,
       id,
       sucursalId,
       otraSucursalId,
-      op,
+      escenario.admin.id,
     );
     const renglones: string[] = [];
     for (const prod of [productoId, otroProductoId]) {
@@ -617,75 +632,197 @@ describe('los traslados llegan enteros o no llegan', () => {
       );
       renglones.push(linea);
     }
-    return { op, id, renglones };
+    return { id, renglones };
   }
 
-  it('rechaza al commit un traslado de dos artículos con una mitad faltante', async () => {
-    const t = await traslado();
+  /** Una mitad del traslado, escrita a mano en el libro. */
+  async function mitad(
+    tx: Prisma.TransactionClient,
+    datos: {
+      op: string;
+      linea: string;
+      productId: string;
+      tipo: 'TRANSFER_OUT' | 'TRANSFER_IN';
+      cantidad?: string;
+    },
+  ) {
+    const id = proximo();
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "stock_ledger"
+         ("id","txId","productId","pluHistorico","branchId","type","direction",
+          "quantity","unit","effectiveAt","operationId","idempotencyKey",
+          "balanceAfterSeq","transferLineId")
+       VALUES ($1, txid_current(), $2,'PLU-T',$3,$4::"StockMovementType",
+               $5::"StockDirection",$6::numeric,'KG','2026-09-21T12:00:00Z',$7,$8,0.000,$9)`,
+      id,
+      datos.productId,
+      datos.tipo === 'TRANSFER_OUT' ? sucursalId : otraSucursalId,
+      datos.tipo,
+      datos.tipo === 'TRANSFER_OUT' ? 'OUT' : 'IN',
+      datos.cantidad ?? '2.500',
+      datos.op,
+      `idem-${id}`,
+      datos.linea,
+    );
+    return id;
+  }
+
+  /** Despacha el borrador: las salidas y el estado, en una sola transacción. */
+  async function despachar(t: { id: string; renglones: string[] }) {
+    const op = await crearOperacion('TRASLADO');
+    await prisma.$transaction(async (tx) => {
+      for (const [i, linea] of t.renglones.entries()) {
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer_line" SET "dispatchedQuantity" = 2.500 WHERE id = $1`,
+          linea,
+        );
+        await mitad(tx, {
+          op,
+          linea,
+          productId: i === 0 ? productoId : otroProductoId,
+          tipo: 'TRANSFER_OUT',
+        });
+      }
+      await tx.$executeRawUnsafe(
+        `UPDATE "stock_transfer"
+            SET "status" = 'DESPACHADO'::"StockTransferStatus", "operationId" = $2,
+                "dispatchedById" = $3, "dispatchedAt" = now()
+          WHERE id = $1`,
+        t.id,
+        op,
+        escenario.admin.id,
+      );
+    });
+    return op;
+  }
+
+  it('un borrador no escribe en el libro', async () => {
+    const t = await borrador();
+    const op = await crearOperacion('TRASLADO');
     await expect(
       prisma.$transaction(async (tx) => {
-        for (const [i, linea] of t.renglones.entries()) {
-          const prod = i === 0 ? productoId : otroProductoId;
-          for (const [tipo, suc] of [
-            ['TRANSFER_OUT', sucursalId],
-            ['TRANSFER_IN', otraSucursalId],
-          ] as const) {
-            /* Al segundo renglón le falta la entrada: eso es lo que se prueba. */
-            if (i === 1 && tipo === 'TRANSFER_IN') continue;
-            const id = proximo();
-            await tx.$executeRawUnsafe(
-              `INSERT INTO "stock_ledger"
-                 ("id","txId","productId","pluHistorico","branchId","type","direction",
-                  "quantity","unit","effectiveAt","operationId","idempotencyKey",
-                  "balanceAfterSeq","transferLineId")
-               VALUES ($1, txid_current(), $2,'PLU-T',$3,$4::"StockMovementType",
-                       $5::"StockDirection",2.500,'KG','2026-09-21T12:00:00Z',$6,$7,0.000,$8)`,
-              id,
-              prod,
-              suc,
-              tipo,
-              tipo === 'TRANSFER_OUT' ? 'OUT' : 'IN',
-              t.op,
-              `idem-${id}`,
-              linea,
-            );
-          }
-        }
+        await mitad(tx, { op, linea: t.renglones[0]!, productId: productoId, tipo: 'TRANSFER_OUT' });
       }),
-    ).rejects.toThrow(/exactamente una salida/);
+    ).rejects.toThrow(/no escribe en el libro/);
   });
 
-  it('acepta el traslado completo de los dos artículos', async () => {
-    const t = await traslado();
+  it('acepta el despacho con sólo la salida: eso es la mercadería en tránsito', async () => {
+    const t = await borrador();
+    await expect(despachar(t)).resolves.toBeDefined();
+
+    /* Y quedó en tránsito de verdad: salidas sí, entradas no. */
+    const filas = await prisma.$queryRawUnsafe<{ type: string; n: bigint }[]>(
+      `SELECT "type", count(*) AS n FROM "stock_ledger"
+        WHERE "transferLineId" = ANY($1::text[]) GROUP BY "type"`,
+      t.renglones,
+    );
+    expect(filas).toHaveLength(1);
+    expect(filas[0]!.type).toBe('TRANSFER_OUT');
+    expect(Number(filas[0]!.n)).toBe(2);
+  });
+
+  it('una entrada sin su salida no existe en ningún estado', async () => {
+    const t = await borrador();
+    const op = await crearOperacion('TRASLADO');
+    await expect(
+      prisma.$transaction(async (tx) => {
+        /* Se intenta hacer llegar mercadería que nunca salió. */
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer_line" SET "dispatchedQuantity" = 2.500, "receivedQuantity" = 2.500 WHERE id = ANY($1::text[])`,
+          t.renglones,
+        );
+        for (const [i, linea] of t.renglones.entries()) {
+          await mitad(tx, {
+            op,
+            linea,
+            productId: i === 0 ? productoId : otroProductoId,
+            tipo: 'TRANSFER_IN',
+          });
+        }
+      }),
+    ).rejects.toThrow(/sin su salida/);
+  });
+
+  it('rechaza cerrar un traslado con una mitad faltante', async () => {
+    const t = await borrador();
+    const opDespacho = await despachar(t);
+    const opRecepcion = await crearOperacion('TRASLADO');
+
+    await expect(
+      prisma.$transaction(async (tx) => {
+        /* Sólo el primer renglón llega, y aun así se quiere cerrar. */
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer_line" SET "receivedQuantity" = 2.500 WHERE id = $1`,
+          t.renglones[0],
+        );
+        await mitad(tx, {
+          op: opRecepcion,
+          linea: t.renglones[0]!,
+          productId: productoId,
+          tipo: 'TRANSFER_IN',
+        });
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer"
+              SET "status" = 'RECIBIDO'::"StockTransferStatus", "receiptOperationId" = $2,
+                  "receivedById" = $3, "receivedAt" = now()
+            WHERE id = $1`,
+          t.id,
+          opRecepcion,
+          escenario.admin.id,
+        );
+      }),
+    ).rejects.toThrow(/mitad faltante/);
+
+    /* Y sigue despachado: el intento fallido no lo cerró. */
+    const estado = await prisma.$queryRawUnsafe<{ status: string }[]>(
+      `SELECT "status" FROM "stock_transfer" WHERE id = $1`,
+      t.id,
+    );
+    expect(estado[0]!.status).toBe('DESPACHADO');
+    expect(opDespacho).toBeDefined();
+  });
+
+  it('acepta el traslado completo cuando las dos mitades llegaron', async () => {
+    const t = await borrador();
+    await despachar(t);
+    const op = await crearOperacion('TRASLADO');
+
     await expect(
       prisma.$transaction(async (tx) => {
         for (const [i, linea] of t.renglones.entries()) {
-          const prod = i === 0 ? productoId : otroProductoId;
-          for (const [tipo, suc] of [
-            ['TRANSFER_OUT', sucursalId],
-            ['TRANSFER_IN', otraSucursalId],
-          ] as const) {
-            const id = proximo();
-            await tx.$executeRawUnsafe(
-              `INSERT INTO "stock_ledger"
-                 ("id","txId","productId","pluHistorico","branchId","type","direction",
-                  "quantity","unit","effectiveAt","operationId","idempotencyKey",
-                  "balanceAfterSeq","transferLineId")
-               VALUES ($1, txid_current(), $2,'PLU-T',$3,$4::"StockMovementType",
-                       $5::"StockDirection",2.500,'KG','2026-09-21T12:00:00Z',$6,$7,0.000,$8)`,
-              id,
-              prod,
-              suc,
-              tipo,
-              tipo === 'TRANSFER_OUT' ? 'OUT' : 'IN',
-              t.op,
-              `idem-${id}`,
-              linea,
-            );
-          }
+          await tx.$executeRawUnsafe(
+            `UPDATE "stock_transfer_line" SET "receivedQuantity" = 2.500 WHERE id = $1`,
+            linea,
+          );
+          await mitad(tx, {
+            op,
+            linea,
+            productId: i === 0 ? productoId : otroProductoId,
+            tipo: 'TRANSFER_IN',
+          });
         }
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer"
+              SET "status" = 'RECIBIDO'::"StockTransferStatus", "receiptOperationId" = $2,
+                  "receivedById" = $3, "receivedAt" = now()
+            WHERE id = $1`,
+          t.id,
+          op,
+          escenario.admin.id,
+        );
       }),
     ).resolves.not.toThrow();
+  });
+
+  it('rechaza dos salidas del mismo renglón', async () => {
+    const t = await borrador();
+    await despachar(t);
+    const op = await crearOperacion('TRASLADO');
+    await expect(
+      prisma.$transaction(async (tx) => {
+        await mitad(tx, { op, linea: t.renglones[0]!, productId: productoId, tipo: 'TRANSFER_OUT' });
+      }),
+    ).rejects.toThrow(/dos salidas ni dos entradas/);
   });
 
   it('la reversión de un traslado usa renglones nuevos, sin ensuciar los originales', async () => {
@@ -694,47 +831,44 @@ describe('los traslados llegan enteros o no llegan', () => {
      * que exige exactamente dos, y el traslado original quedaría inválido. La
      * reversión es un traslado nuevo, al revés, vinculado al primero.
      */
-    const t = await traslado();
+    const t = await borrador();
+    await despachar(t);
+    const op = await crearOperacion('TRASLADO');
     await prisma.$transaction(async (tx) => {
       for (const [i, linea] of t.renglones.entries()) {
-        const prod = i === 0 ? productoId : otroProductoId;
-        for (const [tipo, suc] of [
-          ['TRANSFER_OUT', sucursalId],
-          ['TRANSFER_IN', otraSucursalId],
-        ] as const) {
-          const id = proximo();
-          await tx.$executeRawUnsafe(
-            `INSERT INTO "stock_ledger"
-               ("id","txId","productId","pluHistorico","branchId","type","direction",
-                "quantity","unit","effectiveAt","operationId","idempotencyKey",
-                "balanceAfterSeq","transferLineId")
-             VALUES ($1, txid_current(), $2,'PLU-T',$3,$4::"StockMovementType",
-                     $5::"StockDirection",2.500,'KG','2026-09-21T12:00:00Z',$6,$7,0.000,$8)`,
-            id,
-            prod,
-            suc,
-            tipo,
-            tipo === 'TRANSFER_OUT' ? 'OUT' : 'IN',
-            t.op,
-            `idem-${id}`,
-            linea,
-          );
-        }
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_transfer_line" SET "receivedQuantity" = 2.500 WHERE id = $1`,
+          linea,
+        );
+        await mitad(tx, {
+          op,
+          linea,
+          productId: i === 0 ? productoId : otroProductoId,
+          tipo: 'TRANSFER_IN',
+        });
       }
+      await tx.$executeRawUnsafe(
+        `UPDATE "stock_transfer"
+            SET "status" = 'RECIBIDO'::"StockTransferStatus", "receiptOperationId" = $2,
+                "receivedById" = $3, "receivedAt" = now()
+          WHERE id = $1`,
+        t.id,
+        op,
+        escenario.admin.id,
+      );
     });
 
-    /* El traslado inverso: cabecera nueva, renglones nuevos. */
-    const opRev = await crearOperacion('REVERSION');
+    /* El traslado inverso: cabecera nueva, renglones nuevos, y en borrador. */
     const idRev = proximo();
     await prisma.$executeRawUnsafe(
       `INSERT INTO "stock_transfer"
-         ("id","fromBranchId","toBranchId","operationId","reversesTransferId","reason")
-       VALUES ($1,$2,$3,$4,$5,'Se trasladó de más')`,
+         ("id","fromBranchId","toBranchId","status","reversesTransferId","reason","preparedById")
+       VALUES ($1,$2,$3,'BORRADOR'::"StockTransferStatus",$4,'Se trasladó de más',$5)`,
       idRev,
       otraSucursalId,
       sucursalId,
-      opRev,
       t.id,
+      escenario.admin.id,
     );
 
     const originales = await prisma.$queryRawUnsafe<{ n: bigint }[]>(

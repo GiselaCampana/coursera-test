@@ -71,8 +71,13 @@ afterEach(() => vi.restoreAllMocks());
 /** El estado crudo de la fila, leído de la base y no de un servicio. */
 async function estadoCrudo() {
   const filas = await prisma.$queryRaw<
-    { realOpeningEnabled: boolean; realPurchaseReceiptsEnabled: boolean }[]
-  >`SELECT "realOpeningEnabled", "realPurchaseReceiptsEnabled" FROM "stock_module_setting"`;
+    {
+      realOpeningEnabled: boolean;
+      realPurchaseReceiptsEnabled: boolean;
+      realTransfersEnabled: boolean;
+    }[]
+  >`SELECT "realOpeningEnabled", "realPurchaseReceiptsEnabled", "realTransfersEnabled"
+      FROM "stock_module_setting"`;
   return filas;
 }
 
@@ -86,6 +91,7 @@ describe('los dos interruptores nacen apagados', () => {
     expect(filas, 'hay exactamente una fila de configuración').toHaveLength(1);
     expect(filas[0].realOpeningEnabled, 'aperturas reales').toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled, 'recepciones reales').toBe(false);
+    expect(filas[0].realTransfersEnabled, 'traslados reales (fase 6)').toBe(false);
   });
 
   it('y los servicios leen lo mismo, sin autor ni motivo', async () => {
@@ -102,9 +108,10 @@ describe('los dos interruptores nacen apagados', () => {
     const columnas = await prisma.$queryRaw<{ column_name: string; column_default: string }[]>`
       SELECT column_name, column_default FROM information_schema.columns
        WHERE table_name = 'stock_module_setting'
-         AND column_name IN ('realOpeningEnabled', 'realPurchaseReceiptsEnabled')
+         AND column_name IN ('realOpeningEnabled', 'realPurchaseReceiptsEnabled',
+                             'realTransfersEnabled')
        ORDER BY column_name`;
-    expect(columnas).toHaveLength(2);
+    expect(columnas).toHaveLength(3);
     for (const c of columnas) {
       expect(c.column_default, `${c.column_name} por omisión`).toMatch(/false/);
     }
@@ -306,6 +313,7 @@ describe('ningún seed productivo puede encenderlos', () => {
     expect(filas).toHaveLength(1);
     expect(filas[0].realOpeningEnabled, 'aperturas reales').toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled, 'recepciones reales').toBe(false);
+    expect(filas[0].realTransfersEnabled, 'traslados reales (fase 6)').toBe(false);
   });
 
   it('correrlo dos veces tampoco los enciende', async () => {
@@ -314,6 +322,7 @@ describe('ningún seed productivo puede encenderlos', () => {
     const filas = await estadoCrudo();
     expect(filas[0].realOpeningEnabled).toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
+    expect(filas[0].realTransfersEnabled).toBe(false);
   });
 
   it('ni con TODAS las variables que el seed llega a leer, puestas en verdadero', async () => {
@@ -395,6 +404,7 @@ describe('ningún seed productivo puede encenderlos', () => {
       const filas = await estadoCrudo();
       expect(filas[0].realOpeningEnabled, `con ${nombre}=1`).toBe(false);
       expect(filas[0].realPurchaseReceiptsEnabled, `con ${nombre}=1`).toBe(false);
+      expect(filas[0].realTransfersEnabled, `con ${nombre}=1`).toBe(false);
     }
   });
 
@@ -403,6 +413,7 @@ describe('ningún seed productivo puede encenderlos', () => {
     const filas = await estadoCrudo();
     expect(filas[0].realOpeningEnabled).toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
+    expect(filas[0].realTransfersEnabled).toBe(false);
   });
 });
 
@@ -555,6 +566,7 @@ describe('encenderlos exige permiso y deja constancia', () => {
     const filas = await estadoCrudo();
     expect(filas[0].realOpeningEnabled).toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
+    expect(filas[0].realTransfersEnabled).toBe(false);
   });
 
   it('son DOS decisiones: encender una no enciende la otra', async () => {
@@ -624,5 +636,6 @@ describe('la decisión es del servidor, no de la pantalla', () => {
     const filas = await estadoCrudo();
     expect(filas[0].realOpeningEnabled).toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
+    expect(filas[0].realTransfersEnabled).toBe(false);
   });
 });

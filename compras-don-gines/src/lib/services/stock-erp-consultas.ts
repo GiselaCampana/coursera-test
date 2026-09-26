@@ -143,6 +143,16 @@ export interface MovimientoDelLibro {
   documentId: string | null;
   documentoNumero: string | null;
   documentItemId: string | null;
+  /**
+   * El renglón de traslado del que salió este movimiento, y su traslado.
+   *
+   * Agregado en la fase 6. Un `TRANSFER_OUT` y su `TRANSFER_IN` son dos filas de
+   * dos sucursales distintas, y sin este vínculo la pregunta «¿esta salida de
+   * Devoto es la entrada de Pueyrredón?» se contesta adivinando por cantidad y
+   * hora, que es exactamente lo que no hay que hacer.
+   */
+  transferLineId: string | null;
+  trasladoId: string | null;
   usuario: string | null;
   motivo: string | null;
   /** De dónde salió el saldo de ese artículo en esa sucursal. */
@@ -237,6 +247,7 @@ const INCLUIR_MOVIMIENTO = {
   document: { select: { fullNumber: true, pointOfSale: true, number: true } },
   user: { select: { name: true } },
   reversedBy: { select: { id: true } },
+  transferLine: { select: { id: true, transferId: true } },
 } satisfies Prisma.StockLedgerInclude;
 
 /**
@@ -331,6 +342,8 @@ export async function movimientosDelLibro(
         f.document?.fullNumber ??
         (f.document ? `${f.document.pointOfSale ?? ''}-${f.document.number ?? ''}` : null),
       documentItemId: f.documentItemId,
+      transferLineId: f.transferLineId,
+      trasladoId: f.transferLine?.transferId ?? null,
       usuario: f.user?.name ?? null,
       motivo: f.reason,
       openingSource: origen.get(`${f.productId}|${f.branchId}`) ?? null,
@@ -459,6 +472,8 @@ export async function recorridoCronologico(
           f.document?.fullNumber ??
           (f.document ? `${f.document.pointOfSale ?? ''}-${f.document.number ?? ''}` : null),
         documentItemId: f.documentItemId,
+        transferLineId: f.transferLineId,
+        trasladoId: f.transferLine?.transferId ?? null,
         usuario: f.user?.name ?? null,
         motivo: f.reason,
         openingSource: null,
@@ -577,6 +592,25 @@ export interface Tablero {
   totalPorUnidad: Record<string, string>;
   /** Sucursales sin apertura confirmada que entraron en el filtro. */
   sucursalesSinApertura: { branchId: string; sucursal: string }[];
+  /**
+   * **Mercadería en tránsito hacia esta sucursal. NO es saldo.**
+   *
+   * Agregado en la fase 6, y deliberadamente APARTE de `filas` y de
+   * `totalPorUnidad`. Salió del origen —ahí ya se descontó— y todavía no llegó:
+   * sumarla al destino diría que hay mercadería en una góndola donde no hay
+   * nada, y restarla de los dos lados la haría desaparecer. Se muestra como lo
+   * que es: un tercer lugar, temporal y con nombre.
+   */
+  enTransitoHaciaAca: {
+    productId: string;
+    articulo: string;
+    plu: string;
+    cantidad: string;
+    unidad: string;
+    origen: string;
+    trasladoId: string;
+    despachadoEl: Date | null;
+  }[];
   mirados: number;
   tope: number;
 }
@@ -777,6 +811,34 @@ export async function tableroDeExistencias(
     }
   }
 
+  /*
+   * La mercadería en tránsito hacia las sucursales miradas.
+   *
+   * Consulta aparte, y a propósito: no entra en `filas`, no entra en el resumen
+   * y no entra en los totales por unidad. Es un tercer lugar —ni origen ni
+   * destino— y el tablero lo nombra sin sumarlo.
+   */
+  const enTransito = await prisma.stockTransferLine.findMany({
+    where: {
+      transfer: {
+        status: 'DESPACHADO',
+        toBranchId: { in: sucursales.map((s) => s.id) },
+      },
+    },
+    include: {
+      transfer: {
+        select: {
+          id: true,
+          dispatchedAt: true,
+          fromBranch: { select: { name: true } },
+        },
+      },
+      product: { select: { normalizedName: true, internalCode: true } },
+    },
+    orderBy: { id: 'asc' },
+    take: tope,
+  });
+
   return {
     filas,
     resumen,
@@ -784,6 +846,16 @@ export async function tableroDeExistencias(
     sucursalesSinApertura: sucursales
       .filter((s) => !corteDe.has(s.id))
       .map((s) => ({ branchId: s.id, sucursal: s.name })),
+    enTransitoHaciaAca: enTransito.map((l) => ({
+      productId: l.productId,
+      articulo: l.product.normalizedName,
+      plu: l.product.internalCode,
+      cantidad: (l.dispatchedQuantity ?? l.quantity).toString(),
+      unidad: l.unit,
+      origen: l.transfer.fromBranch.name,
+      trasladoId: l.transfer.id,
+      despachadoEl: l.transfer.dispatchedAt,
+    })),
     mirados: productos.length,
     tope,
   };
@@ -823,6 +895,16 @@ export const ACCIONES_DE_STOCK_ERP: string[] = [
   AUDIT_ACTIONS.STOCKERP_RECEPCION_APLICADA,
   AUDIT_ACTIONS.STOCKERP_RECEPCION_SIMULTANEA,
   AUDIT_ACTIONS.STOCKERP_RECEPCIONES_INTERRUPTOR,
+  /* Fase 6: traslados entre sucursales. */
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_CREADO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_RENGLON,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_CANCELADO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_DESPACHADO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_RECIBIDO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_SIMULTANEO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_BLOQUEADO_SALDO,
+  AUDIT_ACTIONS.STOCKERP_TRASLADO_DIFERENCIA,
+  AUDIT_ACTIONS.STOCKERP_TRASLADOS_INTERRUPTOR,
 ];
 
 export interface AsientoDeAuditoria {

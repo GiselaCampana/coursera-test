@@ -1238,26 +1238,20 @@ async function aplicarRecepcion(
       }
 
       /*
-       * Y si el destino no lo manejaba todavía, la recepción lo activa. No se le
-       * toca el corte ni la apertura: sólo pasa a ACTIVO, que es lo que dice que
-       * la sucursal ahora lo maneja.
+       * **La activación NO se toca, y eso lo decidió la base.**
+       *
+       * La primera versión de esto marcaba la activación del destino como ACTIVO
+       * cuando el artículo llegaba por primera vez. La CHECK
+       * `activacion_activo_exige_apertura` de la fase 1 lo rechazó, y tiene
+       * razón: ACTIVO significa «contado y confirmado, con su corte y su
+       * apertura». Un artículo que llegó en un traslado NO fue contado en el
+       * destino, así que ponerlo ACTIVO habría sido inventarle una apertura que
+       * nadie hizo.
+       *
+       * Lo que corresponde es exactamente lo que hace la recepción de compras:
+       * el SALDO nace marcado `POSTERIOR_AL_CORTE`, que es la forma honesta de
+       * decir «esto no viene de un conteo». La activación queda como estaba.
        */
-      if (!activacion) {
-        await tx.productStockActivation.create({
-          data: {
-            productId: linea.productId,
-            branchId: traslado.toBranchId,
-            state: 'ACTIVO',
-            activatedById: user.id,
-            activatedAt: momento,
-          },
-        });
-      } else if (activacion.state === 'SIN_INICIAR' || activacion.state === 'LISTO_PARA_CONTAR') {
-        await tx.productStockActivation.update({
-          where: { id: activacion.id },
-          data: { state: 'ACTIVO', activatedById: user.id, activatedAt: momento },
-        });
-      }
 
       await tx.stockTransferLine.update({
         where: { id: linea.id },
