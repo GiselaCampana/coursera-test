@@ -136,7 +136,8 @@ export default async function Page({
       <p className="chico">
         <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
         <Link href="/stock-erp/integridad">Integridad →</Link>{' '}
-        <Link href="/stock-erp/auditoria">Auditoría →</Link>
+        <Link href="/stock-erp/auditoria">Auditoría →</Link>{' '}
+        <Link href="/stock-erp/traslados">Traslados →</Link>
       </p>
       <h1>Existencias</h1>
       <p className="chico">
@@ -231,6 +232,38 @@ export default async function Page({
           con unidades sería inventar una equivalencia que nadie aprobó.
         </p>
       </section>
+
+      {/*
+        La mercadería en tránsito, APARTE del saldo y de los totales.
+
+        Salió del origen —ahí ya se descontó— y todavía no llegó. Sumarla acá
+        diría que hay mercadería en una góndola donde no hay nada; no mostrarla
+        la haría desaparecer de la vista de las dos sucursales, que es la forma
+        más silenciosa de perder stock. Se muestra como lo que es: un tercer
+        lugar, temporal y con nombre.
+      */}
+      {tablero.enTransitoHaciaAca.length > 0 && (
+        <section data-prueba="en-transito-hacia-aca">
+          <h2>En camino hacia acá ({tablero.enTransitoHaciaAca.length})</h2>
+          <p className="chico" data-prueba="aviso-transito">
+            Esto <strong>no es saldo</strong> de esta sucursal todavía: salió del origen y no llegó.
+            No está sumado en los totales de arriba, y el saldo del destino recién cambia cuando
+            alguien confirma la recepción.
+          </p>
+          <ul className="lista-simple">
+            {tablero.enTransitoHaciaAca.map((t) => (
+              <li key={`${t.trasladoId}-${t.productId}`} data-prueba="fila-en-transito">
+                <strong>
+                  {t.cantidad} {t.unidad}
+                </strong>{' '}
+                de {t.articulo} (PLU {t.plu}), desde {t.origen}
+                {t.despachadoEl ? `, despachado el ${formatCorteAr(t.despachadoEl)}` : ''}.{' '}
+                <Link href={`/stock-erp/traslados/${t.trasladoId}`}>ver traslado</Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       {tablero.sucursalesSinApertura.length > 0 && (
         <p className="mensaje mensaje-aviso" data-prueba="aviso-sin-apertura">

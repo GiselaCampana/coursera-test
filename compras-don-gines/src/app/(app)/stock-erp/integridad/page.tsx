@@ -80,6 +80,7 @@ export default async function Page({
       <p className="chico">
         <Link href="/stock-erp/existencias">← Existencias</Link>{' '}
         <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
+        <Link href="/stock-erp/traslados">Traslados →</Link>{' '}
         <Link href="/stock-erp/auditoria">Auditoría →</Link>
       </p>
       <h1>Integridad del libro</h1>

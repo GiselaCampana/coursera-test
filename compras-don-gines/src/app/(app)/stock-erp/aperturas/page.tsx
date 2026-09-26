@@ -61,7 +61,8 @@ export default async function Page() {
       <p className="chico">
         <Link href="/stock-erp/existencias">Existencias →</Link>{' '}
         <Link href="/stock-erp/recepciones">Recepciones →</Link>{' '}
-        <Link href="/stock-erp/movimientos">Movimientos →</Link>
+        <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
+        <Link href="/stock-erp/traslados">Traslados →</Link>
       </p>
       <h1>Aperturas de existencias</h1>
       <p className="chico">

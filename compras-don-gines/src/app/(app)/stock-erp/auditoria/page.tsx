@@ -77,6 +77,7 @@ export default async function Page({
       <p className="chico">
         <Link href="/stock-erp/existencias">← Existencias</Link>{' '}
         <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
+        <Link href="/stock-erp/traslados">Traslados →</Link>{' '}
         <Link href="/stock-erp/integridad">Integridad →</Link>
       </p>
       <h1>Auditoría de Stock ERP</h1>

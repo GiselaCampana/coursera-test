@@ -155,7 +155,8 @@ export default async function Page({
       <p className="chico">
         <Link href="/stock-erp/existencias">← Existencias</Link>{' '}
         <Link href="/stock-erp/integridad">Integridad →</Link>{' '}
-        <Link href="/stock-erp/auditoria">Auditoría →</Link>
+        <Link href="/stock-erp/auditoria">Auditoría →</Link>{' '}
+        <Link href="/stock-erp/traslados">Traslados →</Link>
       </p>
       <h1>Movimientos del libro</h1>
       <p className="chico" data-prueba="explica-tiempos">
