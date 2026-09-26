@@ -384,6 +384,113 @@ describe('lo que frena el despacho', () => {
     });
     expect(auditoria, 'el bloqueo por saldo queda auditado').not.toBeNull();
   });
+
+  it('11b. un saldo negativo es imposible EN LA BASE, no sólo en el servicio', async () => {
+    /*
+     * HALLAZGO de una rotura deliberada. Quitar la revalidación de saldo que el
+     * despacho hace DENTRO de la transacción no puso nada en rojo: la revisión
+     * previa frena antes, así que esa línea no se alcanza desde ninguna prueba.
+     *
+     * Lo que sí sostiene la garantía es la base, y eso no estaba afirmado en
+     * ninguna parte. Queda afirmado acá: ni el libro ni el saldo aceptan un
+     * número negativo, venga del servicio, de un script de madrugada o de una
+     * consulta suelta.
+     *
+     * La revalidación del servicio no se quita: existe para la carrera —que el
+     * saldo baje entre la revisión y la escritura— y para contestar con una
+     * frase en castellano en vez de con el nombre de una restricción. Pero la
+     * que impide el desastre es la de abajo.
+     */
+    const art = await escenarioSimple('2');
+    const balance = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId_branchId: { productId: art.id, branchId: origenId } },
+    });
+    const operacion = await prisma.stockOperation.create({
+      data: {
+        operationKey: `negativo-${art.id}`,
+        kind: 'RECEPCION_COMPRA',
+        contentHash: 'negativo',
+        branchId: origenId,
+        requestedById: escenario.admin.id,
+      },
+    });
+
+    /**
+     * Un movimiento válido, con el `balanceAfterSeq` que se le indique.
+     *
+     * Se usa `PURCHASE_IN` y no un traslado a propósito: un movimiento de
+     * traslado exige su renglón y su estado, y entonces el rechazo podría venir
+     * de ahí. Lo que se quiere ejercitar es la restricción del SALDO, no otra.
+     */
+    const movimiento = (id: string, saldo: string) =>
+      prisma.$executeRawUnsafe(
+        `INSERT INTO "stock_ledger"
+           ("id","txId","productId","pluHistorico","branchId","type","direction",
+            "quantity","unit","effectiveAt","operationId","idempotencyKey","balanceAfterSeq")
+         VALUES ($1, txid_current(), $2, 'PLU', $3, 'PURCHASE_IN'::"StockMovementType",
+                 'IN'::"StockDirection", 1, 'KG', now(), $4, $5, $6::numeric)`,
+        id,
+        art.id,
+        origenId,
+        operacion.id,
+        id,
+        saldo,
+      );
+
+    /*
+     * **Cada afirmación nombra la restricción que dice probar.**
+     *
+     * HALLAZGO de repetir la rotura: la primera versión de esta prueba pasaba
+     * igual con la CHECK de saldo negativo QUITADA de la base, porque lo que
+     * rechazaba era otro disparador —el que exige que un saldo se mueva junto
+     * con un movimiento—. Una prueba que pasa por el camino equivocado afirma
+     * algo que no comprobó. Por eso ahora se exige el nombre.
+     */
+    await expect(movimiento(`neg-libro-${art.id}`, '-3'), 'el libro, con saldo negativo')
+      .rejects.toThrow(/stock_ledger_saldo_no_negativo/);
+
+    /*
+     * Y el saldo materializado. Acá hay algo que vale la pena dejar escrito,
+     * porque lo descubrió esta misma prueba: **la CHECK `stock_balance_no_negativo`
+     * no se puede alcanzar por ningún camino legítimo.**
+     *
+     * El disparador `stock_balance_respaldado` exige que el saldo sea IGUAL al
+     * `balanceAfterSeq` del movimiento que lo acompaña, y el libro no acepta un
+     * `balanceAfterSeq` negativo. Así que para dejar un saldo en −1 habría que
+     * violar antes la restricción del libro. La CHECK del saldo es el segundo
+     * cinturón, y está bien que exista; lo que no corresponde es afirmar que
+     * ella es la que frena, porque no llega a hacerlo.
+     *
+     * Lo que sigue comprueba eso: el intento se rechaza, y quien lo rechaza es
+     * la coherencia entre el saldo y su movimiento.
+     */
+    await expect(
+      prisma.$transaction(async (tx) => {
+        const id = `neg-saldo-${art.id}`;
+        await tx.$executeRawUnsafe(
+          `INSERT INTO "stock_ledger"
+             ("id","txId","productId","pluHistorico","branchId","type","direction",
+              "quantity","unit","effectiveAt","operationId","idempotencyKey","balanceAfterSeq")
+           VALUES ($1, txid_current(), $2, 'PLU', $3, 'PURCHASE_IN'::"StockMovementType",
+                   'IN'::"StockDirection", 1, 'KG', now(), $4, $5, 0)`,
+          id,
+          art.id,
+          origenId,
+          operacion.id,
+          id,
+        );
+        await tx.$executeRawUnsafe(
+          `UPDATE "stock_balance"
+              SET "quantity" = -1, "lastLedgerId" = $2, "lastOperationId" = $3
+            WHERE id = $1`,
+          balance.id,
+          id,
+          operacion.id,
+        );
+      }),
+      'el saldo materializado, en negativo',
+    ).rejects.toThrow(/no coincide con el saldo posterior/);
+  });
 });
 
 /* ========================================================================== *
