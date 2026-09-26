@@ -91,6 +91,12 @@ model User {
   /* Stock ERP, fase 4 */
   recepcionesDecididas StockReceipt[]       @relation("RecepcionDecididaPor")
   recepcionesHabilitadas StockModuleSetting[] @relation("RecepcionesRealesCambiadasPor")
+  /* Stock ERP, fase 6 */
+  trasladosPreparados  StockTransfer[]      @relation("TrasladoPreparadoPor")
+  trasladosDespachados StockTransfer[]      @relation("TrasladoDespachadoPor")
+  trasladosRecibidos   StockTransfer[]      @relation("TrasladoRecibidoPor")
+  trasladosCancelados  StockTransfer[]      @relation("TrasladoCanceladoPor")
+  trasladosHabilitados StockModuleSetting[] @relation("TrasladosRealesCambiadosPor")
 }
 
 model Session {
@@ -1272,8 +1278,18 @@ enum StockCountSessionStatus {
 }
 
 enum StockTransferStatus {
+  /// El traslado instantáneo de la fase 1: salida y entrada en una transacción.
+  /// Se conserva porque la base ya sabe leerlo, no porque el flujo lo use.
   APLICADO
   REVERSADO
+  /// Se está preparando. No escribió nada en el libro y se puede editar.
+  BORRADOR
+  /// Salió del origen y todavía no llegó: **mercadería en tránsito**.
+  DESPACHADO
+  /// Llegó al destino. Cerrado: no se recibe dos veces.
+  RECIBIDO
+  /// Era un borrador y se descartó. Nunca tocó el libro.
+  CANCELADO
 }
 
 /// De dónde salió el saldo de un artículo en una sucursal.
@@ -1514,6 +1530,17 @@ model StockModuleSetting {
   receiptsChangedAt   DateTime?
   receiptsReason      String?
 
+  /// **Traslados entre sucursales con datos reales.**
+  ///
+  /// El tercero, y por lo mismo que hay dos: son decisiones distintas. Un
+  /// traslado real mueve saldo de una sucursal a otra, y mientras las ventas no
+  /// descuenten no hay con qué verificar ninguno de los dos contra la góndola.
+  realTransfersEnabled Boolean @default(false)
+  transfersChangedById String?
+  transfersChangedBy   User?   @relation("TrasladosRealesCambiadosPor", fields: [transfersChangedById], references: [id], onDelete: SetNull)
+  transfersChangedAt   DateTime?
+  transfersReason      String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1618,6 +1645,8 @@ model StockOperation {
   ledger        StockLedger[]
   countSessions StockCountSession[]
   transfers StockTransfer[]
+  /// Los traslados cuya RECEPCIÓN escribió esta operación.
+  transfersReceived StockTransfer[] @relation("RecepcionDeTraslado")
   receipt       StockReceipt?
 
   @@index([kind, appliedAt])
@@ -1731,7 +1760,11 @@ model StockBalance {
   @@map("stock_balance")
 }
 
-/// Un traslado entre sucursales: una operación, varios artículos.
+/// Un traslado entre sucursales: **dos hechos físicos**, no uno.
+///
+/// El despacho y la recepción ocurren en momentos distintos y por eso tienen dos
+/// operaciones, dos responsables y dos instantes. Entre los dos, la mercadería
+/// existe y no está en ninguna góndola: eso es el estado DESPACHADO.
 model StockTransfer {
   id           String @id @default(cuid())
   fromBranchId String
@@ -1739,10 +1772,39 @@ model StockTransfer {
   toBranchId   String
   toBranch     Branch @relation("TrasladoDestino", fields: [toBranchId], references: [id])
 
-  operationId String
-  operation   StockOperation @relation(fields: [operationId], references: [id])
+  /// La operación del DESPACHO. Nula mientras es borrador: todavía no escribió.
+  ///
+  /// Única: una operación escribe UN traslado. Si dos compartieran la operación,
+  /// el `result` guardado dejaría de decir qué pasó en cuál.
+  operationId String?         @unique
+  operation   StockOperation? @relation(fields: [operationId], references: [id], onDelete: Restrict)
 
-  status StockTransferStatus @default(APLICADO)
+  /// La operación de la RECEPCIÓN. Aparte, porque reintentar la recepción no es
+  /// reintentar el despacho.
+  receiptOperationId String?         @unique
+  receiptOperation   StockOperation? @relation("RecepcionDeTraslado", fields: [receiptOperationId], references: [id], onDelete: Restrict)
+
+  status StockTransferStatus @default(BORRADOR)
+
+  /// Quién armó el borrador, quién entregó y quién recibió: tres preguntas
+  /// distintas, tres personas posibles.
+  preparedById   String?
+  preparedBy     User?   @relation("TrasladoPreparadoPor", fields: [preparedById], references: [id], onDelete: SetNull)
+  dispatchedById String?
+  dispatchedBy   User?   @relation("TrasladoDespachadoPor", fields: [dispatchedById], references: [id], onDelete: SetNull)
+  receivedById   String?
+  receivedBy     User?   @relation("TrasladoRecibidoPor", fields: [receivedById], references: [id], onDelete: SetNull)
+  cancelledById  String?
+  cancelledBy    User?   @relation("TrasladoCanceladoPor", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  /// Instantes físicos, con zona horaria y decididos por el servidor. No se
+  /// copian de ninguna fecha fiscal ni se aceptan desde el navegador.
+  dispatchedAt DateTime? @db.Timestamptz(3)
+  receivedAt   DateTime? @db.Timestamptz(3)
+  cancelledAt  DateTime? @db.Timestamptz(3)
+
+  /// Bloqueo optimista del borrador: dos personas editándolo no se pisan.
+  version Int @default(0)
 
   userId String?
   user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -1761,6 +1823,7 @@ model StockTransfer {
 
   @@index([fromBranchId])
   @@index([toBranchId])
+  @@index([status])
   @@map("stock_transfer")
 }
 
@@ -1772,8 +1835,17 @@ model StockTransferLine {
   productId String
   product   Product @relation(fields: [productId], references: [id])
 
+  /// **Lo PREPARADO**: lo que alguien escribió en el borrador.
   quantity Decimal   @db.Decimal
   unit     StockUnit
+
+  /// **Lo DESPACHADO**: lo que salió del origen. Nula mientras no salió.
+  dispatchedQuantity Decimal? @db.Decimal
+  /// **Lo RECIBIDO**: lo que llegó al destino. Nula mientras está en tránsito.
+  ///
+  /// En esta fase tiene que ser igual a lo despachado, y lo exige la base. Una
+  /// diferencia física no se ajusta sola: el traslado se queda en tránsito.
+  receivedQuantity Decimal? @db.Decimal
 
   ledger StockLedger[]
 

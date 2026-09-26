@@ -148,6 +148,36 @@ export const PERMISSIONS = {
    */
   STOCKERP_EXCEPCION_HISTORICA: 'stockerp.excepcion.historica',
 
+  /**
+   * Preparar un traslado: armar el borrador, elegir origen y destino, agregar
+   * renglones, mirar la revisión previa y cancelar un borrador.
+   *
+   * NO es sensible, por lo mismo que preparar una apertura o una recepción: un
+   * borrador no escribe el libro y no mueve una sola existencia. Quien arma el
+   * pedido para la otra sucursal tiene que poder verlo entero antes de que
+   * alguien lo despache.
+   */
+  STOCKERP_TRASLADO_PREPARAR: 'stockerp.traslado.preparar',
+
+  /**
+   * Despachar: el acto que saca la mercadería del origen.
+   *
+   * Sensible. Baja el saldo de una sucursal de verdad, y la mercadería queda en
+   * tránsito hasta que alguien la reciba: un despacho de más deja faltante en
+   * origen y nada en destino, que es la forma más incómoda de perder existencias.
+   */
+  STOCKERP_TRASLADO_DESPACHAR: 'stockerp.traslado.despachar',
+
+  /**
+   * Recibir: el acto que ingresa la mercadería al destino y cierra el traslado.
+   *
+   * Sensible, y separado del despacho a propósito. Son dos personas en dos
+   * sucursales distintas, y que la misma pueda hacer las dos cosas es una
+   * decisión de la cadena, no un detalle técnico: acá lo que corresponde es que
+   * el permiso lo permita nombrar por separado.
+   */
+  STOCKERP_TRASLADO_RECIBIR: 'stockerp.traslado.recibir',
+
   /*
    * Los dos de abajo siguen nombrando capacidades que TODAVÍA NO EXISTEN: no
    * hay ajustes ni reversiones. Se declaran por una sola razón, y es la que
@@ -199,6 +229,9 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'stockerp.recepcion.confirmar': 'Confirmar la recepción de mercadería de una compra',
   'stockerp.excepcion.historica':
     'Documentar una decisión sobre mercadería anterior al corte (sin movimientos)',
+  'stockerp.traslado.preparar': 'Preparar traslados entre sucursales y ver su revisión previa',
+  'stockerp.traslado.despachar': 'Despachar un traslado: sacar la mercadería del origen',
+  'stockerp.traslado.recibir': 'Recibir un traslado en destino y cerrarlo',
   'stockerp.ajuste': 'Ajustar existencias sin comprobante (todavía no implementado)',
   'stockerp.reversar': 'Reversar movimientos del libro (todavía no implementado)',
 };
@@ -224,6 +257,8 @@ export const PERMISOS_SENSIBLES_DE_STOCK_ERP: Permission[] = [
   PERMISSIONS.STOCKERP_ACTIVACION_HABILITAR,
   PERMISSIONS.STOCKERP_MODULO_CONFIGURAR,
   PERMISSIONS.STOCKERP_RECEPCION_CONFIRMAR,
+  PERMISSIONS.STOCKERP_TRASLADO_DESPACHAR,
+  PERMISSIONS.STOCKERP_TRASLADO_RECIBIR,
   PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
   PERMISSIONS.STOCKERP_AJUSTE,
   PERMISSIONS.STOCKERP_REVERSAR,

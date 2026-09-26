@@ -111,6 +111,38 @@ export const AUDIT_ACTIONS = {
   STOCKERP_RECEPCION_SIMULTANEA: 'stockerp.recepcion_simultanea',
   /** El interruptor de recepciones reales se encendió o apagó. */
   STOCKERP_RECEPCIONES_INTERRUPTOR: 'stockerp.recepciones_interruptor_cambiado',
+
+  /* --- Fase 6: traslados entre sucursales ------------------------------- */
+
+  /** Se creó un borrador de traslado. Todavía no mueve nada. */
+  STOCKERP_TRASLADO_CREADO: 'stockerp.traslado_creado',
+  /**
+   * Cambió un renglón del borrador: se agregó, se modificó o se retiró.
+   *
+   * Uno por cambio y con los valores de antes y de después. Sin esto, la
+   * pregunta «quién puso tres kilos donde había uno» no tiene respuesta: el
+   * borrador no deja rastro en el libro porque no escribe en el libro.
+   */
+  STOCKERP_TRASLADO_RENGLON: 'stockerp.traslado_renglon_cambiado',
+  /** El borrador se descartó. No tocó el libro. */
+  STOCKERP_TRASLADO_CANCELADO: 'stockerp.traslado_cancelado',
+  /** El despacho asentó las salidas: la mercadería salió del origen. */
+  STOCKERP_TRASLADO_DESPACHADO: 'stockerp.traslado_despachado',
+  /** La recepción asentó las entradas y cerró el traslado. */
+  STOCKERP_TRASLADO_RECIBIDO: 'stockerp.traslado_recibido',
+  /**
+   * Dos despachos —o dos recepciones— del mismo traslado al mismo tiempo.
+   *
+   * Uno aplicó y el otro no. Se audita después del rollback, en una transacción
+   * nueva, porque la que aborta no puede dejar rastro dentro de la suya.
+   */
+  STOCKERP_TRASLADO_SIMULTANEO: 'stockerp.traslado_simultaneo',
+  /** Se quiso despachar más de lo que hay en origen. No se escribió nada. */
+  STOCKERP_TRASLADO_BLOQUEADO_SALDO: 'stockerp.traslado_bloqueado_por_saldo',
+  /** La recepción no coincidía con lo despachado: sigue en tránsito. */
+  STOCKERP_TRASLADO_DIFERENCIA: 'stockerp.traslado_diferencia_fisica',
+  /** El interruptor de traslados reales se encendió o apagó. */
+  STOCKERP_TRASLADOS_INTERRUPTOR: 'stockerp.traslados_interruptor_cambiado',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -156,6 +188,17 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
   'stockerp.recepcion_simultanea': 'Stock ERP: recepción simultánea resuelta',
   'stockerp.recepciones_interruptor_cambiado':
     'Stock ERP: interruptor de recepciones reales cambiado',
+  'stockerp.traslado_creado': 'Stock ERP: borrador de traslado creado',
+  'stockerp.traslado_renglon_cambiado': 'Stock ERP: renglón de un traslado cambiado',
+  'stockerp.traslado_cancelado': 'Stock ERP: borrador de traslado cancelado',
+  'stockerp.traslado_despachado': 'Stock ERP: traslado despachado (salida del origen)',
+  'stockerp.traslado_recibido': 'Stock ERP: traslado recibido y cerrado',
+  'stockerp.traslado_simultaneo': 'Stock ERP: traslado simultáneo resuelto',
+  'stockerp.traslado_bloqueado_por_saldo': 'Stock ERP: traslado bloqueado por saldo insuficiente',
+  'stockerp.traslado_diferencia_fisica':
+    'Stock ERP: recepción de traslado con diferencia física, sigue en tránsito',
+  'stockerp.traslados_interruptor_cambiado':
+    'Stock ERP: interruptor de traslados reales cambiado',
   'rol.modificado': 'Rol modificado',
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',
