@@ -24,6 +24,10 @@ on:
       # verificación es la misma: lo que hay que comprobar no es sólo lo nuevo,
       # es que Compras y las cuatro fases anteriores sigan enteras.
       - stock-erp-fase-5
+      # La rama de la fase 6: los traslados entre sucursales, con mercadería en
+      # tránsito. Reemplaza un disparador de la fase 1, así que lo que hay que
+      # verificar es sobre todo que las cinco fases anteriores sigan enteras.
+      - stock-erp-fase-6
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -148,4 +152,5 @@ jobs:
             tests/e2e/stock-erp-unidades.spec.ts \
             tests/e2e/stock-erp-apertura.spec.ts \
             tests/e2e/stock-erp-recepcion.spec.ts \
-            tests/e2e/stock-erp-consultas.spec.ts
+            tests/e2e/stock-erp-consultas.spec.ts \
+            tests/e2e/stock-erp-traslados.spec.ts

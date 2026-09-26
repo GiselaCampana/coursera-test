@@ -154,6 +154,19 @@ async function sembrarCon(prisma: PrismaClient) {
            * lo que permite comprobar que la puerta está cerrada.
            */
           PERMISSIONS.STOCKERP_RECEPCION_CONFIRMAR,
+          /*
+           * Fase 6: despachar y recibir traslados.
+           *
+           * Los dos son sensibles y por eso tampoco vienen en
+           * `ADMIN_PERMISSIONS`. Se otorgan acá a mano, igual que el de
+           * recepciones, y el administrador de fábrica sigue sin ellos: eso es
+           * lo que permite comprobar en el navegador que la puerta está cerrada.
+           *
+           * `traslado.preparar` no hace falta nombrarlo: no es sensible y ya
+           * entra con los permisos del administrador.
+           */
+          PERMISSIONS.STOCKERP_TRASLADO_DESPACHAR,
+          PERMISSIONS.STOCKERP_TRASLADO_RECIBIR,
         ],
         scopeAllBranches: true,
       },
@@ -201,6 +214,25 @@ async function sembrarCon(prisma: PrismaClient) {
     }),
     prisma.branch.create({
       data: { code: 'RECEP_ESCRITORIO', name: 'Recepciones (escritorio)', stockKey: 'recep_escritorio' },
+    }),
+    /*
+     * Dos sucursales más, para los traslados de la fase 6.
+     *
+     * Hacen falta DOS porque un traslado necesita origen y destino, y no se
+     * pueden reusar las de recepciones: recibir un traslado en una de ellas le
+     * cambiaría el saldo al escenario de la fase 4, que afirma números exactos.
+     * Ese error ya se cometió una vez con el sembrado retroactivo.
+     *
+     * Las comparten los dos proyectos de Playwright, y no hay interferencia
+     * porque cada proyecto mueve SU artículo: los saldos son por artículo y
+     * sucursal, así que el traslado del teléfono y el del escritorio no se
+     * pisan.
+     */
+    prisma.branch.create({
+      data: { code: 'TRASLADO_ORIGEN', name: 'Traslados (origen)', stockKey: 'traslado_origen' },
+    }),
+    prisma.branch.create({
+      data: { code: 'TRASLADO_DESTINO', name: 'Traslados (destino)', stockKey: 'traslado_destino' },
     }),
   ]);
 
@@ -751,6 +783,7 @@ async function sembrarCon(prisma: PrismaClient) {
   }
 
   await sembrarLasRecepciones(prisma, admin.id, proveedor.id);
+  await sembrarLosTraslados(prisma, admin.id);
 
   console.log('Datos de prueba listos.');
 }
@@ -1151,6 +1184,175 @@ async function sembrarLasRecepciones(prisma: PrismaClient, adminId: string, prov
       },
     ],
   });
+}
+
+/* ========================================================================== *
+ * Stock ERP, fase 6: lo que hace falta para trasladar en el navegador
+ * ========================================================================== */
+
+/**
+ * Dos sucursales inauguradas y dos artículos con saldo, uno por proyecto.
+ *
+ * Va DESPUÉS de las recepciones a propósito: `sembrarLasRecepciones` arma su
+ * escenario con «todos los artículos que tienen unidad aprobada», y si estos dos
+ * existieran antes, se meterían en las aperturas de la fase 4 y le cambiarían los
+ * números a sus pruebas. Creándolos después, esa lista ya se calculó.
+ *
+ * Un artículo por proyecto de Playwright, las dos sucursales compartidas: los
+ * saldos son por artículo y sucursal, así que el traslado del teléfono y el del
+ * escritorio no se pisan aunque vayan de la misma sucursal a la misma sucursal.
+ */
+async function sembrarLosTraslados(prisma: PrismaClient, adminId: string) {
+  /* Antes que el corte de las recepciones, y antes del día fijado por APP_FAKE_TODAY. */
+  const CORTE = new Date('2026-09-04T23:30:00.000Z');
+
+  const origen = await prisma.branch.findFirstOrThrow({ where: { code: 'TRASLADO_ORIGEN' } });
+  const destino = await prisma.branch.findFirstOrThrow({ where: { code: 'TRASLADO_DESTINO' } });
+
+  /* Un artículo por proyecto, con su unidad aprobada. */
+  const articulos = [];
+  for (const [plu, nombre] of [
+    ['5001', 'Muzzarella en barra'],
+    ['5002', 'Ricota horneada'],
+  ] as const) {
+    const p = await prisma.product.create({
+      data: {
+        internalCode: plu,
+        normalizedName: nombre,
+        category: 'Quesos',
+        purchaseUnit: 'KG',
+        saleMode: 'AL_CORTE',
+        avgPieceWeightKg: '3.000',
+        targetMarginPct: '0.45',
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0.10',
+        roundingRule: 'NEAREST_100',
+      },
+    });
+    await prisma.productStockConfig.create({
+      data: {
+        productId: p.id,
+        stockUnit: 'KG',
+        status: 'APROBADA',
+        approvedById: adminId,
+        approvedAt: new Date('2026-09-03T12:00:00Z'),
+        notes: 'Sembrado para las pruebas de traslados.',
+      },
+    });
+    articulos.push(p);
+  }
+
+  /*
+   * Las dos aperturas, escritas con SQL por lo mismo que las de la fase 4: esto
+   * es sembrado y los servicios importan `server-only`. El origen cuenta 20 de
+   * cada artículo; el destino los cuenta en CERO, que es distinto de no tenerlos.
+   */
+  for (const sucursal of [origen, destino]) {
+    const cantidad = sucursal.id === origen.id ? '20' : '0';
+
+    await prisma.$transaction(async (tx) => {
+      const operacion = await tx.stockOperation.create({
+        data: {
+          operationKey: `apertura:${sucursal.id}`,
+          kind: 'ACTIVACION',
+          contentHash: `sembrado:${sucursal.code}`,
+          branchId: sucursal.id,
+          requestedById: adminId,
+          movementCount: articulos.length,
+        },
+      });
+      const sesion = await tx.stockCountSession.create({
+        data: {
+          branchId: sucursal.id,
+          name: `Apertura de ${sucursal.name}`,
+          status: 'BORRADOR',
+          cutoffAt: CORTE,
+          catalogSnapshotAt: CORTE,
+          ficticia: true,
+          createdById: adminId,
+        },
+      });
+
+      for (const p of articulos) {
+        const activacion = await tx.productStockActivation.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            state: 'LISTO_PARA_CONTAR',
+            sessionId: sesion.id,
+            countedQuantity: cantidad,
+            countedUnit: 'KG',
+            countedById: adminId,
+            countedAt: CORTE,
+          },
+        });
+
+        const movId = `${operacion.id}-${p.id}`;
+        await tx.$executeRaw`
+          INSERT INTO "stock_ledger"
+            ("id","txId","productId","pluHistorico","branchId","type","direction",
+             "quantity","unit","effectiveAt","operationId","userId","idempotencyKey",
+             "balanceAfterSeq","reason","createdAt")
+          VALUES (${movId}, txid_current(), ${p.id}, ${p.internalCode}, ${sucursal.id},
+                  'OPENING_BALANCE'::"StockMovementType", 'IN'::"StockDirection",
+                  ${cantidad}::numeric, 'KG'::"StockUnit", ${CORTE}, ${operacion.id},
+                  ${adminId}, ${`apertura:${sucursal.id}:${p.id}`},
+                  ${cantidad}::numeric, 'Apertura de existencias', now())`;
+
+        await tx.stockBalance.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            quantity: cantidad,
+            unit: 'KG',
+            lastLedgerId: movId,
+            lastOperationId: operacion.id,
+            openingSource: 'APERTURA',
+          },
+        });
+
+        await tx.productStockActivation.update({
+          where: { id: activacion.id },
+          data: {
+            state: 'ACTIVO',
+            cutoffAt: CORTE,
+            openingLedgerId: movId,
+            activatedById: adminId,
+            activatedAt: CORTE,
+          },
+        });
+      }
+
+      /* El resto del catálogo, «no se maneja acá»: la apertura va completa. */
+      const resto = await tx.product.findMany({
+        where: { active: true, id: { notIn: articulos.map((a) => a.id) } },
+        select: { id: true },
+      });
+      for (const p of resto) {
+        await tx.productStockActivation.create({
+          data: {
+            productId: p.id,
+            branchId: sucursal.id,
+            state: 'NO_SE_MANEJA',
+            sessionId: sesion.id,
+            reason: 'Esta sucursal sólo participa de los traslados de prueba.',
+            activatedById: adminId,
+            activatedAt: CORTE,
+          },
+        });
+      }
+
+      await tx.stockCountSession.update({
+        where: { id: sesion.id },
+        data: {
+          status: 'CONFIRMADA',
+          confirmedById: adminId,
+          confirmedAt: CORTE,
+          operationId: operacion.id,
+        },
+      });
+    });
+  }
 }
 
 /**
