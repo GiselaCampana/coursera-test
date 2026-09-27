@@ -31,6 +31,23 @@ export function NuevaMerma({
   puedeRegistrar: boolean;
   interruptorEncendido: boolean;
 }) {
+  /*
+   * **La clave idempotente se congela al montar la pantalla.**
+   *
+   * HALLAZGO de la prueba end to end: el identificador lo genera el servidor una
+   * vez por carga, pero cualquier `revalidatePath` de la acción hace que Next
+   * devuelva el árbol de esta ruta ya re-renderizado, y con él un identificador
+   * NUEVO. La consecuencia es la contraria de la buscada: si la respuesta se
+   * pierde y la persona vuelve a confirmar, la segunda confirmación viaja con
+   * otra clave y la pérdida se descuenta dos veces.
+   *
+   * `useState` con el valor inicial resuelve eso sin inventar nada en el
+   * navegador: toma el identificador que trajo el servidor la primera vez y no
+   * lo cambia más mientras la pantalla siga montada. Para registrar otra merma
+   * se recarga la pantalla, que es un acto distinto y visible.
+   */
+  const [clave] = useState(mermaId);
+
   const [r, setR] = useState<Resultado | null>(null);
   const [enviando, setEnviando] = useState(false);
   const [confirmando, setConfirmando] = useState(false);
@@ -207,7 +224,7 @@ export function NuevaMerma({
               las dos cosas.
             </p>
             <form action={enviar}>
-              <input type="hidden" name="mermaId" value={mermaId} />
+              <input type="hidden" name="mermaId" value={clave} />
               <input type="hidden" name="branchId" value={branchId} />
               <input type="hidden" name="productId" value={productId} />
               <input type="hidden" name="cantidad" value={cantidad} />

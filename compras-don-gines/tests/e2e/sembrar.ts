@@ -167,6 +167,24 @@ async function sembrarCon(prisma: PrismaClient) {
            */
           PERMISSIONS.STOCKERP_TRASLADO_DESPACHAR,
           PERMISSIONS.STOCKERP_TRASLADO_RECIBIR,
+          /*
+           * Fase 7: mermar, ajustar y reversar.
+           *
+           * Los tres son sensibles y ninguno viene en `ADMIN_PERMISSIONS`: una
+           * merma baja un inventario sin comprobante, un ajuste reinterpreta lo
+           * contado y una reversión deja dos asientos que se cancelan. Se
+           * otorgan acá a mano, con nombre, igual que habrá que hacerlo en
+           * producción.
+           *
+           * `recuento.preparar` no hace falta nombrarlo: contar no escribe el
+           * libro, no es sensible y ya entra con los permisos del
+           * administrador. Eso es lo que permite comprobar en el navegador que
+           * el administrador de fábrica puede contar la góndola y NO puede
+           * confirmar el ajuste que surge de esa cuenta.
+           */
+          PERMISSIONS.STOCKERP_MERMA,
+          PERMISSIONS.STOCKERP_AJUSTE,
+          PERMISSIONS.STOCKERP_REVERSAR,
         ],
         scopeAllBranches: true,
       },
@@ -233,6 +251,34 @@ async function sembrarCon(prisma: PrismaClient) {
     }),
     prisma.branch.create({
       data: { code: 'TRASLADO_DESTINO', name: 'Traslados (destino)', stockKey: 'traslado_destino' },
+    }),
+    /*
+     * Y las sucursales donde se practican las correcciones de la fase 7.
+     *
+     * Aparte de las de traslados a propósito: una merma y un recuento cambian el
+     * saldo, y si compartieran sucursal y artículo con los traslados, una prueba
+     * le movería el piso a la otra.
+     *
+     * Acá hay **una sucursal por proyecto** de Playwright, no una compartida con
+     * un artículo para cada uno como en los traslados. La razón es una regla del
+     * negocio: un recuento correctivo es de la SUCURSAL y sólo puede haber uno
+     * abierto a la vez —dos contarían la misma góndola dos veces—. Con una
+     * sucursal compartida, un recuento abierto en el teléfono le cerraría la
+     * puerta al escritorio.
+     */
+    prisma.branch.create({
+      data: {
+        code: 'CORRECCIONES_A',
+        name: 'Correcciones (teléfono)',
+        stockKey: 'correcciones_a',
+      },
+    }),
+    prisma.branch.create({
+      data: {
+        code: 'CORRECCIONES_B',
+        name: 'Correcciones (escritorio)',
+        stockKey: 'correcciones_b',
+      },
     }),
   ]);
 
@@ -784,6 +830,7 @@ async function sembrarCon(prisma: PrismaClient) {
 
   await sembrarLasRecepciones(prisma, admin.id, proveedor.id);
   await sembrarLosTraslados(prisma, admin.id);
+  await sembrarLasCorrecciones(prisma, admin.id);
 
   console.log('Datos de prueba listos.');
 }
@@ -1336,6 +1383,177 @@ async function sembrarLosTraslados(prisma: PrismaClient, adminId: string) {
             state: 'NO_SE_MANEJA',
             sessionId: sesion.id,
             reason: 'Esta sucursal sólo participa de los traslados de prueba.',
+            activatedById: adminId,
+            activatedAt: CORTE,
+          },
+        });
+      }
+
+      await tx.stockCountSession.update({
+        where: { id: sesion.id },
+        data: {
+          status: 'CONFIRMADA',
+          confirmedById: adminId,
+          confirmedAt: CORTE,
+          operationId: operacion.id,
+        },
+      });
+    });
+  }
+}
+
+/* ========================================================================== *
+ * Stock ERP, fase 7: lo que hace falta para corregir en el navegador
+ * ========================================================================== */
+
+/**
+ * Las dos sucursales donde se practican mermas, recuentos y reversiones.
+ *
+ * Una sucursal y un artículo por proyecto de Playwright. En los traslados
+ * alcanzaba con repartir el artículo, porque los saldos son por artículo y
+ * sucursal; acá no, porque un recuento correctivo es de la SUCURSAL y sólo puede
+ * haber uno abierto a la vez.
+ *
+ * La apertura se marca `ficticia`, que es la verdad —son cantidades inventadas—
+ * y es lo que permite corregir sin encender el interruptor de correcciones
+ * reales: el disparador de la base sólo acepta una corrección sobre una apertura
+ * ficticia si la base se llama como una base de pruebas. En producción, donde la
+ * apertura no es ficticia, el mismo disparador exige el interruptor.
+ */
+async function sembrarLasCorrecciones(prisma: PrismaClient, adminId: string) {
+  /* Antes del corte de las recepciones y antes del día fijado por APP_FAKE_TODAY. */
+  const CORTE = new Date('2026-09-04T23:30:00.000Z');
+
+  const reparto = [
+    { sucursal: 'CORRECCIONES_A', plu: '6001', nombre: 'Jamón cocido en barra' },
+    { sucursal: 'CORRECCIONES_B', plu: '6002', nombre: 'Queso de máquina' },
+  ] as const;
+
+  /* Los dos artículos primero: cada apertura necesita saber que el otro existe
+   * para declararlo «no se maneja acá», que es la verdad. */
+  const articulos = new Map<string, { id: string; internalCode: string }>();
+  for (const { plu, nombre } of reparto) {
+    const p = await prisma.product.create({
+      data: {
+        internalCode: plu,
+        normalizedName: nombre,
+        category: 'Fiambres',
+        purchaseUnit: 'KG',
+        saleMode: 'AL_CORTE',
+        avgPieceWeightKg: '3.500',
+        targetMarginPct: '0.45',
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0.10',
+        roundingRule: 'NEAREST_100',
+      },
+    });
+    await prisma.productStockConfig.create({
+      data: {
+        productId: p.id,
+        stockUnit: 'KG',
+        status: 'APROBADA',
+        approvedById: adminId,
+        approvedAt: new Date('2026-09-03T12:00:00Z'),
+        notes: 'Sembrado para las pruebas de correcciones.',
+      },
+    });
+    articulos.set(plu, { id: p.id, internalCode: p.internalCode });
+  }
+
+  /*
+   * Una apertura por sucursal, escrita con SQL por lo mismo que las anteriores:
+   * esto es sembrado y los servicios importan `server-only`. Veinte kilos del
+   * artículo propio, que alcanzan para mermar, recontar y revertir sin quedar en
+   * cero.
+   */
+  for (const { sucursal: codigo, plu } of reparto) {
+    const sucursal = await prisma.branch.findFirstOrThrow({ where: { code: codigo } });
+    const propio = articulos.get(plu)!;
+
+    await prisma.$transaction(async (tx) => {
+      const operacion = await tx.stockOperation.create({
+        data: {
+          operationKey: `apertura:${sucursal.id}`,
+          kind: 'ACTIVACION',
+          contentHash: `sembrado:${sucursal.code}`,
+          branchId: sucursal.id,
+          requestedById: adminId,
+          movementCount: 1,
+        },
+      });
+      const sesion = await tx.stockCountSession.create({
+        data: {
+          branchId: sucursal.id,
+          name: `Apertura de ${sucursal.name}`,
+          status: 'BORRADOR',
+          cutoffAt: CORTE,
+          catalogSnapshotAt: CORTE,
+          ficticia: true,
+          createdById: adminId,
+        },
+      });
+
+      const activacion = await tx.productStockActivation.create({
+        data: {
+          productId: propio.id,
+          branchId: sucursal.id,
+          state: 'LISTO_PARA_CONTAR',
+          sessionId: sesion.id,
+          countedQuantity: '20',
+          countedUnit: 'KG',
+          countedById: adminId,
+          countedAt: CORTE,
+        },
+      });
+
+      const movId = `${operacion.id}-${propio.id}`;
+      await tx.$executeRaw`
+        INSERT INTO "stock_ledger"
+          ("id","txId","productId","pluHistorico","branchId","type","direction",
+           "quantity","unit","effectiveAt","operationId","userId","idempotencyKey",
+           "balanceAfterSeq","reason","createdAt")
+        VALUES (${movId}, txid_current(), ${propio.id}, ${propio.internalCode},
+                ${sucursal.id}, 'OPENING_BALANCE'::"StockMovementType",
+                'IN'::"StockDirection", 20::numeric, 'KG'::"StockUnit", ${CORTE},
+                ${operacion.id}, ${adminId}, ${`apertura:${sucursal.id}:${propio.id}`},
+                20::numeric, 'Apertura de existencias', now())`;
+
+      await tx.stockBalance.create({
+        data: {
+          productId: propio.id,
+          branchId: sucursal.id,
+          quantity: '20',
+          unit: 'KG',
+          lastLedgerId: movId,
+          lastOperationId: operacion.id,
+          openingSource: 'APERTURA',
+        },
+      });
+
+      await tx.productStockActivation.update({
+        where: { id: activacion.id },
+        data: {
+          state: 'ACTIVO',
+          cutoffAt: CORTE,
+          openingLedgerId: movId,
+          activatedById: adminId,
+          activatedAt: CORTE,
+        },
+      });
+
+      /* El resto del catálogo, «no se maneja acá»: la apertura va completa. */
+      const resto = await tx.product.findMany({
+        where: { active: true, id: { not: propio.id } },
+        select: { id: true },
+      });
+      for (const otro of resto) {
+        await tx.productStockActivation.create({
+          data: {
+            productId: otro.id,
+            branchId: sucursal.id,
+            state: 'NO_SE_MANEJA',
+            sessionId: sesion.id,
+            reason: 'Esta sucursal sólo participa de las correcciones de prueba.',
             activatedById: adminId,
             activatedAt: CORTE,
           },

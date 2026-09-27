@@ -28,6 +28,12 @@ on:
       # tránsito. Reemplaza un disparador de la fase 1, así que lo que hay que
       # verificar es sobre todo que las cinco fases anteriores sigan enteras.
       - stock-erp-fase-6
+      # La rama de la fase 7: mermas, recuentos correctivos y reversiones
+      # acotadas. Vuelve a reemplazar el disparador de traslado completo —ahora
+      # para que distinga los movimientos originales de sus reversiones—, así
+      # que lo que hay que verificar es sobre todo que las seis fases anteriores
+      # sigan enteras.
+      - stock-erp-fase-7
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
@@ -153,4 +159,5 @@ jobs:
             tests/e2e/stock-erp-apertura.spec.ts \
             tests/e2e/stock-erp-recepcion.spec.ts \
             tests/e2e/stock-erp-consultas.spec.ts \
-            tests/e2e/stock-erp-traslados.spec.ts
+            tests/e2e/stock-erp-traslados.spec.ts \
+            tests/e2e/stock-erp-correcciones.spec.ts

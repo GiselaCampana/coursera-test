@@ -38,9 +38,24 @@ function traducir(e: unknown): Resultado {
   return { ok: false, mensaje: 'No se pudo completar la operación.' };
 }
 
+/**
+ * Refresca lo que quedó viejo, y **nada más**.
+ *
+ * HALLAZGO que obligó a escribir este comentario: acá también se revalidaba
+ * `/stock-erp/correcciones/mermas`, que es el formulario de la merma. Esa
+ * pantalla genera su identificador idempotente en el servidor, una vez por
+ * carga; revalidarla hacía que el navegador recibiera una carga nueva —con un
+ * identificador NUEVO— inmediatamente después de cada registro. El efecto es
+ * justo el contrario del buscado: si la respuesta se pierde en el camino y la
+ * persona vuelve a confirmar, la segunda confirmación viaja con otra clave y la
+ * pérdida se descuenta dos veces.
+ *
+ * Así que el formulario no se revalida: no muestra ninguna lista, no tiene nada
+ * viejo que mostrar, y mantener su identificador estable mientras la pantalla
+ * siga cargada es exactamente lo que hace seguro reintentar.
+ */
 function refrescar(extra?: string) {
   revalidatePath('/stock-erp/correcciones');
-  revalidatePath('/stock-erp/correcciones/mermas');
   revalidatePath('/stock-erp/correcciones/recuentos');
   revalidatePath('/stock-erp/existencias');
   revalidatePath('/stock-erp/movimientos');

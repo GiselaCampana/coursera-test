@@ -1361,6 +1361,76 @@ describe('lo que la fase no rompe', () => {
     ).toBeGreaterThanOrEqual(2);
   });
 
+  it('33b. «excepción histórica» no saltea el saldo, la unidad ni la auditoría', async () => {
+    /*
+     * `stockerp.excepcion.historica` existe para DOCUMENTAR una decisión sobre
+     * mercadería anterior al corte, sin escribir movimientos. Nada de esta fase
+     * lo consulta —se puede comprobar leyendo el servicio—, y eso es lo que
+     * garantiza que no abra ninguna puerta. Esta prueba lo afirma desde afuera:
+     * con el permiso puesto, cada regla sigue en pie.
+     */
+    const excepcional = con([
+      ...BASE_DE_APERTURA,
+      PERMISSIONS.STOCKERP_MERMA,
+      PERMISSIONS.STOCKERP_AJUSTE,
+      PERMISSIONS.STOCKERP_REVERSAR,
+      PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
+    ]);
+    const art = await escenarioSimple('4');
+
+    /* El saldo: no alcanza y sigue sin alcanzar. */
+    await expect(
+      registrarMerma(excepcional, {
+        mermaId: proximaMerma(),
+        branchId: sucursalId,
+        productId: art.id,
+        cantidad: '5',
+        categoria: 'FALTANTE',
+        motivo: 'Con excepción histórica puesta',
+        confirmado: true,
+      }),
+    ).rejects.toThrow(/saldo|quedan|negativo/i);
+
+    /* La unidad: sigue siendo la aprobada, no la que convenga. */
+    const otro = await articulo('C-200');
+    await expect(
+      registrarMerma(excepcional, {
+        mermaId: proximaMerma(),
+        branchId: sucursalId,
+        productId: otro.id,
+        cantidad: '1',
+        categoria: 'ROTURA',
+        motivo: 'Artículo sin apertura en esta sucursal',
+        confirmado: true,
+      }),
+    ).rejects.toThrow();
+
+    /* Y la auditoría: una merma legítima sigue dejando rastro con su motivo. */
+    const antes = await prisma.auditLog.count({
+      where: { action: AUDIT_ACTIONS.STOCKERP_MERMA_CONFIRMADA },
+    });
+    await registrarMerma(excepcional, {
+      mermaId: proximaMerma(),
+      branchId: sucursalId,
+      productId: art.id,
+      cantidad: '1',
+      categoria: 'FALTANTE',
+      motivo: 'Faltó una horma en el recuento de la tarde',
+      confirmado: true,
+    });
+    expect(
+      await prisma.auditLog.count({
+        where: { action: AUDIT_ACTIONS.STOCKERP_MERMA_CONFIRMADA },
+      }),
+    ).toBe(antes + 1);
+
+    /* Y el saldo bajó por el camino normal: el permiso no cambió nada. */
+    const saldo = await prisma.stockBalance.findFirstOrThrow({
+      where: { productId: art.id, branchId: sucursalId },
+    });
+    expect(saldo.quantity.toString()).toBe('3');
+  });
+
   it('34. el interruptor de correcciones nace apagado y exige permiso y motivo', async () => {
     const estado = await interruptorDeCorreccionesReales();
     expect(estado.encendido).toBe(false);
