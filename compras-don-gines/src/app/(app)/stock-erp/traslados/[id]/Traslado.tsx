@@ -45,7 +45,14 @@ const EXPLICACION_POR_ESTADO: Record<string, string> = {
     'Llegó al destino y el traslado está cerrado. No se recibe dos veces y no se edita.',
   CANCELADO: 'El borrador se descartó. Nunca tocó el libro de existencias.',
   APLICADO: 'Traslado instantáneo de la fase 1: la salida y la entrada se asentaron juntas.',
-  REVERSADO: 'Reversado por otro traslado.',
+  /*
+   * La fase 6 dejó este texto anticipando que la reversión sería otro traslado al
+   * revés. La fase 7 la hizo de otra manera —y mejor—: un asiento inverso
+   * vinculado al original, bajo la misma operación de despacho. El destino nunca
+   * recibió nada, así que no hay nada que compensar allá.
+   */
+  REVERSADO:
+    'El despacho se revirtió: la mercadería volvió al origen con un asiento inverso. La salida original sigue en el libro, con su reversión al lado. No vuelve a ser un borrador editable.',
 };
 
 export function Traslado({
