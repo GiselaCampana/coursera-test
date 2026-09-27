@@ -703,25 +703,39 @@ export async function mermasRegistradas(
       product: { select: { normalizedName: true, internalCode: true } },
       createdBy: { select: { name: true } },
       reversedBy: { select: { name: true } },
+      /*
+       * El saldo de antes y el de después salen del `result` que guardó la
+       * operación, no de una resta hecha hoy: hoy el saldo ya es otro, y lo que
+       * la pantalla tiene que mostrar es lo que pasó cuando pasó.
+       */
+      operation: { select: { result: true } },
     },
   });
-  return filas.map((m) => ({
-    id: m.id,
-    sucursal: m.branch.name,
-    articulo: m.product.normalizedName,
-    plu: m.product.internalCode,
-    cantidad: m.quantity.toString(),
-    unidad: m.unit,
-    categoria: m.category,
-    motivo: m.reason,
-    detalle: m.detail,
-    ocurrioEl: m.occurredAt,
-    registradaPor: m.createdBy?.name ?? null,
-    operationId: m.operationId,
-    revertida: m.reversalOperationId !== null,
-    revertidaPor: m.reversedBy?.name ?? null,
-    revertidaEl: m.reversedAt,
-  }));
+  return filas.map((m) => {
+    const guardado = m.operation.result as {
+      saldoAnterior?: string;
+      saldoResultante?: string;
+    } | null;
+    return {
+      id: m.id,
+      sucursal: m.branch.name,
+      articulo: m.product.normalizedName,
+      plu: m.product.internalCode,
+      cantidad: m.quantity.toString(),
+      unidad: m.unit,
+      categoria: m.category,
+      motivo: m.reason,
+      detalle: m.detail,
+      ocurrioEl: m.occurredAt,
+      registradaPor: m.createdBy?.name ?? null,
+      operationId: m.operationId,
+      saldoAnterior: guardado?.saldoAnterior ?? null,
+      saldoResultante: guardado?.saldoResultante ?? null,
+      revertida: m.reversalOperationId !== null,
+      revertidaPor: m.reversedBy?.name ?? null,
+      revertidaEl: m.reversedAt,
+    };
+  });
 }
 
 /* ========================================================================== *
@@ -755,6 +769,8 @@ export interface LineaDeRecuento {
   contadaEl: Date | null;
   confirmadaPor: string | null;
   confirmadaEl: Date | null;
+  /** El motivo escrito del ajuste, tal como quedó en el asiento del libro. */
+  motivo: string | null;
   revertida: boolean;
   /** Impedimentos vigentes, recalculados al mirar. */
   impedimentos: string[];
@@ -945,6 +961,12 @@ export async function verRecuento(user: AuthUser, sessionId: string): Promise<Re
           product: { select: { normalizedName: true, internalCode: true } },
           countedBy: { select: { name: true } },
           confirmedBy: { select: { name: true } },
+          /*
+           * El motivo escrito del ajuste vive en el asiento, no en la línea: es
+           * el movimiento el que tiene que poder explicarse solo cuando alguien
+           * lo mira en el libro dentro de dos años.
+           */
+          operation: { select: { ledger: { select: { reason: true }, take: 1 } } },
         },
       },
     },
@@ -981,6 +1003,7 @@ export async function verRecuento(user: AuthUser, sessionId: string): Promise<Re
       contadaEl: l.countedAt,
       confirmadaPor: l.confirmedBy?.name ?? null,
       confirmadaEl: l.confirmedAt,
+      motivo: l.operation?.ledger[0]?.reason ?? null,
       revertida: l.reversalOperationId !== null,
       impedimentos,
     });

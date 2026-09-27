@@ -137,7 +137,8 @@ export default async function Page({
         <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
         <Link href="/stock-erp/integridad">Integridad →</Link>{' '}
         <Link href="/stock-erp/auditoria">Auditoría →</Link>{' '}
-        <Link href="/stock-erp/traslados">Traslados →</Link>
+        <Link href="/stock-erp/traslados">Traslados →</Link>{' '}
+        <Link href="/stock-erp/correcciones">Correcciones →</Link>
       </p>
       <h1>Existencias</h1>
       <p className="chico">

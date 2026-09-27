@@ -60,6 +60,11 @@ export default async function Page({
         de las dos.
       </EnPreparacion>
 
+      <p className="chico">
+        <Link href="/stock-erp/existencias">← Existencias</Link>{' '}
+        <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
+        <Link href="/stock-erp/correcciones">Correcciones →</Link>
+      </p>
       <h1>Traslados entre sucursales</h1>
       <p className="chico">
         Un traslado son <strong>dos hechos físicos</strong>: el despacho saca la mercadería del

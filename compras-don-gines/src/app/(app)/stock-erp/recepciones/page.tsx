@@ -183,7 +183,8 @@ export default async function Page({
         <Link href="/stock-erp/aperturas">Aperturas →</Link>{' '}
         <Link href="/stock-erp/existencias">Existencias →</Link>{' '}
         <Link href="/stock-erp/movimientos">Movimientos →</Link>{' '}
-        <Link href="/stock-erp/traslados">Traslados →</Link>
+        <Link href="/stock-erp/traslados">Traslados →</Link>{' '}
+        <Link href="/stock-erp/correcciones">Correcciones →</Link>
       </p>
     </main>
   );
