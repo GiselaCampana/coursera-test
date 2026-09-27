@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { PrismaClient } from '@prisma/client';
 import { prisma } from '@/lib/db';
 import { limpiarBase, sembrarEscenario, comoUsuario, type Escenario } from './ayudas';
 import {
@@ -490,6 +491,284 @@ describe('lo que frena el despacho', () => {
       }),
       'el saldo materializado, en negativo',
     ).rejects.toThrow(/no coincide con el saldo posterior/);
+  });
+});
+
+/* ========================================================================== *
+ * La carrera por el mismo saldo, con el punto de carrera CONTROLADO
+ * ========================================================================== */
+
+describe('dos traslados que compiten por el mismo saldo', () => {
+  /**
+   * **La barrera: un candado de PostgreSQL tomado por la prueba.**
+   *
+   * El problema que resuelve es real y es la razón por la que esta prueba
+   * existe. Lanzar dos despachos con `Promise.all` no garantiza nada: si el
+   * primero alcanza a confirmar antes de que el segundo calcule su revisión, el
+   * segundo se frena en la revisión previa y la revalidación que ocurre DENTRO
+   * de la transacción —la que interesa— no se ejercita nunca. Esperar unos
+   * milisegundos tampoco sirve: eso es confiar en el azar con más pasos.
+   *
+   * Acá el punto de carrera lo fija la prueba. Desde una CONEXIÓN APARTE se
+   * toma `FOR UPDATE` sobre la fila de saldo del origen y se deja la
+   * transacción abierta. Los dos despachos calculan su revisión sin candados
+   * —los dos ven 10, los dos parecen posibles— y después quedan detenidos en el
+   * `FOR UPDATE` del servicio. Cuando los dos están detenidos, la prueba suelta
+   * la barrera: recién ahí PostgreSQL los serializa, uno descuenta y el otro
+   * vuelve a leer el saldo ya bajado.
+   *
+   * No hay nada habilitable en producción: el servicio no sabe que esto existe.
+   * La barrera es una transacción como cualquier otra, tomada por el mismo SQL
+   * que usaría cualquier consulta.
+   */
+  let barrera: PrismaClient;
+
+  beforeEach(() => {
+    barrera = new PrismaClient();
+  });
+  afterEach(async () => {
+    await barrera.$disconnect();
+  });
+
+  /**
+   * Espera a que haya `cuantos` procesos detenidos esperando un candado.
+   *
+   * Es una espera por CONDICIÓN observada en `pg_stat_activity`, no un plazo
+   * fijo: si la condición no se cumple, la prueba falla diciendo que los
+   * despachos no llegaron al punto de carrera, en vez de seguir y afirmar algo
+   * sobre una carrera que no ocurrió.
+   */
+  async function esperarDetenidos(cuantos: number) {
+    for (let intento = 0; intento < 200; intento += 1) {
+      const filas = await barrera.$queryRaw<{ n: bigint }[]>`
+        SELECT count(*) AS n FROM pg_stat_activity
+         WHERE datname = current_database()
+           AND wait_event_type = 'Lock'
+           AND state = 'active'`;
+      if (Number(filas[0]!.n) >= cuantos) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error(
+      `Los despachos no llegaron al punto de carrera: nunca hubo ${cuantos} procesos esperando el candado.`,
+    );
+  }
+
+  /**
+   * Toma el candado de las filas de saldo y lo suelta cuando se le pide.
+   *
+   * **Devuelve recién cuando el candado está TOMADO**, y eso no es un detalle:
+   * la primera versión devolvía apenas lanzada la transacción, sin esperar a que
+   * el `FOR UPDATE` se hubiera ejecutado. Los despachos arrancaban antes de que
+   * la barrera existiera, uno ganaba, el otro se frenaba en la revisión previa y
+   * la prueba fallaba diciendo que nunca hubo dos procesos esperando. La falla
+   * era correcta: no había carrera que observar.
+   */
+  async function tomarLaBarrera(productIds: string[], branchId: string) {
+    let soltar = () => {};
+    const suelta = new Promise<void>((res) => {
+      soltar = res;
+    });
+    let avisarQueEstaTomada = () => {};
+    const tomadaDeVerdad = new Promise<void>((res) => {
+      avisarQueEstaTomada = res;
+    });
+
+    const tomada = barrera.$transaction(
+      async (tx) => {
+        for (const pid of [...productIds].sort()) {
+          await tx.$executeRaw`
+            SELECT id FROM "stock_balance"
+             WHERE "productId" = ${pid} AND "branchId" = ${branchId} FOR UPDATE`;
+        }
+        avisarQueEstaTomada();
+        await suelta;
+      },
+      { timeout: 60_000 },
+    );
+
+    await tomadaDeVerdad;
+    return { soltar: () => soltar(), tomada };
+  }
+
+  it('11c. dos despachos de 7 sobre un saldo de 10: uno pasa, el otro recibe el error de negocio', async () => {
+    const art = await escenarioSimple('10');
+    const unoId = await borradorCon([{ productId: art.id, cantidad: '7' }]);
+    const dosId = await borradorCon([{ productId: art.id, cantidad: '7' }]);
+
+    /* Antes de competir, los dos parecen posibles: es el requisito del escenario. */
+    for (const id of [unoId, dosId]) {
+      const previa = await detalleDeTraslado(despachador, id);
+      expect(previa.impedimentos, `${id} sin impedimentos antes de competir`).toEqual([]);
+      expect(previa.renglones[0]!.clase).toBe('LISTO');
+    }
+
+    const { soltar, tomada } = await tomarLaBarrera([art.id], origenId);
+
+    /* Los dos despachos arrancan y quedan detenidos en el candado del servicio. */
+    const carrera = Promise.allSettled([
+      despachar(despachador, { trasladoId: unoId, confirmado: true }),
+      despachar(despachador, { trasladoId: dosId, confirmado: true }),
+    ]);
+    await esperarDetenidos(2);
+    soltar();
+    await tomada;
+    const [a, b] = await carrera;
+
+    /* --- Exactamente uno despachó ------------------------------------- */
+    const ganadores = [a, b].filter((r) => r.status === 'fulfilled');
+    const perdedores = [a, b].filter((r) => r.status === 'rejected');
+    expect(ganadores, 'exactamente uno despachó').toHaveLength(1);
+    expect(perdedores, 'exactamente uno fue rechazado').toHaveLength(1);
+
+    /* --- Y el rechazo es de NEGOCIO, no crudo -------------------------- */
+    const error = (perdedores[0] as PromiseRejectedResult).reason as Error;
+    expect(error.message, 'el mensaje explica el saldo').toMatch(/No hay saldo suficiente/);
+    expect(error.message, 'y dice que no se escribió nada').toMatch(/No se escribió nada/);
+    expect(
+      error.message,
+      'no es un error crudo de la base: ni CHECK, ni unicidad, ni serialización',
+    ).not.toMatch(/constraint|CHECK|Unique|40001|40P01|serialize|deadlock|P200\d/i);
+
+    /* --- El libro y el saldo ------------------------------------------- */
+    const operaciones = await prisma.stockOperation.findMany({
+      where: { operationKey: { in: [claveDeDespacho(unoId), claveDeDespacho(dosId)] } },
+    });
+    expect(operaciones, 'una sola operación de despacho').toHaveLength(1);
+
+    const salidas = await prisma.stockLedger.findMany({ where: { type: 'TRANSFER_OUT' } });
+    expect(salidas, 'un solo movimiento de salida').toHaveLength(1);
+    expect(salidas[0]!.balanceAfterSeq.toString()).toBe('3');
+
+    expect(await saldo(art.id, origenId), 'el saldo final es 3').toBe('3');
+    const balance = await prisma.stockBalance.findUniqueOrThrow({
+      where: { productId_branchId: { productId: art.id, branchId: origenId } },
+    });
+    expect(new Decimal(balance.quantity.toString()).isNegative(), 'nunca negativo').toBe(false);
+
+    /* --- El perdedor no dejó NADA -------------------------------------- */
+    const estados = await prisma.stockTransfer.findMany({
+      where: { id: { in: [unoId, dosId] } },
+      select: { id: true, status: true, operationId: true },
+    });
+    const despachados = estados.filter((t) => t.status === 'DESPACHADO');
+    const borradores = estados.filter((t) => t.status === 'BORRADOR');
+    expect(despachados, 'uno quedó DESPACHADO').toHaveLength(1);
+    expect(borradores, 'el otro sigue en BORRADOR').toHaveLength(1);
+    expect(borradores[0]!.operationId, 'el perdedor no tiene operación').toBeNull();
+
+    const perdedorId = borradores[0]!.id;
+    const lineasDelPerdedor = await prisma.stockTransferLine.findMany({
+      where: { transferId: perdedorId },
+    });
+    for (const l of lineasDelPerdedor) {
+      expect(l.dispatchedQuantity, 'el perdedor no registró cantidad despachada').toBeNull();
+      expect(
+        await prisma.stockLedger.count({ where: { transferLineId: l.id } }),
+        'el perdedor no escribió en el libro',
+      ).toBe(0);
+    }
+    expect(
+      await prisma.auditLog.count({
+        where: { action: AUDIT_ACTIONS.STOCKERP_TRASLADO_DESPACHADO, entityId: perdedorId },
+      }),
+      'y no dejó auditoría de éxito',
+    ).toBe(0);
+    /* Que quede auditado el rechazo sí está permitido, y no se exige. */
+  });
+
+  it('11d. dos traslados con los mismos dos artículos en orden inverso: sin interbloqueo', async () => {
+    const uno = await articulo('T-100');
+    const otro = await articulo('T-200');
+    await aperturaDe(origenId, [
+      { productId: uno.id, cantidad: '10' },
+      { productId: otro.id, cantidad: '10' },
+    ]);
+    await aperturaDe(destinoId, [
+      { productId: uno.id, cantidad: '0' },
+      { productId: otro.id, cantidad: '0' },
+    ]);
+
+    /* Los renglones se cargan en ORDEN INVERSO en cada traslado. */
+    const primero = await borradorCon([
+      { productId: uno.id, cantidad: '2' },
+      { productId: otro.id, cantidad: '3' },
+    ]);
+    const segundo = await borradorCon([
+      { productId: otro.id, cantidad: '1' },
+      { productId: uno.id, cantidad: '4' },
+    ]);
+
+    const { soltar, tomada } = await tomarLaBarrera([uno.id, otro.id], origenId);
+    const carrera = Promise.allSettled([
+      despachar(despachador, { trasladoId: primero, confirmado: true }),
+      despachar(despachador, { trasladoId: segundo, confirmado: true }),
+    ]);
+    await esperarDetenidos(2);
+    soltar();
+    await tomada;
+    const resultados = await carrera;
+
+    /* --- Ni un interbloqueo, ni una escritura a medias ------------------ */
+    for (const r of resultados) {
+      if (r.status === 'rejected') {
+        const mensaje = (r.reason as Error).message;
+        expect(mensaje, 'ningún interbloqueo').not.toMatch(/deadlock|40P01/i);
+        throw new Error(`Un despacho falló sin motivo de negocio: ${mensaje}`);
+      }
+    }
+
+    const estados = await prisma.stockTransfer.findMany({
+      where: { id: { in: [primero, segundo] } },
+      select: { status: true },
+    });
+    expect(estados.every((t) => t.status === 'DESPACHADO'), 'los dos despacharon').toBe(true);
+
+    /* Saldos: 10 − 2 − 4 = 4 y 10 − 3 − 1 = 6, y el libro tiene que coincidir. */
+    expect(await saldo(uno.id, origenId)).toBe('4');
+    expect(await saldo(otro.id, origenId)).toBe('6');
+    for (const p of [uno, otro]) {
+      const suma = await prisma.$queryRaw<{ total: string | null }[]>`
+        SELECT SUM(CASE WHEN "direction" = 'IN' THEN "quantity" ELSE -"quantity" END)::text AS total
+          FROM "stock_ledger" WHERE "productId" = ${p.id} AND "branchId" = ${origenId}`;
+      expect(new Decimal(suma[0]?.total ?? '0').toString(), `libro de ${p.internalCode}`).toBe(
+        (await saldo(p.id, origenId))!,
+      );
+    }
+    /* Cuatro salidas en total: dos por traslado, ninguna de más ni de menos. */
+    expect(await prisma.stockLedger.count({ where: { type: 'TRANSFER_OUT' } })).toBe(4);
+  });
+
+  it('11e. el servicio toma los candados en un orden canónico, y eso está en el código', () => {
+    /*
+     * La prueba de arriba comprueba la CONDUCTA —no hay interbloqueo—, y esta
+     * comprueba el MECANISMO que la sostiene: los candados se piden en un orden
+     * que no depende de cómo cargó los renglones cada traslado.
+     *
+     * Van las dos porque cada una tapa un agujero de la otra: sin el orden
+     * canónico, el interbloqueo depende de qué transacción alcanzó a tomar su
+     * primer candado, y una prueba de conducta podría pasar por suerte. Sin la
+     * de conducta, un orden canónico mal implementado pasaría por leerse bien.
+     */
+    const fuente = readFileSync(
+      path.resolve(__dirname, '../../src/lib/services/stock-erp-traslados.ts'),
+      'utf8',
+    );
+    /*
+     * Se buscan los `FOR UPDATE` y se mira lo que viene ANTES de cada uno. La
+     * primera versión intentaba capturar la declaración con una expresión que
+     * cortaba en el primer paréntesis y encontraba cero coincidencias: una
+     * afirmación estructural que no encuentra nada no afirma nada, y por suerte
+     * falló en vez de pasar en silencio.
+     */
+    const posiciones = [...fuente.matchAll(/FOR UPDATE/g)].map((m) => m.index ?? 0);
+    expect(posiciones.length, 'el despacho y la recepción son los dos que bloquean').toBe(2);
+    for (const donde of posiciones) {
+      const antes = fuente.slice(Math.max(0, donde - 400), donde);
+      expect(antes, 'la lista de artículos se ORDENA antes de bloquear').toContain('.sort()');
+      expect(antes, 'y el bloqueo recorre esa lista, no los renglones').toMatch(
+        /for \(const pid of productos\)/,
+      );
+    }
   });
 });
 
