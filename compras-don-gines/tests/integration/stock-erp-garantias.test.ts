@@ -499,24 +499,37 @@ describe('tipo, dirección y reversión', () => {
   });
 
   it('una reversión lleva la dirección opuesta y coincide con el original', async () => {
-    const op = await crearOperacion();
+    /*
+     * El vehículo cambió en la fase 7, y lo que se afirma NO.
+     *
+     * Esta prueba usaba un `PURCHASE_IN` para demostrar la mecánica genérica de
+     * la reversión: dirección opuesta, todo lo demás igual. La fase 7 declaró
+     * que una recepción de compra NO es reversible —se corrige con una
+     * devolución, que es otra fase— y un disparador lo hace cumplir. Así que la
+     * mecánica se demuestra sobre una merma, que sí es reversible.
+     *
+     * Que la recepción de compra no se pueda revertir tiene su propia prueba en
+     * la suite de correcciones. Acá se comprueba la mecánica, no la
+     * elegibilidad.
+     */
+    const op = await crearOperacion('AJUSTE');
     const original = await movimiento({
       operationId: op,
-      tipo: 'PURCHASE_IN',
-      direccion: 'IN',
+      tipo: 'WASTE_OUT',
+      direccion: 'OUT',
       cantidad: '4.240',
-      saldo: '4.240',
+      saldo: '0.000',
     });
 
     await expect(
       movimiento({
         operationId: op,
-        tipo: 'PURCHASE_IN',
-        direccion: 'OUT',
+        tipo: 'WASTE_OUT',
+        direccion: 'IN',
         cantidad: '4.240',
-        saldo: '0.000',
+        saldo: '4.240',
         reversesId: original,
-        motivo: 'Se recibió de menos',
+        motivo: 'La merma estaba mal cargada',
       }),
     ).resolves.toBeTruthy();
   });
@@ -564,29 +577,31 @@ describe('tipo, dirección y reversión', () => {
   });
 
   it('un movimiento se reversa una sola vez', async () => {
-    const op = await crearOperacion();
+    /* Mismo cambio de vehículo que arriba, y por la misma razón. */
+    const op = await crearOperacion('AJUSTE');
     const original = await movimiento({
       operationId: op,
-      tipo: 'PURCHASE_IN',
-      cantidad: '4.240',
-      saldo: '4.240',
-    });
-    await movimiento({
-      operationId: op,
-      tipo: 'PURCHASE_IN',
+      tipo: 'WASTE_OUT',
       direccion: 'OUT',
       cantidad: '4.240',
       saldo: '0.000',
+    });
+    await movimiento({
+      operationId: op,
+      tipo: 'WASTE_OUT',
+      direccion: 'IN',
+      cantidad: '4.240',
+      saldo: '4.240',
       reversesId: original,
       motivo: 'primera',
     });
     await expect(
       movimiento({
         operationId: op,
-        tipo: 'PURCHASE_IN',
-        direccion: 'OUT',
+        tipo: 'WASTE_OUT',
+        direccion: 'IN',
         cantidad: '4.240',
-        saldo: '0.000',
+        saldo: '4.240',
         reversesId: original,
         motivo: 'segunda',
       }),

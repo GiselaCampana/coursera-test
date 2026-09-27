@@ -97,6 +97,13 @@ model User {
   trasladosRecibidos   StockTransfer[]      @relation("TrasladoRecibidoPor")
   trasladosCancelados  StockTransfer[]      @relation("TrasladoCanceladoPor")
   trasladosHabilitados StockModuleSetting[] @relation("TrasladosRealesCambiadosPor")
+  /* Stock ERP, fase 7 */
+  mermasRegistradas    StockWaste[]         @relation("MermaRegistradaPor")
+  mermasReversadas     StockWaste[]         @relation("MermaReversadaPor")
+  recuentosContados    StockCountLine[]     @relation("RecuentoContadoPor")
+  recuentosConfirmados StockCountLine[]     @relation("RecuentoConfirmadoPor")
+  ajustesReversados    StockCountLine[]     @relation("AjusteReversadoPor")
+  correccionesHabilitadas StockModuleSetting[] @relation("CorreccionesRealesCambiadasPor")
 }
 
 model Session {
@@ -154,6 +161,8 @@ model Branch {
   stockCountSessions StockCountSession[]
   stockTransfersFrom StockTransfer[]      @relation("TrasladoOrigen")
   stockTransfersTo   StockTransfer[]      @relation("TrasladoDestino")
+  // --- Stock ERP (fase 7) -------------------------------------------------
+  stockWastes        StockWaste[]
 
   @@map("branches")
   stockReceipts StockReceipt[]
@@ -413,6 +422,9 @@ model Product {
   stockLedger       StockLedger[]
   stockBalances     StockBalance[]
   stockTransferLines StockTransferLine[]
+  // --- Stock ERP (fase 7) -------------------------------------------------
+  stockWastes        StockWaste[]
+  stockCountLines    StockCountLine[]
 
   @@index([normalizedName])
   @@index([familyId])
@@ -1277,6 +1289,41 @@ enum StockCountSessionStatus {
   CONFIRMADA
 }
 
+/// La causa de una merma. Se elige de una lista porque «pérdida» no explica nada
+/// y porque contar mermas por categoría es lo que después permite corregir la
+/// operación: vencimientos y roturas se arreglan de maneras distintas.
+enum StockWasteCategory {
+  VENCIMIENTO
+  ROTURA
+  /// Deterioro o corte de la cadena de frío.
+  DETERIORO_O_FRIO
+  /// Lo que se pierde al elaborar o recortar. No es un error.
+  ELABORACION_O_RECORTE
+  CONSUMO_INTERNO
+  /// Falta y no se sabe por qué. Se registra como lo que es.
+  FALTANTE
+  ERROR_OPERATIVO
+  /// Exige detalle escrito: una categoría que explica todo no explica nada.
+  OTRO
+}
+
+/// Apertura o recuento correctivo.
+///
+/// `StockCountSession` servía para las dos cosas y se distinguían por el estado
+/// —BORRADOR/CONFIRMADA la apertura, ABIERTA/CERRADA el recuento—. Depender de
+/// esa lectura implícita es pedir que alguien la interprete mal una vez.
+enum StockCountSessionKind {
+  APERTURA
+  RECUENTO
+}
+
+enum StockCountLineResolution {
+  /// Se contó y coincidía. No genera movimiento.
+  SIN_DIFERENCIA
+  /// Había diferencia y se asentó el ajuste.
+  AJUSTADA
+}
+
 enum StockTransferStatus {
   /// El traslado instantáneo de la fase 1: salida y entrada en una transacción.
   /// Se conserva porque la base ya sabe leerlo, no porque el flujo lo use.
@@ -1408,6 +1455,11 @@ model StockCountSession {
   name   String
   status StockCountSessionStatus @default(ABIERTA)
 
+  /// Apertura o recuento correctivo, explícito. La base exige que los estados
+  /// no se mezclen: una apertura usa BORRADOR/CONFIRMADA y un recuento
+  /// ABIERTA/CERRADA.
+  kind StockCountSessionKind @default(APERTURA)
+
   /// **El instante en que terminó el conteo físico.**
   ///
   /// Con zona horaria a propósito: la persona elige una hora argentina y lo que
@@ -1442,8 +1494,11 @@ model StockCountSession {
   closedAt    DateTime?
 
   activations ProductStockActivation[]
+  /// Las líneas del recuento correctivo (fase 7). Vacío en una apertura.
+  countLines  StockCountLine[]
 
   @@index([branchId, status])
+  @@index([kind, status])
   @@map("stock_count_session")
 }
 
@@ -1540,6 +1595,17 @@ model StockModuleSetting {
   transfersChangedBy   User?   @relation("TrasladosRealesCambiadosPor", fields: [transfersChangedById], references: [id], onDelete: SetNull)
   transfersChangedAt   DateTime?
   transfersReason      String?
+
+  /// **Correcciones operativas con datos reales: mermas, recuentos y reversiones.**
+  ///
+  /// El cuarto, y por lo mismo que hay tres: es otra decisión. Una merma o un
+  /// ajuste cambian un inventario real sin ningún comprobante detrás, y mientras
+  /// las ventas no descuenten no hay con qué verificarlos.
+  realCorrectionsEnabled Boolean @default(false)
+  correctionsChangedById String?
+  correctionsChangedBy   User?   @relation("CorreccionesRealesCambiadasPor", fields: [correctionsChangedById], references: [id], onDelete: SetNull)
+  correctionsChangedAt   DateTime?
+  correctionsReason      String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1647,6 +1713,11 @@ model StockOperation {
   transfers StockTransfer[]
   /// Los traslados cuya RECEPCIÓN escribió esta operación.
   transfersReceived StockTransfer[] @relation("RecepcionDeTraslado")
+  /* Fase 7: correcciones */
+  mermaAplicada     StockWaste?      @relation("MermaAplicada")
+  mermaReversada    StockWaste?      @relation("MermaReversada")
+  ajusteDeRecuento  StockCountLine?  @relation("AjusteDeRecuento")
+  ajusteReversado   StockCountLine?  @relation("AjusteReversado")
   receipt       StockReceipt?
 
   @@index([kind, appliedAt])
@@ -1758,6 +1829,100 @@ model StockBalance {
   @@unique([productId, branchId])
   @@index([branchId])
   @@map("stock_balance")
+}
+
+/// **Una merma: mercadería que se perdió, y por qué.**
+///
+/// Cantidad POSITIVA que sale del stock, con categoría y motivo escrito. No hay
+/// merma sin causa: un saldo que baja sin explicación es indistinguible de un
+/// robo o de un error de carga, y el que lo mira dentro de un mes no puede
+/// saberlo.
+model StockWaste {
+  id        String @id @default(cuid())
+  branchId  String
+  branch    Branch @relation(fields: [branchId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  quantity Decimal            @db.Decimal
+  unit     StockUnit
+  category StockWasteCategory
+
+  /// Escrito por una persona. La base exige al menos tres caracteres.
+  reason String
+  /// Obligatorio cuando la categoría es OTRO.
+  detail String?
+
+  /// La operación que escribió el movimiento. Una operación, una merma.
+  operationId String         @unique
+  operation   StockOperation @relation("MermaAplicada", fields: [operationId], references: [id], onDelete: Restrict)
+
+  /// Cuándo ocurrió físicamente. Lo decide el SERVIDOR.
+  occurredAt DateTime @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("MermaRegistradaPor", fields: [createdById], references: [id], onDelete: SetNull)
+  createdAt   DateTime @default(now())
+
+  /// Si se revirtió, con qué operación. Una sola vez.
+  reversalOperationId String?         @unique
+  reversalOperation   StockOperation? @relation("MermaReversada", fields: [reversalOperationId], references: [id], onDelete: Restrict)
+  reversedById        String?
+  reversedBy          User?           @relation("MermaReversadaPor", fields: [reversedById], references: [id], onDelete: SetNull)
+  reversedAt          DateTime?       @db.Timestamptz(3)
+
+  @@index([branchId, occurredAt])
+  @@index([productId])
+  @@index([category])
+  @@map("stock_waste")
+}
+
+/// **Una línea de recuento correctivo.**
+///
+/// No se reutiliza `ProductStockActivation`: eso es la APERTURA de un artículo en
+/// una sucursal, única por par y con su movimiento inicial. Un recuento ocurre
+/// muchas veces sobre el mismo par y guarda otra cosa: qué decía el sistema, qué
+/// se contó, cuál fue la diferencia y qué operación la asentó.
+model StockCountLine {
+  id        String @id @default(cuid())
+  sessionId String
+  session   StockCountSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+
+  /// Lo que el sistema creía, leído con la fila de saldo BLOQUEADA al confirmar.
+  expectedQuantity Decimal @db.Decimal
+  /// Lo que la persona contó. Cero es válido y significa «no había».
+  countedQuantity  Decimal @db.Decimal
+  /// Contada − esperada. La calcula el SERVIDOR, y una CHECK lo comprueba: el
+  /// navegador no puede mandar un delta inventado.
+  difference       Decimal @db.Decimal
+  unit             StockUnit
+
+  resolution StockCountLineResolution?
+  /// La operación del ajuste. Nula cuando no hubo diferencia.
+  operationId String?         @unique
+  operation   StockOperation? @relation("AjusteDeRecuento", fields: [operationId], references: [id], onDelete: Restrict)
+
+  countedById   String?
+  countedBy     User?     @relation("RecuentoContadoPor", fields: [countedById], references: [id], onDelete: SetNull)
+  countedAt     DateTime? @db.Timestamptz(3)
+  confirmedById String?
+  confirmedBy   User?     @relation("RecuentoConfirmadoPor", fields: [confirmedById], references: [id], onDelete: SetNull)
+  confirmedAt   DateTime? @db.Timestamptz(3)
+
+  reversalOperationId String?         @unique
+  reversalOperation   StockOperation? @relation("AjusteReversado", fields: [reversalOperationId], references: [id], onDelete: Restrict)
+  reversedById        String?
+  reversedBy          User?           @relation("AjusteReversadoPor", fields: [reversedById], references: [id], onDelete: SetNull)
+  reversedAt          DateTime?       @db.Timestamptz(3)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sessionId, productId])
+  @@index([sessionId])
+  @@map("stock_count_line")
 }
 
 /// Un traslado entre sucursales: **dos hechos físicos**, no uno.
