@@ -186,6 +186,24 @@ export const PERMISSIONS = {
    * comprobar que no entran. Un permiso que no existe no se puede dejar afuera,
    * y el día que la capacidad llegue nadie se acordaría de excluirlo.
    */
+  /**
+   * Abrir un recuento correctivo y cargar las cantidades físicas contadas.
+   *
+   * NO es sensible, por lo mismo que preparar una apertura, una recepción o un
+   * traslado: contar no escribe el libro. Quien recorre la góndola con el
+   * teléfono tiene que poder anotar lo que ve; confirmar el ajuste que surge de
+   * esa cuenta es otro acto, con otro permiso.
+   */
+  STOCKERP_RECUENTO_PREPARAR: 'stockerp.recuento.preparar',
+
+  /**
+   * Registrar una merma: mercadería que se perdió, con su causa.
+   *
+   * Sensible. Baja el saldo de una sucursal real sin ningún comprobante detrás, y
+   * una merma de más es indistinguible de un faltante no declarado.
+   */
+  STOCKERP_MERMA: 'stockerp.merma',
+
   /** Ajustar existencias sin un comprobante que lo respalde. */
   STOCKERP_AJUSTE: 'stockerp.ajuste',
   /** Reversar un movimiento ya asentado en el libro. */
@@ -232,8 +250,10 @@ export const PERMISSION_LABEL: Record<Permission, string> = {
   'stockerp.traslado.preparar': 'Preparar traslados entre sucursales y ver su revisión previa',
   'stockerp.traslado.despachar': 'Despachar un traslado: sacar la mercadería del origen',
   'stockerp.traslado.recibir': 'Recibir un traslado en destino y cerrarlo',
-  'stockerp.ajuste': 'Ajustar existencias sin comprobante (todavía no implementado)',
-  'stockerp.reversar': 'Reversar movimientos del libro (todavía no implementado)',
+  'stockerp.recuento.preparar': 'Abrir recuentos correctivos y cargar cantidades contadas',
+  'stockerp.merma': 'Registrar mermas de mercadería, con su causa',
+  'stockerp.ajuste': 'Confirmar recuentos correctivos y sus ajustes de existencias',
+  'stockerp.reversar': 'Reversar una merma, un ajuste o el despacho de un traslado',
 };
 
 /**
@@ -260,6 +280,7 @@ export const PERMISOS_SENSIBLES_DE_STOCK_ERP: Permission[] = [
   PERMISSIONS.STOCKERP_TRASLADO_DESPACHAR,
   PERMISSIONS.STOCKERP_TRASLADO_RECIBIR,
   PERMISSIONS.STOCKERP_EXCEPCION_HISTORICA,
+  PERMISSIONS.STOCKERP_MERMA,
   PERMISSIONS.STOCKERP_AJUSTE,
   PERMISSIONS.STOCKERP_REVERSAR,
 ];

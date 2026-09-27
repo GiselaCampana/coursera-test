@@ -143,6 +143,33 @@ export const AUDIT_ACTIONS = {
   STOCKERP_TRASLADO_DIFERENCIA: 'stockerp.traslado_diferencia_fisica',
   /** El interruptor de traslados reales se encendió o apagó. */
   STOCKERP_TRASLADOS_INTERRUPTOR: 'stockerp.traslados_interruptor_cambiado',
+
+  /* --- Fase 7: mermas, recuentos correctivos y reversiones -------------- */
+
+  /** Se miró la vista previa de una merma. No escribió existencias. */
+  STOCKERP_MERMA_PREPARADA: 'stockerp.merma_preparada',
+  /** La merma se asentó: el saldo bajó con su causa registrada. */
+  STOCKERP_MERMA_CONFIRMADA: 'stockerp.merma_confirmada',
+  /** Se abrió una sesión de recuento correctivo. */
+  STOCKERP_RECUENTO_INICIADO: 'stockerp.recuento_iniciado',
+  /** Alguien cargó la cantidad física de un artículo. */
+  STOCKERP_RECUENTO_CONTADO: 'stockerp.recuento_contado',
+  /** El servidor calculó una diferencia entre lo contado y el saldo. */
+  STOCKERP_RECUENTO_DIFERENCIA: 'stockerp.recuento_diferencia_detectada',
+  /** El ajuste de la diferencia se asentó. */
+  STOCKERP_RECUENTO_AJUSTADO: 'stockerp.recuento_ajuste_confirmado',
+  /** Se contó y coincidía: queda constancia y NO se escribe movimiento. */
+  STOCKERP_RECUENTO_SIN_DIFERENCIA: 'stockerp.recuento_sin_diferencia',
+  /** El saldo cambió entre el conteo y la confirmación: se frenó. */
+  STOCKERP_RECUENTO_SALDO_CAMBIADO: 'stockerp.recuento_saldo_cambiado',
+  /** Una reversión se asentó, con sus movimientos inversos. */
+  STOCKERP_REVERSION_CONFIRMADA: 'stockerp.reversion_confirmada',
+  /** Se intentó repetir algo ya aplicado: se contestó lo guardado. */
+  STOCKERP_CORRECCION_DUPLICADA: 'stockerp.correccion_intento_duplicado',
+  /** No había saldo para la corrección. No se escribió nada. */
+  STOCKERP_CORRECCION_SIN_SALDO: 'stockerp.correccion_bloqueada_por_saldo',
+  /** El interruptor de correcciones reales se encendió o apagó. */
+  STOCKERP_CORRECCIONES_INTERRUPTOR: 'stockerp.correcciones_interruptor_cambiado',
 } as const;
 
 export const AUDIT_ACTION_LABEL: Record<string, string> = {
@@ -199,6 +226,21 @@ export const AUDIT_ACTION_LABEL: Record<string, string> = {
     'Stock ERP: recepción de traslado con diferencia física, sigue en tránsito',
   'stockerp.traslados_interruptor_cambiado':
     'Stock ERP: interruptor de traslados reales cambiado',
+  'stockerp.merma_preparada': 'Stock ERP: merma preparada (sin escribir existencias)',
+  'stockerp.merma_confirmada': 'Stock ERP: merma confirmada y asentada',
+  'stockerp.recuento_iniciado': 'Stock ERP: recuento correctivo iniciado',
+  'stockerp.recuento_contado': 'Stock ERP: cantidad física cargada en un recuento',
+  'stockerp.recuento_diferencia_detectada': 'Stock ERP: diferencia detectada en un recuento',
+  'stockerp.recuento_ajuste_confirmado': 'Stock ERP: ajuste de recuento confirmado',
+  'stockerp.recuento_sin_diferencia': 'Stock ERP: recuento sin diferencia, sin movimiento',
+  'stockerp.recuento_saldo_cambiado':
+    'Stock ERP: recuento frenado porque el saldo cambió durante el conteo',
+  'stockerp.reversion_confirmada': 'Stock ERP: reversión confirmada',
+  'stockerp.correccion_intento_duplicado': 'Stock ERP: intento duplicado de una corrección',
+  'stockerp.correccion_bloqueada_por_saldo':
+    'Stock ERP: corrección bloqueada por saldo insuficiente',
+  'stockerp.correcciones_interruptor_cambiado':
+    'Stock ERP: interruptor de correcciones reales cambiado',
   'rol.modificado': 'Rol modificado',
   'sucursal.modificada': 'Sucursal modificada',
   'proveedor.modificado': 'Proveedor modificado',
