@@ -1624,6 +1624,19 @@ async function aplicarReversion(
   operationId: string,
   motivo: string,
 ): Promise<ResultadoDeCorreccion> {
+  const clave = claveDeReversion(operationId);
+
+  /*
+   * **La idempotencia se pregunta ANTES de la elegibilidad.**
+   *
+   * Y el orden importa: una operación ya revertida deja de ser elegible —lo dice
+   * su propio impedimento—, así que preguntar primero por la elegibilidad hacía
+   * que el segundo clic contestara «no se puede revertir» en vez de «ya estaba
+   * revertida». Lo primero suena a error del usuario; lo segundo es la verdad.
+   */
+  const existente = await prisma.stockOperation.findUnique({ where: { operationKey: clave } });
+  if (existente) return await releerReversion(user, operationId);
+
   const previa = await operacionReversible(user, operationId);
   if (previa.impedimentos.length > 0) {
     throw new ValidationError(
@@ -1631,12 +1644,8 @@ async function aplicarReversion(
     );
   }
 
-  const clave = claveDeReversion(operationId);
   const huella = huellaDeReversion({ operationId, movimientos: previa.movimientos });
   const momento = ahora();
-
-  const existente = await prisma.stockOperation.findUnique({ where: { operationKey: clave } });
-  if (existente) return await releerReversion(user, operationId);
 
   return await prisma.$transaction(async (tx) => {
     /* Candados en orden canónico por artículo: dos reversiones a la vez no se abrazan. */
