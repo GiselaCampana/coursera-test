@@ -656,6 +656,37 @@ describe('la merma no se duplica ni deja saldo negativo', () => {
     ).toBe(1);
     expect(await prisma.stockLedger.count({ where: { reversesId: { not: null } } })).toBe(1);
   });
+
+  it('24b. la reversión toma los candados en orden canónico, y eso está en el código', () => {
+    /*
+     * La reversión de un despacho puede tocar VARIOS artículos, así que hereda el
+     * problema de los traslados: dos reversiones que bloquean los mismos
+     * artículos en órdenes distintos se abrazan.
+     *
+     * Esta afirmación es estructural y mira el mecanismo, no la conducta: que la
+     * lista de artículos se ORDENE antes de pedir el primer candado. Va así y no
+     * como carrera porque una carrera de reversiones simultáneas ya existe —la 24—
+     * y el interbloqueo depende de qué transacción alcanzó a tomar su primer
+     * candado: una prueba de conducta podría pasar por suerte.
+     */
+    const fuente = readFileSync(
+      path.resolve(__dirname, '../../src/lib/services/stock-erp-correcciones.ts'),
+      'utf8',
+    );
+    const posiciones = [...fuente.matchAll(/FOR UPDATE/g)].map((m) => m.index ?? 0);
+    expect(
+      posiciones.length,
+      'la merma, la confirmación del recuento y la reversión son las tres que bloquean',
+    ).toBe(3);
+
+    /* El único que bloquea VARIOS artículos es el de la reversión. */
+    const conOrden = posiciones.filter((donde) =>
+      fuente.slice(Math.max(0, donde - 400), donde).includes('.sort()'),
+    );
+    expect(conOrden, 'el que bloquea varios artículos los ordena antes').toHaveLength(1);
+    const antes = fuente.slice(Math.max(0, conOrden[0]! - 400), conOrden[0]!);
+    expect(antes, 'y el bloqueo recorre esa lista ordenada').toMatch(/for \(const pid of productos\)/);
+  });
 });
 
 /* ========================================================================== *
