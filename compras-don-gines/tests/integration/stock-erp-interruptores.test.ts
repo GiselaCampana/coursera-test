@@ -10,7 +10,7 @@ import {
   interruptorDeRecepcionesReales,
 } from '@/lib/services/stock-erp-recepcion';
 import { AUDIT_ACTIONS } from '@/lib/services/audit';
-import { PERMISSIONS } from '@/lib/auth/permissions';
+import { PERMISSIONS, PERMISOS_SENSIBLES_DE_STOCK_ERP } from '@/lib/auth/permissions';
 import {
   esUnaBaseDePruebas,
   esUnaBaseDescartable,
@@ -163,6 +163,46 @@ describe('ningún seed productivo puede encenderlos', () => {
       },
     });
   }
+
+  it('volver a correr el seed no amplía ningún rol existente', async () => {
+    /*
+     * **La pregunta de la puesta en marcha.** El seed corre en CADA despliegue,
+     * porque el plan gratuito de Render no da consola para ejecutar un comando
+     * suelto. Así que la pregunta no es «¿qué hace la primera vez?» sino «¿qué
+     * le hace a un rol que alguien ya editó a mano?».
+     *
+     * Se recorta un rol a un solo permiso —como quedaría si alguien le quitara
+     * cosas desde Configuración → Roles—, se corre el seed de verdad, y se
+     * comprueba que lo encontró tal como estaba. Si el seed «completara» roles
+     * existentes, la homologación otorgaría permisos sensibles sin que nadie lo
+     * haya decidido, que es exactamente lo que no puede pasar.
+     */
+    const roles = await prisma.role.findMany({ select: { id: true, code: true } });
+    expect(roles.length, 'hay roles sembrados que recortar').toBeGreaterThan(0);
+
+    for (const r of roles) {
+      await prisma.role.update({
+        where: { id: r.id },
+        data: { permissions: ['comprobantes.ver'] },
+      });
+    }
+
+    correrElSeedProductivo();
+
+    const despues = await prisma.role.findMany({ select: { code: true, permissions: true } });
+    for (const r of despues) {
+      expect(r.permissions, `el seed no le agregó permisos a ${r.code}`).toEqual([
+        'comprobantes.ver',
+      ]);
+    }
+
+    /* Y en particular: ninguno de los sensibles se coló por la ventana. */
+    for (const r of despues) {
+      for (const permiso of PERMISOS_SENSIBLES_DE_STOCK_ERP) {
+        expect(r.permissions, `${r.code} no recibe ${permiso}`).not.toContain(permiso);
+      }
+    }
+  });
 
   it('el sembrado se NIEGA a correr si DATABASE_URL apunta a la demo', () => {
     /*
@@ -734,5 +774,186 @@ describe('la demo hospedada siembra con su propia guarda', () => {
     const build = /buildCommand:.*/.exec(blueprint)?.[0] ?? '';
     expect(build, 'producción usa el seed de upserts').toContain('db:seed');
     expect(build, 'y nunca el sembrado que trunca').not.toContain('tests/e2e/');
+  });
+});
+
+/* ========================================================================== *
+ * Los CUATRO interruptores reales, como conjunto
+ *
+ * Las afirmaciones de arriba nacieron de a una, fase por fase, y cada una mira
+ * el interruptor de su fase. La consolidación necesita la pregunta entera: los
+ * cuatro apagados, y ninguna de las cuatro maneras conocidas de encenderlos por
+ * accidente disponible.
+ * ========================================================================== */
+
+describe('los cuatro interruptores reales, como conjunto', () => {
+  const COLUMNAS = [
+    'realOpeningEnabled',
+    'realPurchaseReceiptsEnabled',
+    'realTransfersEnabled',
+    'realCorrectionsEnabled',
+  ] as const;
+
+  async function estado() {
+    const filas = await prisma.$queryRawUnsafe<Record<string, boolean>[]>(
+      `SELECT ${COLUMNAS.map((c) => `"${c}"`).join(', ')} FROM "stock_module_setting"`,
+    );
+    expect(filas, 'hay exactamente una fila de configuración').toHaveLength(1);
+    return filas[0]!;
+  }
+
+  it('los cuatro nacen apagados y su valor por omisión en la base es false', async () => {
+    const actual = await estado();
+    for (const c of COLUMNAS) expect(actual[c], `${c} apagado`).toBe(false);
+
+    const defaults = await prisma.$queryRaw<{ column_name: string; column_default: string }[]>`
+      SELECT column_name, column_default FROM information_schema.columns
+       WHERE table_name = 'stock_module_setting'
+         AND column_name IN ('realOpeningEnabled', 'realPurchaseReceiptsEnabled',
+                             'realTransfersEnabled', 'realCorrectionsEnabled')`;
+    expect(defaults).toHaveLength(4);
+    for (const d of defaults) {
+      expect(d.column_default, `${d.column_name} por omisión false`).toMatch(/false/);
+    }
+  });
+
+  it('ninguna migración de la cadena enciende ninguno', () => {
+    /*
+     * Se lee el SQL de TODAS las migraciones, no sólo las de Stock ERP: lo que
+     * se quiere descartar es que alguna, en cualquier momento de la cadena, deje
+     * un interruptor en true. Un `DEFAULT false` sí aparece y es lo correcto;
+     * lo que no puede aparecer es una asignación a true.
+     */
+    const dir = path.join(RAIZ, 'prisma/migrations');
+    const migraciones = readdirSync(dir).filter((d) =>
+      statSync(path.join(dir, d)).isDirectory(),
+    );
+    expect(migraciones.length, 'hay migraciones que revisar').toBeGreaterThan(20);
+
+    for (const m of migraciones) {
+      const sql = readFileSync(path.join(dir, m, 'migration.sql'), 'utf8');
+      for (const c of COLUMNAS) {
+        /* Las líneas que mencionan la columna, sin los comentarios. */
+        const lineas = sql
+          .split('\n')
+          .filter((l) => l.includes(c) && !l.trim().startsWith('--'));
+        for (const linea of lineas) {
+          expect(
+            /=\s*true|SET\s+DEFAULT\s+true/i.test(linea),
+            `${m} enciende ${c}: ${linea.trim()}`,
+          ).toBe(false);
+        }
+      }
+    }
+  });
+
+  it('ningún archivo del código enciende ninguno mirando el entorno', () => {
+    /*
+     * La fase 7 ya afirmaba esto para su interruptor. Acá se hace para los
+     * cuatro, y recorriendo `src` entero: una variable de entorno es la palanca
+     * más fácil de agregar «temporalmente» y la más fácil de olvidar.
+     */
+    const raiz = path.join(RAIZ, 'src');
+    const archivos: string[] = [];
+    const recorrer = (dir: string) => {
+      for (const nombre of readdirSync(dir)) {
+        const completo = path.join(dir, nombre);
+        if (statSync(completo).isDirectory()) recorrer(completo);
+        else if (/\.tsx?$/.test(nombre)) archivos.push(completo);
+      }
+    };
+    recorrer(raiz);
+
+    for (const archivo of archivos) {
+      const lineas = readFileSync(archivo, 'utf8').split('\n');
+      for (const [i, linea] of lineas.entries()) {
+        if (!COLUMNAS.some((c) => linea.includes(c))) continue;
+        expect(
+          /process\.env/.test(linea),
+          `${path.relative(raiz, archivo)}:${i + 1} decide un interruptor con el entorno`,
+        ).toBe(false);
+      }
+    }
+  });
+
+  it('sólo los servicios de cada fase escriben su interruptor', () => {
+    /*
+     * **Por qué esto responde a «el despliegue no cambia su valor».** El valor
+     * vive en la base y no en una variable, así que un reinicio no lo puede
+     * mover por sí solo: lo único que podría moverlo es código que corra al
+     * arrancar. Se comprueba entonces quién escribe esas columnas, y que sean
+     * únicamente los cuatro servicios que piden permiso, autor y motivo.
+     *
+     * El arranque de la aplicación no llama a ninguno de ellos —ni el seed, que
+     * es lo que sí corre en cada despliegue, y eso tiene su propia prueba
+     * ejecutándolo de verdad—.
+     */
+    const dir = path.join(RAIZ, 'src');
+    const archivos: string[] = [];
+    const recorrer = (d: string) => {
+      for (const nombre of readdirSync(d)) {
+        const completo = path.join(d, nombre);
+        if (statSync(completo).isDirectory()) recorrer(completo);
+        else if (/\.tsx?$/.test(nombre)) archivos.push(completo);
+      }
+    };
+    recorrer(dir);
+
+    const permitidos = new Set([
+      'lib/services/stock-erp-apertura.ts',
+      'lib/services/stock-erp-recepcion.ts',
+      'lib/services/stock-erp-traslados.ts',
+      'lib/services/stock-erp-correcciones.ts',
+    ]);
+
+    const escritores = new Set<string>();
+    for (const archivo of archivos) {
+      const fuente = readFileSync(archivo, 'utf8');
+      for (const c of COLUMNAS) {
+        /* Una asignación en un objeto de datos: `realXEnabled: algo`. */
+        if (new RegExp(`${c}\\s*:`).test(fuente)) {
+          escritores.add(path.relative(dir, archivo));
+        }
+      }
+    }
+    for (const e of escritores) {
+      expect(permitidos.has(e), `${e} escribe un interruptor y no debería`).toBe(true);
+    }
+    expect(escritores.size, 'los cuatro servicios siguen siendo los que escriben').toBe(4);
+  });
+
+  it('cada uno exige permiso, y la base exige autor y motivo', async () => {
+    const sinPermiso = comoUsuario({
+      id: escenario.admin.id,
+      email: escenario.admin.email,
+      name: escenario.admin.name,
+      branchId: null,
+      roleId: escenario.admin.roleId,
+      roleCode: escenario.admin.roleCode,
+      roleName: escenario.admin.roleName,
+      permissions: ['comprobantes.ver'],
+      scopeAllBranches: true,
+    });
+
+    await expect(
+      cambiarInterruptor(sinPermiso, { encender: true, motivo: 'no debería' }),
+    ).rejects.toThrow(/stockerp\.modulo\.configurar/);
+    await expect(
+      cambiarInterruptorDeRecepciones(sinPermiso, { encender: true, motivo: 'no debería' }),
+    ).rejects.toThrow(/stockerp\.modulo\.configurar/);
+
+    /* Y la base, por separado: cada columna tiene su CHECK de autor y motivo. */
+    const fila = await prisma.stockModuleSetting.findFirstOrThrow();
+    for (const c of COLUMNAS) {
+      await expect(
+        prisma.$executeRawUnsafe(
+          `UPDATE "stock_module_setting" SET "${c}" = true WHERE id = $1`,
+          fila.id,
+        ),
+        `la base rechaza encender ${c} sin autor ni motivo`,
+      ).rejects.toThrow();
+    }
+    const actual = await estado();
+    for (const c of COLUMNAS) expect(actual[c], `${c} sigue apagado`).toBe(false);
   });
 });
