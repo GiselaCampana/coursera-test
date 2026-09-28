@@ -34,6 +34,10 @@ on:
       # que lo que hay que verificar es sobre todo que las seis fases anteriores
       # sigan enteras.
       - stock-erp-fase-7
+      # La rama de la fase 8: consolidación y homologación. No agrega
+      # operaciones; lo que hay que verificar es que las siete fases anteriores
+      # migran, se configuran, se usan y se revierten JUNTAS.
+      - stock-erp-fase-8
     paths:
       - 'compras-don-gines/**'
       - '.github/workflows/compras-don-gines-ci.yml'
