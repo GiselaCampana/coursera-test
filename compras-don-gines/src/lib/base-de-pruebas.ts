@@ -50,6 +50,36 @@ export function esUnaBaseDescartable(url: string | undefined): boolean {
 }
 
 /**
+ * **Homologación** es la tercera categoría, y es exactamente una base: la demo.
+ *
+ * Existe porque la vista previa hospedada vuelve al estado conocido en cada
+ * arranque, y para eso corre un sembrado que empieza con un TRUNCATE. Eso es
+ * legítimo ahí —la demo no tiene un solo dato real y su gracia es volver sola al
+ * punto de partida— y es inaceptable en cualquier otro lado.
+ *
+ * No acepta «test» ni «e2e» a propósito, aunque truncarlas sería inofensivo: así
+ * cada punto de entrada nombra **una** clase de base, y leer el comando dice
+ * contra qué corre. Para ensayar el sembrado sin la demo está la entrada de las
+ * end to end, que hace lo mismo contra una base descartable.
+ */
+const NOMBRES_DE_HOMOLOGACION = /(^|[-_])demo([-_]|$)/i;
+
+export function esUnaBaseDeHomologacion(url: string | undefined): boolean {
+  const nombre = nombreDeLaBase(url ?? '');
+  return nombre !== null && NOMBRES_DE_HOMOLOGACION.test(nombre);
+}
+
+export function exigirBaseDeHomologacion(url = process.env.DATABASE_URL): void {
+  if (esUnaBaseDeHomologacion(url)) return;
+  throw new Error(
+    'Esto corre el sembrado de homologación y borra tablas: sólo se permite contra la base de ' +
+      'la DEMO, cuyo nombre tiene que contener "demo". Para una base descartable de pruebas está ' +
+      'la entrada de las end to end. No se escribió nada. ' +
+      `Base vista: ${nombreDeLaBase(url ?? '') ?? '(ninguna: DATABASE_URL no está definida)'}`,
+  );
+}
+
+/**
  * Corta la ejecución si la base no es descartable.
  *
  * La usa lo que destruye de verdad: correr el sembrado productivo dentro de una

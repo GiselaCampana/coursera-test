@@ -109,6 +109,44 @@ test.describe('el tablero de correcciones', () => {
 });
 
 test.describe('la merma', () => {
+  test('la lista de artículos depende de la sucursal y sólo ofrece lo que maneja', async ({
+    page,
+  }, info) => {
+    await ingresar(page, 'configurador');
+    const plu = pluDe(info.project.name);
+    const ajeno = plu === '6001' ? '6002' : '6001';
+    const { id: branchId } = await sucursalDe(info.project.name);
+    await page.goto('/stock-erp/correcciones/mermas');
+
+    /* Sin sucursal no hay nada que ofrecer: el selector está bloqueado. */
+    const articulo = page.locator('[data-prueba="articulo"]');
+    await expect(articulo).toBeDisabled();
+    await expect(articulo).toContainText('Primero elegí la sucursal');
+
+    await page.locator('[data-prueba="sucursal"]').selectOption(branchId);
+    await expect(articulo).toBeEnabled();
+
+    /* Sólo el artículo propio, con su unidad. El de la otra sucursal no aparece. */
+    await expect(articulo.locator('option', { hasText: plu })).toHaveCount(1);
+    await expect(articulo.locator('option', { hasText: ajeno })).toHaveCount(0);
+    await expect(articulo.locator('option', { hasText: plu })).toContainText('KG');
+    await expect(page.locator('[data-prueba="explicacion-articulos"]')).toContainText(
+      'esta sucursal maneja',
+    );
+
+    /* Y cambiar de sucursal olvida lo elegido: la lista es otra. */
+    await elegirOpcion(page, '[data-prueba="articulo"]', plu);
+    await expect(articulo).not.toHaveValue('');
+    const otraSucursal = await prisma.branch.findFirstOrThrow({ where: { code: 'DEVOTO' } });
+    await page.locator('[data-prueba="sucursal"]').selectOption(otraSucursal.id);
+    await expect(articulo, 'no queda seleccionado un artículo de la sucursal anterior').toHaveValue(
+      '',
+    );
+
+    await captura(page, 'correcciones-merma-lista-por-sucursal', info.project.name);
+    await sinScrollHorizontal(page);
+  });
+
   test('exige detalle cuando la categoría es «Otro» y no deja revisar sin motivo', async ({
     page,
   }, info) => {

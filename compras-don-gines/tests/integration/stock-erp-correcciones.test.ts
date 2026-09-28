@@ -8,6 +8,7 @@ import {
   registrarMerma,
   vistaPreviaDeMerma,
   mermasRegistradas,
+  articulosCorregiblesPorSucursal,
   abrirRecuento,
   guardarCantidadFisica,
   verRecuento,
@@ -345,6 +346,46 @@ describe('la merma sale con su causa', () => {
       }),
     ).rejects.toThrow(/no maneja este artículo/);
     expect(await prisma.stockLedger.count({ where: { type: 'WASTE_OUT' } })).toBe(0);
+  });
+
+  it('5b. la lista que se ofrece trae sólo lo que la sucursal maneja, con unidad aprobada', async () => {
+    /*
+     * El pendiente de la fase 7: la pantalla ofrecía el catálogo entero con
+     * unidad aprobada, sin mirar si la sucursal elegida manejaba el artículo. El
+     * servidor lo rechazaba —lo comprueba la prueba 5, que sigue arriba—, pero
+     * ofrecer algo que se va a rechazar hace que la regla se descubra a fuerza
+     * de errores.
+     *
+     * Esta prueba mira la lista. La de arriba mira la defensa. Van las dos:
+     * filtrar la lista no autoriza a aflojar el servidor.
+     */
+    const manejado = await articulo('C-100');
+    const noManejado = await articulo('C-200');
+    const sinUnidad = await prisma.product.create({
+      data: {
+        internalCode: 'C-300',
+        normalizedName: 'Artículo sin unidad decidida',
+        category: 'Pruebas',
+        purchaseUnit: 'KG',
+        saleMode: 'AL_CORTE',
+        targetMarginPct: '0.40',
+        marginBasis: 'SOBRE_COSTO',
+        cashDiscountPct: '0',
+        roundingRule: 'NEAREST_100',
+      },
+    });
+    await aperturaDe(sucursalId, [{ productId: manejado.id, cantidad: '10' }]);
+
+    const porSucursal = await articulosCorregiblesPorSucursal(contador);
+    const ofrecidos = (porSucursal[sucursalId] ?? []).map((a) => a.id);
+
+    expect(ofrecidos, 'lo que la sucursal maneja sí').toContain(manejado.id);
+    expect(ofrecidos, 'lo que no maneja, no').not.toContain(noManejado.id);
+    expect(ofrecidos, 'y lo que no tiene unidad aprobada tampoco').not.toContain(sinUnidad.id);
+    expect(porSucursal[sucursalId]![0]!.unidad, 'la unidad viaja con el artículo').toBe('KG');
+
+    /* Una sucursal sin apertura confirmada no ofrece nada: su saldo está sin contar. */
+    expect(porSucursal[otraSucursalId], 'sin apertura no hay nada que corregir').toBeUndefined();
   });
 
   it('6. una sucursal sin apertura confirmada se bloquea', async () => {

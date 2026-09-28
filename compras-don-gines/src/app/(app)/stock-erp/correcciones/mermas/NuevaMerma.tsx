@@ -19,14 +19,18 @@ import { registrarLaMerma, type Resultado } from '../acciones';
 export function NuevaMerma({
   mermaId,
   sucursales,
-  articulos,
+  articulosPorSucursal,
   categorias,
   puedeRegistrar,
   interruptorEncendido,
 }: {
   mermaId: string;
   sucursales: { id: string; name: string }[];
-  articulos: { id: string; internalCode: string; normalizedName: string }[];
+  /** Lo que cada sucursal maneja, con unidad aprobada. Por sucursal, no en junto. */
+  articulosPorSucursal: Record<
+    string,
+    { id: string; internalCode: string; normalizedName: string; unidad: string }[]
+  >;
   categorias: { valor: StockWasteCategory; etiqueta: string }[];
   puedeRegistrar: boolean;
   interruptorEncendido: boolean;
@@ -58,6 +62,13 @@ export function NuevaMerma({
   const [categoria, setCategoria] = useState<StockWasteCategory | ''>('');
   const [motivo, setMotivo] = useState('');
   const [detalle, setDetalle] = useState('');
+
+  /*
+   * La lista depende de la sucursal elegida. Mientras no haya sucursal no hay
+   * nada que ofrecer: un artículo «en general» no existe en este módulo, porque
+   * un artículo se maneja o no se maneja EN una sucursal.
+   */
+  const articulos = branchId === '' ? [] : (articulosPorSucursal[branchId] ?? []);
 
   const exigeDetalle = categoria === 'OTRO';
   const completo =
@@ -110,7 +121,15 @@ export function NuevaMerma({
           Sucursal
           <select
             value={branchId}
-            onChange={(e) => setBranchId(e.target.value)}
+            onChange={(e) => {
+              setBranchId(e.target.value);
+              /*
+               * Y se olvida el artículo elegido. Sin esto, cambiar de sucursal
+               * dejaba seleccionado un artículo de la anterior —que la nueva
+               * puede no manejar— y el formulario se veía completo y correcto.
+               */
+              setProductId('');
+            }}
             required
             data-prueba="sucursal"
           >
@@ -129,20 +148,33 @@ export function NuevaMerma({
             value={productId}
             onChange={(e) => setProductId(e.target.value)}
             required
+            disabled={branchId === ''}
             data-prueba="articulo"
           >
-            <option value="">Elegí uno…</option>
+            <option value="">
+              {branchId === '' ? 'Primero elegí la sucursal…' : 'Elegí uno…'}
+            </option>
             {articulos.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.internalCode} · {a.normalizedName}
+                {a.internalCode} · {a.normalizedName} ({a.unidad})
               </option>
             ))}
           </select>
         </label>
-        <p className="chico">
-          Sólo aparecen los artículos con unidad de existencia aprobada: sin unidad no se sabe si se
-          cuenta en kilos o en unidades, y no se puede dar de baja lo que no se sabe medir.
-        </p>
+        {branchId !== '' && articulos.length === 0 ? (
+          <p className="mensaje mensaje-aviso" data-prueba="sucursal-sin-articulos">
+            Esta sucursal no maneja ningún artículo con unidad aprobada, o todavía no tiene apertura
+            confirmada. No hay nada que dar de baja acá: el saldo de sus artículos no está en cero,
+            está sin contar.
+          </p>
+        ) : (
+          <p className="chico" data-prueba="explicacion-articulos">
+            Sólo aparecen los artículos que <strong>esta sucursal maneja</strong> y que tienen unidad
+            de existencia aprobada. Sin unidad no se sabe si se cuenta en kilos o en unidades, y no se
+            puede dar de baja lo que no se sabe medir. El servidor lo vuelve a comprobar al
+            confirmar: esta lista es una comodidad, no la regla.
+          </p>
+        )}
 
         <label>
           Cantidad perdida

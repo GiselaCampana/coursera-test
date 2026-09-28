@@ -74,9 +74,20 @@ services:
     # Migrar, sembrar los datos inventados y arrancar. El sembrado corre en
     # cada arranque a propósito: es una demostración, y conviene que vuelva
     # sola al estado conocido después de que alguien aplique la compra.
+    #
+    # HALLAZGO de la fase 8: acá decía `tests/e2e/sembrar.ts`, que es la entrada
+    # de las PRUEBAS. En la fase 5 esa entrada pasó a exigir una base
+    # «descartable» —«test» o «e2e»— y a rechazar la demo, que está desplegada.
+    # El choque estaba latente porque esta rama no había avanzado desde entonces:
+    # en cuanto avanzara, `migrate deploy` aplicaría las migraciones, el sembrado
+    # abortaría y `next start` no llegaría a correr. La demo quedaba migrada y
+    # caída, reiniciándose en bucle.
+    #
+    # `sembrar-homologacion.ts` siembra exactamente los mismos datos y exige lo
+    # contrario: una base cuyo nombre contenga «demo». `compras_demo` la cumple.
     startCommand: >-
       npx prisma migrate deploy &&
-      npx tsx tests/e2e/sembrar.ts &&
+      npx tsx tests/e2e/sembrar-homologacion.ts &&
       npx next start -p $PORT
     envVars:
       - key: DATABASE_URL

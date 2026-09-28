@@ -6,6 +6,7 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import { prisma } from '@/lib/db';
 import {
   interruptorDeCorreccionesReales,
+  articulosCorregiblesPorSucursal,
   CATEGORIAS_DE_MERMA,
 } from '@/lib/services/stock-erp-correcciones';
 import { EnPreparacion } from '../../EnPreparacion';
@@ -36,14 +37,15 @@ export default async function Page() {
     );
   }
 
-  const [sucursales, articulos, interruptor] = await Promise.all([
+  const [sucursales, porSucursal, interruptor] = await Promise.all([
     prisma.branch.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true } }),
-    prisma.product.findMany({
-      where: { active: true, stockConfig: { status: 'APROBADA' } },
-      orderBy: { internalCode: 'asc' },
-      select: { id: true, internalCode: true, normalizedName: true },
-      take: 500,
-    }),
+    /*
+     * Los artículos que cada sucursal MANEJA, con unidad aprobada, y no el
+     * catálogo entero. Ofrecer un artículo que la sucursal no maneja es hacer que
+     * la persona descubra la regla a fuerza de errores; el servidor lo rechazaba
+     * igual, y lo sigue rechazando.
+     */
+    articulosCorregiblesPorSucursal(user),
     interruptorDeCorreccionesReales(),
   ]);
 
@@ -66,7 +68,7 @@ export default async function Page() {
       <NuevaMerma
         mermaId={randomUUID()}
         sucursales={sucursales}
-        articulos={articulos}
+        articulosPorSucursal={porSucursal}
         categorias={[...CATEGORIAS_DE_MERMA]}
         puedeRegistrar={hasPermission(user, PERMISSIONS.STOCKERP_MERMA)}
         interruptorEncendido={interruptor.encendido}

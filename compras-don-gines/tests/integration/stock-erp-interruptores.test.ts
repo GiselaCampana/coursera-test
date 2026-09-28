@@ -14,7 +14,9 @@ import { PERMISSIONS } from '@/lib/auth/permissions';
 import {
   esUnaBaseDePruebas,
   esUnaBaseDescartable,
+  esUnaBaseDeHomologacion,
   exigirBaseDescartable,
+  exigirBaseDeHomologacion,
 } from '@/lib/base-de-pruebas';
 
 /**
@@ -637,5 +639,100 @@ describe('la decisión es del servidor, no de la pantalla', () => {
     expect(filas[0].realOpeningEnabled).toBe(false);
     expect(filas[0].realPurchaseReceiptsEnabled).toBe(false);
     expect(filas[0].realTransfersEnabled).toBe(false);
+  });
+});
+
+/* ========================================================================== *
+ * La demo hospedada: qué siembra, con qué guarda y contra qué base
+ *
+ * HALLAZGO de la fase 8, y el más caro de los que aparecieron en esta cadena de
+ * fases, porque estaba LATENTE: la vista previa hospedada siembra en cada
+ * arranque corriendo `tests/e2e/sembrar.ts`, y en la fase 5 esa entrada pasó a
+ * exigir una base «descartable», que excluye la demo a propósito.
+ *
+ * Nada se rompió porque la rama de la demo no había avanzado desde entonces. El
+ * primer despliegue la habría dejado migrada y caída: `migrate deploy` aplica,
+ * el sembrado aborta y `next start` nunca corre.
+ *
+ * Estas afirmaciones existen para que el choque no pueda volver a quedar
+ * invisible: cruzan el comando que corre el servicio con la guarda del archivo
+ * que ese comando nombra.
+ * ========================================================================== */
+
+describe('la demo hospedada siembra con su propia guarda', () => {
+  const BLUEPRINT_DEMO = path.join(RAIZ, 'deploy/vista-previa.render.yaml');
+  const BLUEPRINT_PRODUCCION = path.resolve(RAIZ, '../render.yaml');
+
+  it('la guarda de homologación acepta la demo y nada más', () => {
+    expect(esUnaBaseDeHomologacion('postgresql://u:p@host:5432/compras_demo')).toBe(true);
+    expect(esUnaBaseDeHomologacion('postgresql://u:p@host:5432/demo')).toBe(true);
+
+    const prohibidas = [
+      ['producción', 'postgresql://u:p@host:5432/compras_produccion'],
+      ['la descartable de integración', 'postgresql://u:p@host:5432/compras_don_gines_test'],
+      ['la de end to end', 'postgresql://u:p@host:5432/compras_e2e'],
+      ['«demo» en el usuario y no en la base', 'postgresql://demo:p@host:5432/compras_produccion'],
+      ['«demo» en el host', 'postgresql://u:p@demo.example.com:5432/compras_produccion'],
+      ['sin base', 'postgresql://u:p@host:5432/'],
+      ['vacía', ''],
+    ] as const;
+    for (const [porque, url] of prohibidas) {
+      expect(esUnaBaseDeHomologacion(url), porque).toBe(false);
+      expect(() => exigirBaseDeHomologacion(url), porque).toThrow(/DEMO/);
+    }
+  });
+
+  it('el arranque de la demo nombra el sembrado de homologación, no el de las pruebas', () => {
+    const blueprint = readFileSync(BLUEPRINT_DEMO, 'utf8');
+    const arranque = blueprint.slice(
+      blueprint.indexOf('startCommand'),
+      blueprint.indexOf('envVars', blueprint.indexOf('startCommand')),
+    );
+    expect(arranque, 'siembra con la entrada de homologación').toContain(
+      'tests/e2e/sembrar-homologacion.ts',
+    );
+    /*
+     * Y NO con la de las pruebas. Se compara el nombre completo del archivo
+     * porque `sembrar-homologacion.ts` también contiene `sembrar`: una
+     * afirmación con `includes('sembrar.ts')` pasaría por casualidad.
+     */
+    expect(arranque, 'y no con la de las pruebas, que rechaza la demo').not.toMatch(
+      /tsx\s+tests\/e2e\/sembrar\.ts/,
+    );
+  });
+
+  it('esa entrada existe y usa la guarda que acepta la demo', () => {
+    const entrada = readFileSync(path.join(RAIZ, 'tests/e2e/sembrar-homologacion.ts'), 'utf8');
+    expect(entrada).toContain('sembrarParaHomologacion');
+
+    const sembrado = readFileSync(path.join(RAIZ, 'tests/e2e/sembrar.ts'), 'utf8');
+    expect(sembrado, 'la entrada de homologación exige base «demo»').toMatch(
+      /sembrarParaHomologacion[\s\S]{0,200}exigirBaseDeHomologacion\(\)/,
+    );
+    expect(sembrado, 'y la de las pruebas sigue exigiendo base descartable').toMatch(
+      /export async function sembrar\(\)[\s\S]{0,200}exigirBaseDescartable\(\)/,
+    );
+  });
+
+  it('la base de la demo declarada en el blueprint pasa la guarda de homologación', () => {
+    const blueprint = readFileSync(BLUEPRINT_DEMO, 'utf8');
+    const nombre = /databaseName:\s*(\S+)/.exec(blueprint)?.[1];
+    expect(nombre, 'el blueprint declara el nombre de la base').toBeDefined();
+    /*
+     * Se comprueba el NOMBRE declarado contra la guarda de verdad. Si alguien
+     * renombrara la base de la demo a algo sin «demo», el arranque fallaría en
+     * producción y no acá: esta afirmación mueve ese descubrimiento a CI.
+     */
+    expect(
+      esUnaBaseDeHomologacion(`postgresql://u:p@host:5432/${nombre}`),
+      `la base «${nombre}» tiene que pasar la guarda de homologación`,
+    ).toBe(true);
+  });
+
+  it('producción no siembra con nada que trunque', () => {
+    const blueprint = readFileSync(BLUEPRINT_PRODUCCION, 'utf8');
+    const build = /buildCommand:.*/.exec(blueprint)?.[0] ?? '';
+    expect(build, 'producción usa el seed de upserts').toContain('db:seed');
+    expect(build, 'y nunca el sembrado que trunca').not.toContain('tests/e2e/');
   });
 });

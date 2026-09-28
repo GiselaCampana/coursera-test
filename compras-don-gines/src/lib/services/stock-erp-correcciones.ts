@@ -686,6 +686,85 @@ async function releerMerma(
   };
 }
 
+export interface ArticuloCorregible {
+  id: string;
+  internalCode: string;
+  normalizedName: string;
+  unidad: StockUnit;
+}
+
+/**
+ * **Qué artículos puede corregir cada sucursal.**
+ *
+ * La pantalla de mermas ofrecía todo el catálogo con unidad aprobada, sin mirar
+ * si la sucursal elegida maneja el artículo. El servidor lo rechazaba —y lo
+ * sigue rechazando—, pero ofrecer algo que se va a rechazar es hacer que la
+ * persona descubra la regla a fuerza de errores.
+ *
+ * Se devuelve por sucursal y no filtrado por una sola, porque la pantalla cambia
+ * de sucursal sin volver al servidor: con el mapa entero, elegir otra sucursal
+ * reordena la lista en el acto.
+ *
+ * **Esto no reemplaza ninguna validación.** Es la lista que se ofrece; lo que
+ * decide sigue siendo el servicio, que vuelve a mirar activación, unidad,
+ * apertura, corte, saldo e interruptor con la fila bloqueada. Una solicitud
+ * armada a mano, o una pantalla que quedó abierta desde antes de un cambio de
+ * catálogo, se rechaza igual y no escribe nada.
+ */
+export async function articulosCorregiblesPorSucursal(
+  user: AuthUser,
+): Promise<Record<string, ArticuloCorregible[]>> {
+  await exigirPermiso(user, PERMISSIONS.STOCKERP_VER, {
+    entity: 'ProductStockActivation',
+    detalle: 'ver qué artículos maneja cada sucursal',
+  });
+
+  /*
+   * Sólo las sucursales con apertura confirmada: sin apertura no hay saldo que
+   * corregir, y sus artículos no están en cero sino sin contar.
+   */
+  const inauguradas = await prisma.stockCountSession.findMany({
+    where: { kind: 'APERTURA', status: 'CONFIRMADA' },
+    select: { branchId: true },
+  });
+  const conApertura = new Set(inauguradas.map((s) => s.branchId));
+  if (conApertura.size === 0) return {};
+
+  const activas = await prisma.productStockActivation.findMany({
+    where: {
+      branchId: { in: [...conApertura] },
+      state: 'ACTIVO',
+      product: { active: true, stockConfig: { status: 'APROBADA' } },
+    },
+    select: {
+      branchId: true,
+      product: {
+        select: {
+          id: true,
+          internalCode: true,
+          normalizedName: true,
+          stockConfig: { select: { stockUnit: true } },
+        },
+      },
+    },
+    orderBy: { product: { internalCode: 'asc' } },
+  });
+
+  const porSucursal: Record<string, ArticuloCorregible[]> = {};
+  for (const a of activas) {
+    /* Sin unidad no se sabe si se cuenta en kilos o en unidades: no se ofrece. */
+    const unidad = a.product.stockConfig?.stockUnit;
+    if (!unidad) continue;
+    (porSucursal[a.branchId] ??= []).push({
+      id: a.product.id,
+      internalCode: a.product.internalCode,
+      normalizedName: a.product.normalizedName,
+      unidad,
+    });
+  }
+  return porSucursal;
+}
+
 export async function mermasRegistradas(
   user: AuthUser,
   filtros: { branchId?: string | null; limite?: number } = {},

@@ -18,7 +18,7 @@ import { costItems } from '../../src/lib/domain/costing';
 import { validateDocument } from '../../src/lib/domain/validation';
 import { addDays, arToday } from '../../src/lib/datetime';
 import { sembrarLaCompraDeEzra } from '../fixtures/compra-de-ezra';
-import { exigirBaseDescartable } from '../../src/lib/base-de-pruebas';
+import { exigirBaseDescartable, exigirBaseDeHomologacion } from '../../src/lib/base-de-pruebas';
 
 const EPOCH = new Date(Date.UTC(2020, 0, 1));
 
@@ -40,30 +40,46 @@ export const CREDENCIALES = {
   configurador: { email: 'stockerp@e2e.local', password: 'PruebasDonGines1' },
 };
 
+/**
+ * **Los mismos datos, dos bases posibles, dos guardas distintas.**
+ *
+ * Este sembrado empieza con un TRUNCATE, y no lo corre sólo una persona mirando
+ * contra qué base apunta: lo corre `npm run e2e:seed`, lo corre el preparador de
+ * las end to end, lo corre CI y lo corre el arranque de la vista previa
+ * hospedada, siempre con la variable de entorno que tenga cargada.
+ *
+ * Por eso hay DOS puntos de entrada y cada uno nombra su clase de base:
+ *
+ *  * `sembrar()` — para las pruebas. Exige una base **descartable**: «test» o
+ *    «e2e». Rechaza la demo, que está desplegada;
+ *  * `sembrarParaHomologacion()` — para la demo hospedada. Exige una base cuyo
+ *    nombre contenga **«demo»**, y nada más.
+ *
+ * La lógica es la misma función; lo único que cambia es qué base se acepta. Una
+ * variable de entorno que aflojara la guarda habría sido menos código y otra
+ * palanca que alguien puede dar vuelta sin querer.
+ *
+ * HALLAZGO de la fase 8, y es una corrección de la fase 5: acá decía que «la
+ * vista previa hospedada corre `npm run db:seed`, que es `prisma/seed.ts` y usa
+ * upserts». **Es falso.** Eso lo corre PRODUCCIÓN, en su `buildCommand`. La
+ * vista previa corre este archivo en su `startCommand`, y con la guarda
+ * estrecha puesta en la fase 5 habría dejado de arrancar en cuanto la demo
+ * avanzara: `migrate deploy` aplica las migraciones, el sembrado aborta y
+ * `next start` no llega a correr. La afirmación equivocada es la que mantuvo el
+ * choque invisible.
+ */
 export async function sembrar() {
-  /*
-   * Antes de tocar nada: esto empieza con un TRUNCATE.
-   *
-   * La guarda no es ceremonia. Este sembrado no lo corre sólo una persona
-   * mirando contra qué base apunta: lo corre `npm run e2e:seed`, lo corre el
-   * preparador de las end to end y lo corre CI, siempre con la variable de
-   * entorno que tenga cargada. Si esa variable alguna vez apuntara a otro
-   * lado, esto vaciaría la base equivocada.
-   *
-   * HALLAZGO de la fase 5. Acá decía `exigirBaseDePruebas`, que acepta un
-   * nombre con «demo». La demo está DESPLEGADA: vaciarla no es un accidente de
-   * laboratorio, es dejar sin datos un entorno que alguien está mirando. Lo que
-   * corresponde para algo que trunca es la guarda estrecha, la misma que usan
-   * las pruebas de integración.
-   *
-   * (El comentario anterior decía además que «la vista previa hospedada lo
-   * ejecuta en cada arranque». No es cierto: la hospedada corre
-   * `npm run db:seed`, que es `prisma/seed.ts` y usa upserts. Se corrige porque
-   * era justamente el argumento por el que la guarda parecía tener que aceptar
-   * la demo.)
-   */
   exigirBaseDescartable();
+  await correrSembrado();
+}
 
+/** El sembrado de la demo hospedada. Sólo contra una base «demo». */
+export async function sembrarParaHomologacion() {
+  exigirBaseDeHomologacion();
+  await correrSembrado();
+}
+
+async function correrSembrado() {
   // El cliente se construye acá adentro, no al importar el módulo: quien llama
   // necesita poder cargar antes las variables de entorno de las pruebas.
   const prisma = new PrismaClient();
@@ -1668,8 +1684,16 @@ async function sembrarIngresoRetroactivo(
   });
 }
 
-// Al invocarlo como script (npm run e2e:seed) se ejecuta directamente.
-if (process.argv[1] && process.argv[1].includes('sembrar')) {
+/*
+ * Al invocarlo como script (`npm run e2e:seed`) se ejecuta directamente.
+ *
+ * Se compara el NOMBRE DEL ARCHIVO, no si la ruta «contiene sembrar». Con
+ * `includes('sembrar')` esto se disparaba también al importar este módulo desde
+ * `sembrar-homologacion.ts`, y entonces la demo corría la guarda descartable
+ * —que la rechaza— antes de llegar a la suya.
+ */
+const archivo = (process.argv[1] ?? '').split('/').pop() ?? '';
+if (archivo === 'sembrar.ts' || archivo === 'sembrar.js') {
   sembrar().catch((error) => {
     console.error(error);
     process.exit(1);
